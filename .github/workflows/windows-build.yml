@@ -1,0 +1,89 @@
+name: Windows testing build
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to build (must match the workspace version)
+        required: true
+        default: v1.0.3-rc.2
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-testing-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  windows:
+    name: Windows app tests and release ZIP
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+      - name: Verify version tag
+        shell: python
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          tag = os.environ['RELEASE_TAG']
+          assert re.fullmatch(r'v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', tag), 'Invalid version tag'
+          version = tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']
+          assert tag == f'v{version}', 'Tag does not match workspace version'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: desktop
+          key: windows-release
+          cache-on-failure: true
+      - name: Test Windows app and client core (release)
+        run: cargo test --locked --release -p voxhub-app -p vox-client-core --lib --bins --tests
+      - name: Build Windows app (release)
+        run: cargo build --locked --release -p voxhub-app
+      - name: Package Windows app
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          New-Item -ItemType Directory -Path dist/concord -Force | Out-Null
+          Copy-Item target/release/concord.exe dist/concord/
+          Copy-Item LICENSE, THIRD-PARTY-NOTICES.md dist/concord/
+          Copy-Item docs/league-handoff.md dist/concord/LEAGUE-HANDOFF.md
+          @'
+          concord for Windows x64 (testing prerelease)
+
+          Extract this ZIP before running concord.exe. The binary is unsigned.
+          Only bypass Windows warnings if you trust this download.
+
+          League handoff is experimental and OFF by default. Enable it under:
+          Settings > Video > League of Legends > Auto-switch client / game.
+          Start a new stream after changing the setting. Prefer Borderless mode.
+          See LEAGUE-HANDOFF.md for the test checklist and limitations.
+
+          This Windows app/core testing build is independent of the full workspace
+          CI: it does not certify macOS or the standalone server's integration tests.
+          '@ | Set-Content dist/concord/README.txt
+          $zip = "concord-$env:RELEASE_TAG-windows-x64.zip"
+          Compress-Archive -Path dist/concord/* -DestinationPath "dist/$zip"
+          $sha = (Get-FileHash "dist/$zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$sha  $zip" | Set-Content dist/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: concord-windows-x64-${{ inputs.tag }}
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
