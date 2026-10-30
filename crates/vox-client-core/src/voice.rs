@@ -63,6 +63,9 @@ use crate::golive::{
 use crate::stats::{Direction, EncodedFeedback, StreamCounters, StreamEntry};
 use livekit::webrtc::audio_frame::AudioFrame;
 
+#[cfg(any(windows, test))]
+mod league;
+
 #[derive(Debug, Clone, Default)]
 pub struct VoiceConfig {
     /// Capture and publish the microphone.
@@ -122,6 +125,14 @@ pub enum VoiceEvent {
     ShareKind {
         identity: String,
         audio_only: bool,
+    },
+    /// An automatic League handoff changed our captured window, without ending the live.
+    LocalShareWindowChanged {
+        /// Lets the UI ignore a delayed handoff event after a manual source change.
+        from_hwnd: isize,
+        hwnd: isize,
+        audio: bool,
+        audio_error: Option<String>,
     },
     /// Our own Go Live ended without being asked to (capture target closed, device lost).
     LocalShareEnded {
@@ -503,6 +514,8 @@ pub struct CameraStatus {
 struct ShareSlot {
     active: Option<ActiveShare>,
     idle: Option<SharePublication>,
+    #[cfg(windows)]
+    league: Option<league::Follow>,
 }
 
 struct Inner {
@@ -1196,6 +1209,11 @@ impl VoiceSession {
             Some(old) => Some(old.stop()),
             None => slot.idle.take(),
         };
+        #[cfg(windows)]
+        {
+            // Arm before starting capture: the client may close while tracks are published.
+            slot.league = league::Follow::for_source(&source, opts);
+        }
         // (An audio-only live has no picture, so no preview tile either.)
         let preview = if source.is_audio_only() {
             None
@@ -1228,7 +1246,23 @@ impl VoiceSession {
         let Some(share) = slot.active.as_mut() else {
             bail!("You are not streaming.");
         };
-        share.switch_source(&self.inner.room, req).await
+        #[cfg(windows)]
+        let follow = league::Follow::for_source(
+            &req.source,
+            ShareOptions {
+                audio: req.audio,
+                audio_pid: req.audio_pid,
+                ..share.opts
+            },
+        );
+        let report = share.switch_source(&self.inner.room, req).await?;
+        #[cfg(windows)]
+        {
+            // Only a successful manual switch changes the follow policy. Selecting another
+            // app/monitor disarms it; a failed switch leaves the current League share alone.
+            slot.league = follow;
+        }
+        Ok(report)
     }
 
     pub async fn stop_share(&self) -> bool {
@@ -1236,6 +1270,10 @@ impl VoiceSession {
             t.abort();
         }
         let mut slot = self.inner.share.lock().await;
+        #[cfg(windows)]
+        {
+            slot.league = None;
+        }
         match slot.active.take() {
             Some(share) => {
                 slot.idle = Some(share.stop());
@@ -2421,17 +2459,22 @@ fn is_audio_only(p: &RemoteParticipant) -> bool {
 }
 
 /// Ends our share when its capture stops on its own (window closed, monitor unplugged, GPU
-/// device lost) so the UI/hub can show `streaming = false`.
+/// device lost) so the UI/hub can show `streaming = false`. Opt-in League shares first try
+/// the client/game handoff, keeping the publications alive during a bounded transition gap.
 async fn share_watchdog(inner: std::sync::Weak<Inner>) {
     let mut audio_warned = false;
     loop {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         let Some(inner) = inner.upgrade() else { return };
         let mut slot = inner.share.lock().await;
+        #[cfg(windows)]
+        let league_alive = league::tick(&mut slot, &inner).await;
+        #[cfg(not(windows))]
+        let league_alive: Option<bool> = None;
         let Some(share) = slot.active.as_ref() else {
             return;
         };
-        if !share.video_running() || share.source_gone() {
+        if !league_alive.unwrap_or_else(|| share.video_running() && !share.source_gone()) {
             let share = slot.active.take().expect("checked above");
             let reason = format!("{:?} capture stopped (target closed or lost)", share.source);
             warn!(reason = %reason, "Go Live ended by capture");

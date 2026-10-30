@@ -157,6 +157,8 @@ pub struct Settings {
     pub share_audio: bool,
     /// "Prioritize smoothness": keep the frame rate under congestion (default: drop fps first).
     pub share_smooth: bool,
+    /// Experimental Windows-only client/game handoff, opt-in even for existing settings.
+    pub follow_league: bool,
     pub ptt_enabled: bool,
     pub ptt_vk: u32,
     pub ptt_name: String,
@@ -241,6 +243,7 @@ impl Default for Settings {
             preset: Preset::default(),
             share_audio: true,
             share_smooth: false,
+            follow_league: false,
             ptt_enabled: false,
             ptt_vk: 0,
             ptt_name: String::new(),
@@ -898,10 +901,24 @@ mod tests {
         assert_eq!(s.server, "http://x:7890");
         assert_eq!(s.volume_pct, 100);
         assert!(s.share_audio);
+        assert!(
+            !s.follow_league,
+            "League handoff must be opt-in for old settings"
+        );
         assert!(!s.stream_popout, "streams open inside the app by default");
         let s: Settings = serde_json::from_str(r#"{"stream_popout":true}"#).unwrap();
         assert!(s.stream_popout);
     }
+    #[test]
+    fn league_handoff_setting_roundtrips() {
+        let mut s = Settings::default();
+        assert!(!s.follow_league);
+        s.follow_league = true;
+        let json = serde_json::to_string(&s).unwrap();
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert!(back.follow_league);
+    }
+
     #[test]
     fn user_audio_is_kept_per_username_and_defaults_are_not_stored() {
         let mut s = Settings::default();

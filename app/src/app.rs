@@ -1036,6 +1036,7 @@ impl App {
             audio_pid: None,
             audio_bitrate: AUDIO_ONLY_NORMAL_BPS,
             capture_cursor: true,
+            follow_league: cfg!(windows) && self.settings.follow_league,
             // Autotest only: VOX_SHARE_ENCODER=software|nvenc|mf|auto picks the encoder path.
             encoder: (!self.persist)
                 .then(|| std::env::var("VOX_SHARE_ENCODER").ok())
@@ -2037,6 +2038,25 @@ impl App {
                 self.voice.error = Some(format!(
                     "You were disconnected from voice ({reason}). Click the channel to rejoin."
                 ));
+            }
+            VoiceEvent::LocalShareWindowChanged {
+                from_hwnd,
+                hwnd,
+                audio,
+                audio_error,
+            } => {
+                // A manual switch/start/stop may already be queued or completed; do not
+                // overwrite its UI with a delayed event from the previous source.
+                if matches!(self.voice.share, Share::Live { .. })
+                    && self.voice.switching_to.is_none()
+                    && self.voice.share_pick == Some(Pick::Window(from_hwnd))
+                {
+                    self.voice.share_pick = Some(Pick::Window(hwnd));
+                    self.voice.share_audio = audio;
+                    if let Some(msg) = audio_error {
+                        self.notice = Some(msg);
+                    }
+                }
             }
             VoiceEvent::LocalShareEnded { reason } => {
                 tracing::info!(%reason, "own Go Live ended");

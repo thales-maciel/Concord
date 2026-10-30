@@ -714,6 +714,16 @@ impl App {
                 .checkbox(&mut self.settings.share_audio, "Share app audio by default")
                 .changed();
         });
+        #[cfg(windows)]
+        {
+            row(ui, "League of Legends", |ui| {
+                ch.save |= ui
+                    .checkbox(&mut self.settings.follow_league, "Auto-switch client / game (experimental)")
+                    .on_hover_text("Only when sharing a League window. Video and app audio follow the match, then return to the client. Never shares the desktop. Applies to new streams: stop and restart your stream after changing this setting.")
+                    .changed();
+            });
+            note(ui, "Waits up to 90 seconds for League to return if its window closes. Use Borderless mode if fullscreen capture is blank.", true);
+        }
         row(ui, "Self preview", |ui| {
             ch.save |= ui
                 .checkbox(&mut self.settings.show_self_preview, "Show my stream preview")

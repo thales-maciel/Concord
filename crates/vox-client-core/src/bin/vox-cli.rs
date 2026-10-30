@@ -1097,6 +1097,17 @@ impl App {
                     "a screen share"
                 }
             ),
+            VoiceEvent::LocalShareWindowChanged {
+                hwnd,
+                audio,
+                audio_error,
+                ..
+            } => {
+                println!("[golive] League handoff: window={hwnd}, audio={audio}");
+                if let Some(error) = audio_error {
+                    println!("[golive] {error}");
+                }
+            }
             VoiceEvent::LocalShareEnded { reason } => {
                 println!("[golive] your share ended: {reason}");
                 self.streaming = false;

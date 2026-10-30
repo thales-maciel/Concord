@@ -135,6 +135,9 @@ pub struct ShareOptions {
     /// [`AUDIO_ONLY_HIGH_BPS`]. Stereo 48 kHz either way.
     pub audio_bitrate: u64,
     pub capture_cursor: bool,
+    /// Experimental, Windows only: follow League's client/game windows. Off by default;
+    /// ignored for other apps, monitors and audio-only shares. Sampled when a share starts.
+    pub follow_league: bool,
     pub encoder: EncoderChoice,
     /// Video bitrate cap (bps); `None` = [`screenshare_bitrate`] for the size and rate.
     pub max_bitrate: Option<u64>,
@@ -152,6 +155,7 @@ impl Default for ShareOptions {
             audio_pid: None,
             audio_bitrate: AUDIO_ONLY_NORMAL_BPS,
             capture_cursor: true,
+            follow_league: false,
             encoder: EncoderChoice::Auto,
             max_bitrate: None,
             degradation: DegradationPreference::default(),
@@ -1450,6 +1454,17 @@ impl ActiveShare {
             Some(VideoProducer::File(t)) => !t.is_finished(),
             None => false,
         }
+    }
+
+    /// League recovery must not mistake a running but silent standby capture for a healthy
+    /// handoff (e.g. a minimized window or an unsupported exclusive-fullscreen game).
+    #[cfg(windows)]
+    pub(crate) fn video_ready(&self) -> bool {
+        self.video_running()
+            && self
+                .video
+                .as_ref()
+                .is_some_and(|v| v.pass_times().0.is_some())
     }
 
     pub fn audio_running(&self) -> bool {
@@ -2790,6 +2805,11 @@ fn spawn_sine(source: NativeAudioSource, counters: Arc<StreamCounters>) -> Produ
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn league_following_is_opt_in() {
+        assert!(!ShareOptions::default().follow_league);
+    }
 
     #[test]
     fn bitrate_targets() {
