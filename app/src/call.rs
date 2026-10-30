@@ -239,8 +239,8 @@ pub fn stage_meta_text(people: usize, pinned: usize, hidden: usize) -> String {
     }
     match hidden {
         0 => {}
-        1 => s.push_str(" · 1 card oculto"),
-        n => s.push_str(&format!(" · {n} cards ocultos")),
+        1 => s.push_str(" · 1 hidden card"),
+        n => s.push_str(&format!(" · {n} hidden cards")),
     }
     s
 }

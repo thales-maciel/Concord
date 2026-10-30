@@ -51,7 +51,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-14]
+        # Xcode 15 on macos-14 cannot compile cxx's C++20 slice iterators.
+        os: [windows-latest, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
@@ -60,6 +61,8 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Lint
         run: cargo clippy --locked --workspace --lib --bins --tests
       - name: Test

@@ -1765,7 +1765,7 @@ mod tests {
         f.my_server_muted = true;
         assert!(disabled_reason(&rows(&f), Id::MuteMic)
             .unwrap()
-            .contains("moderador"));
+            .contains("moderator"));
         f.my_server_muted = false;
         f.my_ptt = true;
         assert!(disabled_reason(&rows(&f), Id::MuteMic)

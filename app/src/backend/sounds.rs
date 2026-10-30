@@ -661,7 +661,7 @@ mod tests {
     fn hub_refusals_become_english_sentences() {
         assert!(friendly_error(&http(403)).starts_with("Only the uploader"));
         assert!(
-            friendly_error(&http(409)).contains("cheio")
+            friendly_error(&http(409)).contains("full")
                 && friendly_error(&http(409)).contains("50")
         );
         assert!(friendly_error(&http(413)).contains("1 MB"));

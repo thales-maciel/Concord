@@ -310,12 +310,7 @@ pub fn reaction_hover(emoji: &str, names: &[String]) -> String {
         (n, 0) => format!("{} and {}", shown[..n - 1].join(", "), shown[n - 1]),
         (_, m) => format!("{} and {m} more", shown.join(", ")),
     };
-    let verb = if names.len() > 1 {
-        "reagiram"
-    } else {
-        "reagiu"
-    };
-    format!("{who} {verb} with {emoji}")
+    format!("{who} reacted with {emoji}")
 }
 
 /// Put `emoji` first in the recent list (no duplicates, at most [`RECENT_MAX`]).

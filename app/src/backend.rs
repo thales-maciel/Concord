@@ -2542,7 +2542,7 @@ mod tests {
         let e = anyhow::anyhow!(
             "login failed: HTTP 400 Bad Request: protocol version mismatch: server 1, client 2"
         );
-        assert!(friendly(&e).starts_with("Incompatible version"));
+        assert!(friendly(&e).starts_with("Incompatible server version"));
         let e = anyhow::anyhow!("error sending request").context("health request");
         assert!(friendly(&e).starts_with("Could not connect"));
         // v1.0.1: an invite on a name that already exists.

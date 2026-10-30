@@ -1387,7 +1387,7 @@ mod tests {
     fn files_that_are_not_pictures_or_too_big_are_refused_politely() {
         assert!(prepare(b"MZ not a picture".to_vec())
             .unwrap_err()
-            .contains("not an image"));
+            .contains("image format is not supported"));
         assert!(prepare(Vec::new()).is_err());
         let mut cut = png(300);
         cut.truncate(40);

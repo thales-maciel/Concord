@@ -1727,7 +1727,7 @@ mod tests {
         let mut m = line(1, 1, ME, 1);
         m.content = "oi\n  tudo   bem?".into();
         c.last_message = Some(m.clone());
-        assert_eq!(preview_text(&c, ME), "You: hi, how are you?");
+        assert_eq!(preview_text(&c, ME), "You: oi tudo bem?");
         m.author = User::new(2, "bia");
         c.last_message = Some(m.clone());
         assert_eq!(preview_text(&c, ME), "oi tudo bem?");
