@@ -81,7 +81,7 @@ Other CPU differences are within v0.9.1 run-to-run variation (watching: 11.7–1
 ### Reproduction
 
 ```powershell
-$env:CARGO_TARGET_DIR = "target-v02"; cargo build --release --workspace
+$env:CARGO_TARGET_DIR = "target-v02"; cargo build --release --workspace --all-features
 powershell -ExecutionPolicy Bypass -File tools\perf.ps1 -Exe <v0.9.1>\voxhub.exe -Label v0.9.1 -Out base.csv -Repeat 2
 powershell -ExecutionPolicy Bypass -File tools\perf.ps1 -Label fase1 -Out fase1.csv -Repeat 2
 ```

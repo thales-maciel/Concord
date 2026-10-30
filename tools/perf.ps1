@@ -22,7 +22,7 @@
 # (VOX_TEST_BACKGROUND=1 / --autotest), the hub runs hidden, nothing is audible (VOX_NO_PLAYBACK=1,
 # VOX_NO_MIC=1). Processes are stopped by their exact PID only.
 #
-# Build first:  cargo build --release --workspace   (with CARGO_TARGET_DIR=target-v02)
+# Build first:  cargo build --release --workspace --all-features   (with CARGO_TARGET_DIR=target-v02)
 # Usage:        powershell -ExecutionPolicy Bypass -File tools\perf.ps1 [-Exe <concord.exe>] [-Assets <main tree>] [-Label name]
 #                 [-Out results.csv] [-Only home,call,watch,camera] [-Secs 20] [-Repeat 1]
 param(

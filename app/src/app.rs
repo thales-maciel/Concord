@@ -18,6 +18,7 @@ use vox_client_core::{AlertKind, NoiseControl, VoiceEvent, VoiceGate};
 use vox_proto::{Channel, ChannelId, ChannelKind, Message, ServerEvent, User, UserId, VoiceMember};
 
 use crate::alerts::{self, AlertPolicy};
+#[cfg(feature = "autotest")]
 use crate::autotest::Auto;
 use crate::backend::{Backend, Cmd, Ev, Repaint, VoiceOpts};
 use crate::call::{watch_allowed, watch_limit_text, CallUi, VideoUi, WATCH_PENDING_TIMEOUT};
@@ -417,6 +418,7 @@ pub struct App {
     /// Audio streams of the last stats report (autotest).
     pub audio_info: Vec<crate::backend::AudioInfo>,
     pub stream_info_seq: u64,
+    #[cfg(feature = "autotest")]
     pub auto: Option<Auto>,
     frames: u64,
     alert_policy: AlertPolicy,
@@ -472,13 +474,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(
-        backend: Backend,
-        repaint: Repaint,
-        settings: Settings,
-        persist: bool,
-        auto: Option<Auto>,
-    ) -> Self {
+    pub fn new(backend: Backend, repaint: Repaint, settings: Settings, persist: bool) -> Self {
         let (ptt_tx, ptt_rx) = std_mpsc::channel();
         let mut form = ConnectForm {
             url: settings.server.clone(),
@@ -538,7 +534,8 @@ impl App {
             stream_info: Vec::new(),
             audio_info: Vec::new(),
             stream_info_seq: 0,
-            auto,
+            #[cfg(feature = "autotest")]
+            auto: None,
             frames: 0,
             alert_policy: AlertPolicy::default(),
             gate_voice: Arc::new(VoiceGate::default()),
@@ -2323,6 +2320,7 @@ impl eframe::App for App {
         self.notify_tick(ctx);
         self.sync_streams_visible(ctx, false);
         self.pause_share_preview_when_minimized(ctx);
+        #[cfg(feature = "autotest")]
         self.auto_tick(ctx);
     }
 

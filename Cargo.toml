@@ -49,6 +49,18 @@ opt-level = "z"
 [profile.release.package.prost]
 opt-level = "z"
 
+# Friend-testing / optimized iteration, not the shipping configuration. Keep unwind for both
+# tests and the app so their dependencies can be reused (test harnesses cannot use panic=abort).
+# Inherit dev rather than release: all audio/inference dependencies retain opt-level=2 and the
+# tract-core debug-assertions workaround below, without shipping LTO / size overrides.
+[profile.testing]
+inherits = "dev"
+opt-level = 2
+lto = false
+codegen-units = 16
+panic = "unwind"
+incremental = false
+
 # Dependencies are built optimized even in dev, so test runs reflect real CPU usage.
 # Less debug info in dev/test builds: lower peak RAM while linking and much smaller target dirs.
 [profile.dev]

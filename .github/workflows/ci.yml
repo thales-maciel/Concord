@@ -60,18 +60,46 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      # Both desktop workflows use this namespace; main warms it for PRs and version tags.
+      # Cargo fingerprints keep dev/check, testing and shipping-release artifacts distinct.
       - uses: Swatinem/rust-cache@v2
+        id: cache
         with:
+          shared-key: desktop-v2
+          cache-workspace-crates: true
           cache-on-failure: true
-      - name: Lint
-        run: cargo clippy --locked --workspace --lib --bins --tests
-      - name: Test
-        run: cargo test --locked --workspace --lib --bins --tests
-      - name: Build
-        run: cargo build --locked --workspace
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Report cache lookup
+        run: echo "Desktop cache exact hit = ${{ steps.cache.outputs.cache-hit }} (see restore log for fallback hits)"
+      - name: Discard restored timing reports
+        shell: python
+        run: |
+          import shutil
+          shutil.rmtree('target/cargo-timings', ignore_errors=True)
+      - name: Lint full build (including GUI automation and CLI)
+        run: cargo clippy --locked --workspace --all-features --lib --bins --tests --timings
+      - name: Lint lightweight app
+        run: cargo clippy --locked -p voxhub-app --no-default-features --bins --tests --timings
+      - name: Test full build
+        run: cargo test --locked --profile testing --workspace --all-features --lib --bins --tests --timings
+      - name: Test lightweight denoiser and saved-preference fallback
+        run: cargo test --locked --profile testing -p vox-client-core --no-default-features --lib audio::denoise --timings
+      # Test harnesses are not the actual app. Build only that executable, not every workspace
+      # binary again. Tags build the shipping app below instead of also building a testing app.
+      - name: Build testing app
+        if: runner.os != 'Windows' || !startsWith(github.ref, 'refs/tags/v')
+        run: cargo build --locked --profile testing -p voxhub-app --timings
       - name: Build Windows release
         if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/v')
-        run: cargo build --locked --release -p voxhub-app
+        run: cargo build --locked --release -p voxhub-app --timings
+      - name: Upload Cargo timing reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-timings-${{ matrix.os }}
+          path: target/cargo-timings/*.html
+          if-no-files-found: warn
+          retention-days: 14
       - name: Package Windows app
         if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/v')
         shell: pwsh

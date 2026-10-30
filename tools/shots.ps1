@@ -3,7 +3,7 @@
 # Its own fresh dev hub (hub 7997, LiveKit 7970-7972); never touches a live server on 7890/7880-7882.
 # Background test mode: the windows stay behind the others and never take the focus; silent.
 #
-# Build first:  cargo build --release --workspace   (with CARGO_TARGET_DIR=target-v02)
+# Build first:  cargo build --release --workspace --all-features   (with CARGO_TARGET_DIR=target-v02)
 # Usage:        powershell -ExecutionPolicy Bypass -File tools\shots.ps1 [-OutDir dist\design\shots-phase1]
 #               -Stage: the call stage instead (phase 2b, autotest role `stage-b` with two streamers and
 #               a camera): stage-normal, stage-pinned, stage-menu, stage-fullscreen, stage-dock.

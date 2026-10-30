@@ -30,6 +30,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use super::device::VoiceApm;
+#[cfg(feature = "maximum-ai")]
 use super::dfn::{DfnClient, DfnShared};
 use super::voicefx::VoiceFxControl;
 
@@ -54,7 +55,25 @@ const LEVEL_AI_LIGHT: u8 = 1;
 const LEVEL_AI_MAX: u8 = 2;
 
 impl NoiseLevel {
+    /// Levels selectable in this build. Keep AiMax serializable even in a lightweight build so
+    /// opening an existing settings file does not destroy the user's full-build preference.
+    #[cfg(feature = "maximum-ai")]
     pub const ALL: [NoiseLevel; 3] = [NoiseLevel::Standard, NoiseLevel::AiLight, NoiseLevel::AiMax];
+    #[cfg(not(feature = "maximum-ai"))]
+    pub const ALL: [NoiseLevel; 2] = [NoiseLevel::Standard, NoiseLevel::AiLight];
+
+    pub fn available(self) -> bool {
+        self != NoiseLevel::AiMax || cfg!(feature = "maximum-ai")
+    }
+
+    /// The processing level actually supported by this binary.
+    pub fn effective(self) -> Self {
+        if self.available() {
+            self
+        } else {
+            Self::AiLight
+        }
+    }
 
     /// Whether the WebRTC APM runs its own noise suppressor at this level.
     pub fn apm_ns(self) -> bool {
@@ -128,6 +147,7 @@ impl From<NoiseLevel> for String {
 pub struct NoiseControl {
     level: Arc<AtomicU8>,
     apms: Mutex<Vec<Weak<VoiceApm>>>,
+    #[cfg(feature = "maximum-ai")]
     dfn: Mutex<Vec<Weak<DfnShared>>>,
     /// "Maximum AI" was too heavy and the level fell back to "Light AI" (for the UI).
     fell_back: AtomicBool,
@@ -144,8 +164,9 @@ impl Default for NoiseControl {
 impl NoiseControl {
     pub fn new(level: NoiseLevel) -> Self {
         Self {
-            level: Arc::new(AtomicU8::new(level.to_u8())),
+            level: Arc::new(AtomicU8::new(level.effective().to_u8())),
             apms: Mutex::new(Vec::new()),
+            #[cfg(feature = "maximum-ai")]
             dfn: Mutex::new(Vec::new()),
             fell_back: AtomicBool::new(false),
             fx: VoiceFxControl::default(),
@@ -165,6 +186,7 @@ impl NoiseControl {
     /// starts the DeepFilterNet worker of every chain (it loads the model in the background);
     /// selecting another level makes them exit and free it.
     pub fn set_level(&self, level: NoiseLevel) {
+        let level = level.effective();
         let mut apms = self.apms.lock();
         self.level.store(level.to_u8(), Ordering::Relaxed);
         apms.retain(|w| match w.upgrade() {
@@ -175,8 +197,8 @@ impl NoiseControl {
             None => false,
         });
         drop(apms);
-        let mut dfn = self.dfn.lock();
-        dfn.retain(|w| match w.upgrade() {
+        #[cfg(feature = "maximum-ai")]
+        self.dfn.lock().retain(|w| match w.upgrade() {
             Some(sh) => {
                 if level == NoiseLevel::AiMax {
                     sh.ensure_worker();
@@ -198,6 +220,7 @@ impl NoiseControl {
     }
 
     /// A new mic chain's DeepFilterNet side (started now if "Maximum AI" is selected).
+    #[cfg(feature = "maximum-ai")]
     fn register_dfn(&self) -> Arc<DfnShared> {
         let sh = DfnShared::new(self.level.clone(), LEVEL_AI_MAX);
         let mut dfn = self.dfn.lock();
@@ -216,6 +239,7 @@ impl NoiseControl {
     }
 
     /// From the audio callback: "Maximum AI" is too heavy here. Allocation-free.
+    #[cfg(feature = "maximum-ai")]
     fn fall_back(&self) {
         if self
             .level
@@ -233,12 +257,19 @@ impl NoiseControl {
 
     /// Mic chains whose DeepFilterNet worker currently holds the model.
     pub fn ai_max_loaded(&self) -> usize {
-        self.dfn
-            .lock()
-            .iter()
-            .filter_map(|w| w.upgrade())
-            .filter(|s| s.loaded())
-            .count()
+        #[cfg(feature = "maximum-ai")]
+        {
+            self.dfn
+                .lock()
+                .iter()
+                .filter_map(|w| w.upgrade())
+                .filter(|s| s.loaded())
+                .count()
+        }
+        #[cfg(not(feature = "maximum-ai"))]
+        {
+            0
+        }
     }
 }
 
@@ -253,6 +284,7 @@ pub(crate) fn fade(i: usize) -> (f32, f32) {
 enum Mode {
     Plain,
     Rnn,
+    #[cfg(feature = "maximum-ai")]
     Dfn,
 }
 
@@ -266,8 +298,10 @@ struct FrameDenoiser {
     /// The previous plain frame (to prime RNNoise when it is switched on).
     prev: [f32; FRAME],
     wet: [f32; FRAME],
+    #[cfg(feature = "maximum-ai")]
     dfn_out: [f32; FRAME],
     scratch: [f32; FRAME],
+    #[cfg(feature = "maximum-ai")]
     dfn: DfnClient,
 }
 
@@ -280,15 +314,19 @@ struct Ran {
 }
 
 impl FrameDenoiser {
-    fn new(dfn: Arc<DfnShared>) -> Self {
+    fn new(_ctl: &NoiseControl) -> Self {
+        #[cfg(feature = "maximum-ai")]
+        let dfn = _ctl.register_dfn();
         Self {
             state: DenoiseState::new(),
             rnn_on: false,
             mode: Mode::Plain,
             prev: [0.0; FRAME],
             wet: [0.0; FRAME],
+            #[cfg(feature = "maximum-ai")]
             dfn_out: [0.0; FRAME],
             scratch: [0.0; FRAME],
+            #[cfg(feature = "maximum-ai")]
             dfn: DfnClient::new(dfn),
         }
     }
@@ -303,26 +341,32 @@ impl FrameDenoiser {
 
     /// Process one frame in place.
     fn frame(&mut self, io: &mut [f32; FRAME], ctl: &NoiseControl) -> Ran {
-        let mut level = ctl.level();
-        if level == NoiseLevel::AiMax && self.dfn.wait {
-            self.dfn.wait_loaded();
-        }
-        // DeepFilterNet is fed while it is selected and loaded (warming up behind RNNoise, then
-        // in the signal), and until it has been faded out.
-        if level != NoiseLevel::AiMax && self.mode != Mode::Dfn && self.dfn.engaged {
-            self.dfn.release();
-        }
-        let feed = (level == NoiseLevel::AiMax && self.dfn.loaded()) || self.mode == Mode::Dfn;
-        if feed {
-            self.dfn.run(io, &mut self.dfn_out);
-        }
-        if level == NoiseLevel::AiMax && self.dfn.overloaded() {
-            ctl.fall_back();
-            level = ctl.level();
-        }
+        let level = ctl.level();
+        #[cfg(feature = "maximum-ai")]
+        let (level, feed) = {
+            let mut level = level;
+            if level == NoiseLevel::AiMax && self.dfn.wait {
+                self.dfn.wait_loaded();
+            }
+            // Feed while selected and loaded (warming up behind RNNoise, then in the signal),
+            // and until faded out.
+            if level != NoiseLevel::AiMax && self.mode != Mode::Dfn && self.dfn.engaged {
+                self.dfn.release();
+            }
+            let feed = (level == NoiseLevel::AiMax && self.dfn.loaded()) || self.mode == Mode::Dfn;
+            if feed {
+                self.dfn.run(io, &mut self.dfn_out);
+            }
+            if level == NoiseLevel::AiMax && self.dfn.overloaded() {
+                ctl.fall_back();
+                level = ctl.level();
+            }
+            (level, feed)
+        };
         let target = match level {
             NoiseLevel::Standard => Mode::Plain,
             NoiseLevel::AiLight => Mode::Rnn,
+            #[cfg(feature = "maximum-ai")]
             NoiseLevel::AiMax if self.mode == Mode::Dfn || (feed && self.dfn.ready()) => Mode::Dfn,
             NoiseLevel::AiMax => Mode::Rnn,
         };
@@ -338,11 +382,15 @@ impl FrameDenoiser {
         }
         self.prev.copy_from_slice(io);
         let old = self.mode;
-        ran.dfn = old == Mode::Dfn || target == Mode::Dfn;
+        #[cfg(feature = "maximum-ai")]
+        {
+            ran.dfn = old == Mode::Dfn || target == Mode::Dfn;
+        }
         if old == target {
             match target {
                 Mode::Plain => {}
                 Mode::Rnn => io.copy_from_slice(&self.wet),
+                #[cfg(feature = "maximum-ai")]
                 Mode::Dfn => io.copy_from_slice(&self.dfn_out),
             }
         } else {
@@ -351,6 +399,7 @@ impl FrameDenoiser {
                 let pick = |m: Mode| match m {
                     Mode::Plain => plain,
                     Mode::Rnn => self.wet[i],
+                    #[cfg(feature = "maximum-ai")]
                     Mode::Dfn => self.dfn_out[i],
                 };
                 let (a, b) = fade(i);
@@ -360,11 +409,13 @@ impl FrameDenoiser {
                 self.rnn_on = false;
                 self.flush_rnn();
             }
+            #[cfg(feature = "maximum-ai")]
             if old == Mode::Dfn {
                 self.dfn.release();
             }
             self.mode = target;
         }
+        #[cfg(feature = "maximum-ai")]
         if level != NoiseLevel::AiMax && self.dfn.engaged && self.mode != Mode::Dfn {
             self.dfn.release();
         }
@@ -376,6 +427,7 @@ impl FrameDenoiser {
         if self.rnn_on {
             self.flush_rnn();
         }
+        #[cfg(feature = "maximum-ai")]
         if self.dfn.engaged {
             // A new epoch: the worker resets DeepFilterNet before the next frame.
             self.dfn.restart();
@@ -418,10 +470,10 @@ impl Denoiser {
     /// Build it off the audio thread (it registers with `ctl`, which may start the
     /// DeepFilterNet worker).
     pub fn new(ctl: Arc<NoiseControl>) -> Self {
-        let dfn = ctl.register_dfn();
+        let inner = FrameDenoiser::new(&ctl);
         Self {
             ctl,
-            inner: FrameDenoiser::new(dfn),
+            inner,
             io: [0.0; FRAME],
             adapting: false,
             in_buf: [0.0; FRAME],
@@ -440,26 +492,39 @@ impl Denoiser {
 
     /// Whether DeepFilterNet is in the signal path right now.
     pub fn dfn_active(&self) -> bool {
-        self.inner.mode == Mode::Dfn
+        #[cfg(feature = "maximum-ai")]
+        {
+            self.inner.mode == Mode::Dfn
+        }
+        #[cfg(not(feature = "maximum-ai"))]
+        {
+            false
+        }
     }
 
     /// Offline processing (evaluation, tests): wait for DeepFilterNet's model and for each of
     /// its frames instead of replacing late frames. Never set this on a live mic chain.
-    pub fn set_offline(&mut self, offline: bool) {
-        self.inner.dfn.wait = offline;
+    pub fn set_offline(&mut self, _offline: bool) {
+        #[cfg(feature = "maximum-ai")]
+        {
+            self.inner.dfn.wait = _offline;
+        }
     }
 
     /// This chain's DeepFilterNet side (worker state, timing, test hooks).
+    #[cfg(feature = "maximum-ai")]
     pub fn dfn(&self) -> &DfnShared {
         &self.inner.dfn.sh
     }
 
     /// Frames of hand-off to the DeepFilterNet worker (1 normally; grows on late frames).
+    #[cfg(feature = "maximum-ai")]
     pub fn inner_depth(&self) -> u64 {
         self.inner.dfn.depth()
     }
 
     /// DeepFilterNet frames that were late and replaced by the unprocessed input.
+    #[cfg(feature = "maximum-ai")]
     pub fn dfn_late(&self) -> u64 {
         self.inner.dfn.late
     }
@@ -482,7 +547,9 @@ impl Denoiser {
                 let bypass = self.ctl.level() == NoiseLevel::Standard
                     && self.inner.mode == Mode::Plain
                     && !self.inner.rnn_on;
-                if bypass && !self.inner.dfn.engaged {
+                #[cfg(feature = "maximum-ai")]
+                let bypass = bypass && !self.inner.dfn.engaged;
+                if bypass {
                     to_f32(part, &mut self.inner.prev); // bypass: the chunk is not touched
                     continue;
                 }
@@ -691,8 +758,32 @@ mod tests {
         assert_eq!(&got[FRAME..], &want[..n]);
     }
 
-    // ---------------------------------------------------------------- Maximum AI (DeepFilterNet)
+    #[test]
+    #[cfg(not(feature = "maximum-ai"))]
+    fn lightweight_build_uses_light_ai_without_losing_saved_maximum_preference() {
+        assert!(!NoiseLevel::ALL.contains(&NoiseLevel::AiMax));
+        assert!(!NoiseLevel::AiMax.available());
+        let saved: NoiseLevel = serde_json::from_str("\"ai_max\"").unwrap();
+        assert_eq!(saved, NoiseLevel::AiMax);
+        let ctl = Arc::new(NoiseControl::new(saved));
+        assert_eq!(ctl.level(), NoiseLevel::AiLight);
+        ctl.set_level(NoiseLevel::Standard);
+        ctl.set_level(saved);
+        assert_eq!(ctl.level(), NoiseLevel::AiLight);
+        let mut d = Denoiser::new(ctl.clone());
+        for c in voice(FRAME * 20, 0).chunks_mut(FRAME) {
+            d.process(c);
+        }
+        assert!(d.active());
+        assert!(!d.dfn_active());
+        assert_eq!(d.dfn_frames, 0);
+        assert_eq!(ctl.ai_max_loaded(), 0);
+        assert!(!ctl.take_fallback_notice());
+        assert_eq!(serde_json::to_string(&saved).unwrap(), "\"ai_max\"");
+    }
 
+    // ---------------------------------------------------------------- Maximum AI (DeepFilterNet)
+    #[cfg(feature = "maximum-ai")]
     fn wait_until(what: &str, mut f: impl FnMut() -> bool) {
         let t = std::time::Instant::now();
         while !f() {
@@ -704,6 +795,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "maximum-ai")]
     fn noisy_voice(frames: usize) -> Vec<i16> {
         voice(FRAME * frames, 0)
             .iter()
@@ -713,6 +805,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "maximum-ai")]
     fn ai_max_loads_lazily_and_unloads_when_switching_away() {
         let ctl = Arc::new(NoiseControl::new(NoiseLevel::AiLight));
         let mut d = Denoiser::new(ctl.clone());
@@ -761,6 +854,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "maximum-ai")]
     fn switching_across_all_three_levels_is_glitch_free() {
         let ctl = Arc::new(NoiseControl::new(NoiseLevel::Standard));
         let mut d = Denoiser::new(ctl.clone());
@@ -805,6 +899,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "maximum-ai")]
     fn ai_max_muting_flushes_old_audio() {
         let ctl = Arc::new(NoiseControl::new(NoiseLevel::AiMax));
         let mut d = Denoiser::new(ctl);
@@ -826,6 +921,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "maximum-ai")]
     fn ai_max_odd_chunk_sizes_are_adapted_with_one_frame_of_delay() {
         let sig = noisy_voice(60);
         let run = |size: usize| {
@@ -849,6 +945,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "maximum-ai")]
     fn ai_max_falls_back_to_ai_light_on_a_slow_machine() {
         let ctl = Arc::new(NoiseControl::new(NoiseLevel::AiMax));
         let mut d = Denoiser::new(ctl.clone());
@@ -883,6 +980,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "maximum-ai")]
     fn ai_max_late_frames_are_replaced_and_trigger_the_fallback() {
         // Real time (no waiting) with a worker slower than real time: late frames are replaced
         // by the time-aligned input and, sustained, the level falls back.

@@ -3,17 +3,29 @@ name: Windows testing build
 on:
   workflow_dispatch:
     inputs:
-      tag:
-        description: Existing version tag to build (must match the workspace version)
+      ref:
+        description: Commit, branch, or version tag to build (must contain the testing profile)
         required: true
-        default: v1.0.3-rc.2
+        default: main
         type: string
+      lightweight:
+        description: Omit Maximum AI (not equivalent to a full release)
+        default: false
+        type: boolean
+      cold-cache:
+        description: Skip restoring and saving the Rust cache for a cold-build measurement
+        default: false
+        type: boolean
+      measure-warm:
+        description: Repeat the app build to record a warm no-change Cargo timing report
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-testing-${{ inputs.tag }}
+  group: windows-testing-${{ inputs.ref }}-${{ inputs.lightweight }}
   cancel-in-progress: false
 
 env:
@@ -22,51 +34,119 @@ env:
 
 jobs:
   windows:
-    name: Windows app tests and release ZIP
+    name: Windows app tests and testing ZIP
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: refs/tags/${{ inputs.tag }}
-      - name: Verify version tag
+          ref: ${{ inputs.ref }}
+      - name: Identify build and verify version tags
+        id: build
         shell: python
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          BUILD_REF: ${{ inputs.ref }}
+          LIGHTWEIGHT: ${{ inputs.lightweight }}
         run: |
           import os
           import re
+          import subprocess
           import tomllib
           from pathlib import Path
 
-          tag = os.environ['RELEASE_TAG']
-          assert re.fullmatch(r'v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', tag), 'Invalid version tag'
-          version = tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']
-          assert tag == f'v{version}', 'Tag does not match workspace version'
+          manifest = tomllib.loads(Path('Cargo.toml').read_text())
+          if 'testing' not in manifest.get('profile', {}):
+              raise SystemExit('This ref predates the testing profile; select a newer commit or main.')
+          version = manifest['workspace']['package']['version']
+          ref = os.environ['BUILD_REF']
+          tag = ref.removeprefix('refs/tags/')
+          if ref.startswith('refs/tags/') or re.match(r'^v\d', tag):
+              if not re.fullmatch(r'v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', tag):
+                  raise SystemExit(f'Invalid version tag: {tag}')
+              if tag != f'v{version}':
+                  raise SystemExit(f'Tag {tag} does not match workspace version {version}')
+          sha = subprocess.check_output(['git', 'rev-parse', '--short=12', 'HEAD'], text=True).strip()
+          variant = 'lightweight' if os.environ['LIGHTWEIGHT'] == 'true' else 'full'
+          label = f'{version}-{sha}-{variant}-testing'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f'label={label}\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              out.write(f'Build: `{label}`\n\nProfile: `testing` (not shipping `release`).\n')
       - uses: dtolnay/rust-toolchain@stable
+      # Same namespace as CI. Only main writes; PRs/tags can restore the main cache. A cold
+      # measurement uses an empty hosted runner without restoring OR replacing that cache.
       - uses: Swatinem/rust-cache@v2
+        id: cache
         with:
-          shared-key: desktop
-          key: windows-release
+          shared-key: desktop-v2
+          cache-workspace-crates: true
           cache-on-failure: true
-      - name: Test Windows app and client core (release)
-        run: cargo test --locked --release -p voxhub-app -p vox-client-core --lib --bins --tests
-      - name: Build Windows app (release)
-        run: cargo build --locked --release -p voxhub-app
-      - name: Package Windows app
+          lookup-only: ${{ inputs.cold-cache }}
+          save-if: ${{ github.ref == 'refs/heads/main' && inputs.ref == 'main' && !inputs.cold-cache }}
+      - name: Report cache lookup
+        run: echo "Desktop cache exact hit = ${{ steps.cache.outputs.cache-hit }}; restore skipped = ${{ inputs.cold-cache }} (see restore log for fallback hits)"
+      - name: Discard restored timing reports
+        shell: python
+        run: |
+          import shutil
+          shutil.rmtree('target/cargo-timings', ignore_errors=True)
+      # Build first so cold-cache measures a genuinely cold app build, not an app whose
+      # dependencies have already been warmed by test compilation. Tests still gate packaging.
+      - name: Build Windows app (testing, same profile and features as tests)
         shell: pwsh
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          LIGHTWEIGHT: ${{ inputs.lightweight }}
+        run: |
+          $features = if ($env:LIGHTWEIGHT -eq 'true') { @('--no-default-features') } else { @() }
+          cargo build --locked --profile testing -p voxhub-app --timings @features
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item target/cargo-timings/cargo-timing.html target/cargo-timings/windows-app.html
+      - name: Measure warm no-change build
+        if: inputs.measure-warm
+        shell: pwsh
+        env:
+          LIGHTWEIGHT: ${{ inputs.lightweight }}
+        run: |
+          $features = if ($env:LIGHTWEIGHT -eq 'true') { @('--no-default-features') } else { @() }
+          cargo build --locked --profile testing -p voxhub-app --timings @features
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item target/cargo-timings/cargo-timing.html target/cargo-timings/windows-warm.html
+      - name: Test Windows app and client core (testing)
+        shell: pwsh
+        env:
+          LIGHTWEIGHT: ${{ inputs.lightweight }}
+        run: |
+          $features = if ($env:LIGHTWEIGHT -eq 'true') { @('--no-default-features') } else { @() }
+          cargo test --locked --profile testing -p voxhub-app -p vox-client-core --lib --bins --tests --timings @features
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item target/cargo-timings/cargo-timing.html target/cargo-timings/windows-tests.html
+      - name: Upload Cargo timing reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-timings-windows-${{ steps.build.outputs.label }}
+          path: target/cargo-timings/*.html
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Package Windows testing app
+        shell: pwsh
+        env:
+          BUILD_LABEL: ${{ steps.build.outputs.label }}
+          LIGHTWEIGHT: ${{ inputs.lightweight }}
         run: |
           New-Item -ItemType Directory -Path dist/concord -Force | Out-Null
-          Copy-Item target/release/concord.exe dist/concord/
+          Copy-Item target/testing/concord.exe dist/concord/
           Copy-Item LICENSE, THIRD-PARTY-NOTICES.md dist/concord/
           Copy-Item docs/league-handoff.md dist/concord/LEAGUE-HANDOFF.md
           @'
-          concord for Windows x64 (testing prerelease)
+          concord for Windows x64 (testing profile, NOT a shipping release)
 
           Extract this ZIP before running concord.exe. The binary is unsigned.
           Only bypass Windows warnings if you trust this download.
+
+          This build uses optimized code without shipping LTO and with unwinding enabled.
+          Runtime audio/video performance must still be validated on real hardware.
+          GUI automation is not included; use a dedicated --features autotest build for it.
 
           League handoff is experimental and OFF by default. Enable it under:
           Settings > Video > League of Legends > Auto-switch client / game.
@@ -76,13 +156,19 @@ jobs:
           This Windows app/core testing build is independent of the full workspace
           CI: it does not certify macOS or the standalone server's integration tests.
           '@ | Set-Content dist/concord/README.txt
-          $zip = "concord-$env:RELEASE_TAG-windows-x64.zip"
+          "`nBuild: $env:BUILD_LABEL" | Add-Content dist/concord/README.txt
+          if ($env:LIGHTWEIGHT -eq 'true') {
+            'LIGHTWEIGHT: Maximum AI noise suppression is NOT included. Saved Maximum AI preferences use Light AI.' | Add-Content dist/concord/README.txt
+          } else {
+            'Full audio features, including Maximum AI noise suppression.' | Add-Content dist/concord/README.txt
+          }
+          $zip = "concord-$env:BUILD_LABEL-windows-x64.zip"
           Compress-Archive -Path dist/concord/* -DestinationPath "dist/$zip"
           $sha = (Get-FileHash "dist/$zip" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$sha  $zip" | Set-Content dist/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: concord-windows-x64-${{ inputs.tag }}
+          name: concord-windows-x64-${{ steps.build.outputs.label }}
           path: |
             dist/*.zip
             dist/SHA256SUMS.txt

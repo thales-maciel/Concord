@@ -518,13 +518,17 @@ impl App {
 
     fn noise_section(&mut self, ui: &mut egui::Ui, ch: &mut Changes) {
         forms::group(ui, "Noise suppression");
-        let before = self.settings.noise_suppression;
+        let before = self.settings.noise_suppression.effective();
+        let mut selected = before;
         let options: Vec<(NoiseLevel, &str)> =
             NoiseLevel::ALL.iter().map(|l| (*l, l.label())).collect();
         row(ui, "Level", |ui| {
-            forms::segmented(ui, &mut self.settings.noise_suppression, &options)
+            forms::segmented(ui, &mut selected, &options)
         });
-        let hint = match self.settings.noise_suppression {
+        if !NoiseLevel::AiMax.available() {
+            note(ui, "This lightweight build does not include Maximum AI. Saved Maximum AI preferences use Light AI until you return to a full build.", true);
+        }
+        let hint = match selected {
             NoiseLevel::Standard => "WebRTC suppression: lightweight, removes hiss and steady noise.",
             NoiseLevel::AiLight => "AI (RNNoise): also removes keyboard, fan and background noise. Uses very little CPU.",
             NoiseLevel::AiMax => {
@@ -541,7 +545,8 @@ impl App {
                 theme::AVISO,
             );
         }
-        if self.settings.noise_suppression != before {
+        if selected != before {
+            self.settings.noise_suppression = selected;
             self.settings_ui.noise_fell_back = false;
             // Applies on the next 10 ms of audio: in the call and in the mic test, no rejoin.
             self.noise.set_level(self.settings.noise_suppression);

@@ -10,11 +10,17 @@ description = "concord desktop app (egui): connect, chat, voice, Go Live."
 name = "concord"
 path = "src/main.rs"
 
+[features]
+default = ["maximum-ai"]
+maximum-ai = ["vox-client-core/maximum-ai"]
+# Dedicated automation builds only; ordinary app builds do not compile the scenario drivers.
+autotest = []
+
 [dependencies]
 vox-log = { workspace = true }
 vox-proto = { workspace = true }
 vox-capture = { workspace = true }
-vox-client-core = { path = "../crates/vox-client-core" }
+vox-client-core = { path = "../crates/vox-client-core", default-features = false }
 # "Criar / abrir servidor" (v0.8): the hub runs inside the app, as a library (nothing of it starts
 # until somebody hosts).
 voxhub-server = { path = "../hub" }

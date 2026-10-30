@@ -4,6 +4,7 @@
 
 mod alerts;
 mod app;
+#[cfg(feature = "autotest")]
 mod autotest;
 mod avatars;
 mod backend;
@@ -43,6 +44,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 
 use eframe::egui;
 
+#[cfg(feature = "autotest")]
 use crate::autotest::{Auto, AutoArgs, Role};
 use crate::backend::{Backend, Repaint};
 use crate::settings::Settings;
@@ -82,7 +84,7 @@ fn parse_args() -> Args {
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
-            "--autotest" => a.autotest = it.next(),
+            "--autotest" => a.autotest = Some(it.next().unwrap_or_default()),
             "--server" => a.server = it.next().unwrap_or_default(),
             "--name" => a.name = it.next().unwrap_or_default(),
             "--password" => a.password = it.next().unwrap_or_default(),
@@ -113,6 +115,12 @@ fn parse_args() -> Args {
 
 fn main() {
     let args = parse_args();
+    if !cfg!(feature = "autotest") && args.autotest.is_some() {
+        eprintln!(
+            "GUI automation is not included in this build; rebuild with --features autotest."
+        );
+        std::process::exit(2);
+    }
     if args.autotest.is_some() {
         // Autotests never take the foreground (`vox_client_core::testmode`). Set before any thread
         // starts, and before anything reads it.
@@ -140,6 +148,7 @@ fn main() {
     // plain Win32 window instead.
     vox_client_core::golive::Viewer::prefer_native_window();
 
+    #[cfg(feature = "autotest")]
     let auto = args.autotest.as_deref().map(|r| {
         let role = match r {
             "a" | "A" => Role::A,
@@ -224,7 +233,7 @@ fn main() {
             },
         )
     });
-    let persist = auto.is_none();
+    let persist = args.autotest.is_none();
     if let Some(dir) = args.settings_dir.clone().filter(|_| !persist) {
         // Autotest only: settings (and the saved server list) read from and written to this folder,
         // so a run can restart the app and find them (v0.9.1). The real ones are never touched.
@@ -290,7 +299,10 @@ fn main() {
     let backend = Backend::start(repaint.clone());
 
     // (1060 × 660, or the design-review screenshots' size and display scale.)
+    #[cfg(feature = "autotest")]
     let (inner, zoom) = autotest::shots::window();
+    #[cfg(not(feature = "autotest"))]
+    let (inner, zoom) = ([1060.0, 660.0], 1.0);
     let mut viewport = egui::ViewportBuilder::default();
     if let Some(icon) = brand::window_icon() {
         // The window and taskbar icon (eframe's own egui logo otherwise).
@@ -318,9 +330,14 @@ fn main() {
             if zoom != 1.0 {
                 cc.egui_ctx.set_zoom_factor(zoom);
             }
-            Ok(Box::new(app::App::new(
-                backend, repaint, settings, persist, auto,
-            )))
+            let app = app::App::new(backend, repaint, settings, persist);
+            #[cfg(feature = "autotest")]
+            let app = {
+                let mut app = app;
+                app.auto = auto;
+                app
+            };
+            Ok(Box::new(app))
         }),
     );
     if let Err(e) = result {

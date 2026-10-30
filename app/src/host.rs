@@ -663,7 +663,7 @@ impl App {
         if closing
             && self.host.hosting()
             && !self.host.quit_confirmed
-            && self.auto.is_none()
+            && self.persist
             && !self
                 .notify
                 .hides_on_close(self.settings.notify.tray_on_close)

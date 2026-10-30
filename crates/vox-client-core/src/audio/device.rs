@@ -1131,6 +1131,7 @@ mod tests {
                 level.label(),
                 per.as_secs_f64() / 0.010 * 100.0
             );
+            #[cfg(feature = "maximum-ai")]
             if level == NoiseLevel::AiMax {
                 println!(
                     "           (DeepFilterNet worker alone: {:?} per frame)",

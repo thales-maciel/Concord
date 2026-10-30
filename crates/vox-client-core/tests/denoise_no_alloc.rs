@@ -49,6 +49,7 @@ fn fill(c: &mut [i16; FRAME], k: usize, x: &mut u32) {
 
 /// Allocations made by `d.process` alone (level switches happen in the UI and may allocate:
 /// starting the DeepFilterNet worker spawns a thread; its own allocations are on that thread).
+#[cfg(feature = "maximum-ai")]
 fn process_counted(d: &mut Denoiser, chunk: &mut [i16; FRAME]) -> usize {
     let before = allocations();
     d.process(chunk);
@@ -89,6 +90,7 @@ fn denoiser_does_not_allocate_in_steady_state_or_when_switching() {
 }
 
 #[test]
+#[cfg(feature = "maximum-ai")]
 fn ai_max_does_not_allocate_in_the_audio_path() {
     let ctl = Arc::new(NoiseControl::new(NoiseLevel::AiLight));
     let mut d = Denoiser::new(ctl.clone());

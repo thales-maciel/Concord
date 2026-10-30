@@ -8,6 +8,13 @@ description = "Desktop client logic: hub API, voice (LiveKit), Go Live publish/v
 [[bin]]
 name = "vox-cli"
 path = "src/bin/vox-cli.rs"
+required-features = ["cli"]
+
+[features]
+# Full builds keep Maximum AI. --no-default-features omits the tract inference stack.
+default = ["maximum-ai"]
+maximum-ai = ["dep:deep_filter"]
+cli = ["dep:clap"]
 
 [dependencies]
 vox-log = { workspace = true }
@@ -21,17 +28,19 @@ serde_json = { workspace = true }
 
 livekit = { version = "0.9.4", features = ["rustls-tls-webpki-roots"] }
 livekit-api = { version = "0.8.2", default-features = false, features = ["access-token"] }
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+# Use the same TLS provider as LiveKit's WebSockets and the built-in server.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 cpal = "0.18"
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06"] }
 softbuffer = { version = "0.4.8", default-features = false }
-clap = { version = "4.6", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"], optional = true }
 parking_lot = "0.12"
 nnnoiseless = { version = "0.5.2", default-features = false }
 # "Maximum AI": DeepFilterNet3 (MIT/Apache) through tract, vendored subset of libDF.
-deep_filter = { path = "../../vendor/deep_filter" }
+deep_filter = { path = "../../vendor/deep_filter", optional = true }
 url = "2"
 # Soundboard uploads: decode WAV / MP3 / OGG (Vorbis) / FLAC in pure Rust (no ffmpeg, no C).
 symphonia = { version = "0.5", default-features = false, features = ["wav", "pcm", "mp3", "ogg", "vorbis", "flac", "isomp4", "aac", "alac"] }
@@ -50,3 +59,5 @@ windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_
 # The item-12 live test runs a real hub (and its LiveKit) against real voice sessions.
 voxhub-server = { path = "../../hub" }
 tempfile = "3.27.0"
+# Loopback HTTPS/WSS regression test, using the already-present ring TLS stack.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }

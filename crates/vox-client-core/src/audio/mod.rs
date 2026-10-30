@@ -5,6 +5,7 @@ pub mod denoise;
 #[cfg(test)]
 mod denoise_eval;
 pub mod device;
+#[cfg(feature = "maximum-ai")]
 pub mod dfn;
 pub mod gate;
 pub mod mic_test;

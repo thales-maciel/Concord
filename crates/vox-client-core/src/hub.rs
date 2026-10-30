@@ -77,6 +77,9 @@ impl HubClient {
             let p = format!("{}/", base.path());
             base.set_path(&p);
         }
+        // Reqwest's no-provider feature avoids also compiling AWS-LC. Initialize before the
+        // first HTTPS request or WSS connection (the server may not have been started).
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(15))

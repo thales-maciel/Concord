@@ -1,7 +1,7 @@
 # Release gate: every autotest scenario against its own fresh dev hub (hub 7997, LiveKit 7970-7972;
 # the host-mode scenario uses 7990/7980-7982, the server-list one a second hub on 7998/7973-7975).
 # Never touches a live server on 7890/7880-7882.
-# Build first:  cargo build --release --workspace   (with CARGO_TARGET_DIR=target-v02)
+# Build first:  cargo build --release --workspace --all-features   (with CARGO_TARGET_DIR=target-v02)
 # Usage:        powershell -ExecutionPolicy Bypass -File tools\gate.ps1 [-Only name,name] [-Assets <main tree>]
 #               (-Assets: where bin\livekit-server.exe and releases\ are, when run from a worktree)
 param([string[]]$Only = @(), [string]$Assets = "")
