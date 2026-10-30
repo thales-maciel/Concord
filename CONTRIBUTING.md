@@ -27,4 +27,6 @@ The Windows GUI/media gate is separate: see `tools/gate.ps1` for prerequisites a
 ## Version tags
 
 `vX.Y.Z` tags (optionally with a prerelease suffix) must match the workspace version and
-reference a commit on `main`. CI validates tags but does not publish releases.
+reference a commit on `main`. After all checks pass, tag CI publishes a Windows x64 ZIP
+and SHA-256 checksums to GitHub Releases. Tags with a prerelease suffix are marked as
+prereleases. The Windows ZIP is also uploaded as a CI artifact as soon as its job succeeds.

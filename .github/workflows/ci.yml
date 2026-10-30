@@ -66,6 +66,38 @@ jobs:
         run: cargo test --locked --workspace --lib --bins --tests
       - name: Build
         run: cargo build --locked --workspace
+      - name: Build Windows release
+        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/v')
+        run: cargo build --locked --release -p voxhub-app
+      - name: Package Windows app
+        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          New-Item -ItemType Directory -Path dist/concord -Force | Out-Null
+          Copy-Item target/release/concord.exe dist/concord/
+          Copy-Item LICENSE, THIRD-PARTY-NOTICES.md dist/concord/
+          Copy-Item docs/league-handoff.md dist/concord/LEAGUE-HANDOFF.md
+          @'
+          concord for Windows x64
+
+          Extract this ZIP before running concord.exe. The binary is unsigned.
+          Only bypass Windows warnings if you trust this download.
+
+          League handoff is experimental and OFF by default. Enable it under:
+          Settings > Video > League of Legends > Auto-switch client / game.
+          Start a new stream after changing the setting. Prefer Borderless mode.
+          See LEAGUE-HANDOFF.md for the test checklist and limitations.
+          '@ | Set-Content dist/concord/README.txt
+          Compress-Archive -Path dist/concord/* -DestinationPath "dist/concord-$env:RELEASE_TAG-windows-x64.zip"
+      - name: Upload Windows package
+        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: concord-windows-x64
+          path: dist/*.zip
+          if-no-files-found: error
 
   release-tag:
     name: Validate release tag
@@ -94,3 +126,41 @@ jobs:
           if tag != f'v{version}':
               raise SystemExit(f'Tag {tag} does not match workspace version {version}')
           PY
+
+  release:
+    name: Publish Windows download
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [format, portable, desktop, release-tag]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: concord-windows-x64
+          path: dist
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          (cd dist && sha256sum *.zip > SHA256SUMS.txt)
+          cat > notes.md <<'NOTES'
+          Windows x64 portable build. Extract the ZIP and run `concord.exe`.
+          The executable is unsigned; only bypass Windows warnings if you trust this download.
+
+          ### Experimental League of Legends screen-share handoff
+          Off by default. Enable **Settings > Video > League of Legends > Auto-switch client / game**,
+          then start sharing a League window. Video and requested app audio follow the client/game
+          transition without restarting the stream. Borderless mode is recommended.
+
+          Real-game Windows validation is still needed. The ZIP includes `LEAGUE-HANDOFF.md`
+          with the acceptance checklist. Test in a practice game before relying on it.
+          NOTES
+          args=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$RELEASE_TAG" dist/*.zip dist/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --title "concord $RELEASE_TAG" \
+            --notes-file notes.md "${args[@]}"
