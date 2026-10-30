@@ -9,7 +9,7 @@
 //! | step | A changes                         | B must see (landscape L / portrait P, dark corner) |
 //! |------|-----------------------------------|-----------------------------------------------------|
 //! | 0    | nothing (mirror only in my view)  | L-TL: others get the un-mirrored picture             |
-//! | 1    | "Espelhar para os outros"         | L-TR                                                 |
+//! | 1    | "Mirror for others"         | L-TR                                                 |
 //! | 2    | mirror off, rotate 90             | P-TR (the frame size changed to portrait)            |
 //! | 3    | rotate 180                        | L-BR                                                 |
 //! | 4    | rotate 0, zoom 2x                 | L-none (the box is cropped away; same frame size)    |
@@ -66,7 +66,10 @@ impl Auto {
     /// A: while holding the camera, change its settings once B is ready.
     pub(super) fn camcfg_a(&mut self, app: &mut App) {
         let me = app.my_id();
-        let b_ready = app.members_here().iter().any(|m| Some(m.user.id) != me && m.muted && !m.deafened);
+        let b_ready = app
+            .members_here()
+            .iter()
+            .any(|m| Some(m.user.id) != me && m.muted && !m.deafened);
         match self.camcfg.a_phase {
             None if b_ready => {
                 tracing::info!(target: "autotest", "AUTOTEST A camera config: B is ready; phase 0 (default picture)");
@@ -114,7 +117,12 @@ impl Auto {
             }
         }
         if next == EXPECTED.len() {
-            let sizes: Vec<String> = self.camcfg.b_sizes.iter().map(|(w, h)| format!("{w}x{h}")).collect();
+            let sizes: Vec<String> = self
+                .camcfg
+                .b_sizes
+                .iter()
+                .map(|(w, h)| format!("{w}x{h}"))
+                .collect();
             tracing::info!(target: "autotest", "AUTOTEST B camera config: saw {:?} (sizes {sizes:?})", self.camcfg.b_seen);
             return Some(Ok(()));
         }

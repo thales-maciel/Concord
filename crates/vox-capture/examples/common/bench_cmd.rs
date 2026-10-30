@@ -18,7 +18,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use vox_capture::bench::{BenchSpec, BenchResult};
+use vox_capture::bench::{BenchResult, BenchSpec};
 use vox_capture::{DegradationPreference, EncoderBackend, Nv12Frame};
 
 use super::scenes::{Scene, SceneGen};
@@ -39,7 +39,9 @@ struct Config {
 fn parse_configs(s: &str) -> Result<Vec<Config>> {
     let mut out = Vec::new();
     for item in s.split(';').map(str::trim).filter(|x| !x.is_empty()) {
-        let (label, rest) = item.split_once('=').ok_or(format!("config {item:?}: label=backend:spec"))?;
+        let (label, rest) = item
+            .split_once('=')
+            .ok_or(format!("config {item:?}: label=backend:spec"))?;
         let (backend, spec) = rest.split_once(':').unwrap_or((rest, ""));
         let backend = match backend {
             "mf" => EncoderBackend::MediaFoundation,
@@ -78,7 +80,11 @@ fn parse_configs(s: &str) -> Result<Vec<Config>> {
 
 fn list<T: std::str::FromStr>(s: &str) -> Result<Vec<T>> {
     s.split(',')
-        .map(|x| x.trim().parse::<T>().map_err(|_| format!("bad list item {x:?}")))
+        .map(|x| {
+            x.trim()
+                .parse::<T>()
+                .map_err(|_| format!("bad list item {x:?}"))
+        })
         .collect()
 }
 
@@ -90,11 +96,24 @@ struct Scores {
     vmaf: Option<(f64, f64)>,
 }
 
-fn ffmpeg_score(out: &Path, reference: &Path, w: u32, h: u32, fps: f64, vmaf: bool, work: &Path) -> Result<Scores> {
+fn ffmpeg_score(
+    out: &Path,
+    reference: &Path,
+    w: u32,
+    h: u32,
+    fps: f64,
+    vmaf: bool,
+    work: &Path,
+) -> Result<Scores> {
     let ssim_log = work.join("ssim.log");
     let psnr_log = work.join("psnr.log");
     let vmaf_log = work.join("vmaf.json");
-    let esc = |p: &Path| p.display().to_string().replace('\\', "/").replace(':', "\\\\:");
+    let esc = |p: &Path| {
+        p.display()
+            .to_string()
+            .replace('\\', "/")
+            .replace(':', "\\\\:")
+    };
     let mut graph = format!(
         "[0:v]settb=AVTB,setpts=N/({fps})/TB,format=yuv420p[d];[1:v]settb=AVTB,setpts=N/({fps})/TB,format=yuv420p[r];\
          [d]split={n}[d1][d2]{d3};[r]split={n}[r1][r2]{r3};\
@@ -115,7 +134,15 @@ fn ffmpeg_score(out: &Path, reference: &Path, w: u32, h: u32, fps: f64, vmaf: bo
         .args(["-hide_banner", "-nostats", "-loglevel", "error", "-y"])
         .args(["-f", "h264", "-i"])
         .arg(out)
-        .args(["-f", "rawvideo", "-pix_fmt", "nv12", "-s", &format!("{w}x{h}"), "-i"])
+        .args([
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "nv12",
+            "-s",
+            &format!("{w}x{h}"),
+            "-i",
+        ])
         .arg(reference)
         .args(["-lavfi", &graph, "-f", "null", "-"])
         .status()
@@ -190,7 +217,10 @@ pub fn cmd_bench(args: &[String]) -> Result<()> {
         .split(',')
         .map(|s| Scene::parse(s.trim()).ok_or(format!("unknown scene {s:?}")))
         .collect::<Result<_>>()?;
-    let secs: f64 = opt(args, "--secs").map(|s| s.parse().map_err(|_| "--secs")).transpose()?.unwrap_or(4.0);
+    let secs: f64 = opt(args, "--secs")
+        .map(|s| s.parse().map_err(|_| "--secs"))
+        .transpose()?
+        .unwrap_or(4.0);
     let (w, h) = match opt(args, "--size") {
         Some(s) => {
             let (a, b) = s.split_once('x').ok_or("--size WxH")?;
@@ -200,9 +230,15 @@ pub fn cmd_bench(args: &[String]) -> Result<()> {
     };
     let fps_list: Vec<u32> = list(opt(args, "--fps").unwrap_or("30"))?;
     let kbps_list: Vec<u32> = list(opt(args, "--kbps").unwrap_or("6000"))?;
-    let configs = parse_configs(opt(args, "--configs").unwrap_or("v01-mf=mf:v01,nocomp;v02-mf=mf:def"))?;
-    let input_fps: Option<f64> = opt(args, "--input-fps").map(|s| s.parse().map_err(|_| "--input-fps")).transpose()?;
-    let idr_every = opt(args, "--idr-every").map(parse_int).transpose()?.unwrap_or(0) as u32;
+    let configs =
+        parse_configs(opt(args, "--configs").unwrap_or("v01-mf=mf:v01,nocomp;v02-mf=mf:def"))?;
+    let input_fps: Option<f64> = opt(args, "--input-fps")
+        .map(|s| s.parse().map_err(|_| "--input-fps"))
+        .transpose()?;
+    let idr_every = opt(args, "--idr-every")
+        .map(parse_int)
+        .transpose()?
+        .unwrap_or(0) as u32;
     let steps: Vec<(u32, u32)> = match opt(args, "--steps") {
         Some(s) => s
             .split(',')
@@ -216,7 +252,9 @@ pub fn cmd_bench(args: &[String]) -> Result<()> {
     let vmaf = args.iter().any(|a| a == "--vmaf");
     let keep = args.iter().any(|a| a == "--keep");
     let png = args.iter().any(|a| a == "--png");
-    let csv_path = opt(args, "--csv").map(PathBuf::from).unwrap_or_else(|| work.join("bench.csv"));
+    let csv_path = opt(args, "--csv")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| work.join("bench.csv"));
     let new_csv = !csv_path.exists();
     let mut csv = std::fs::OpenOptions::new()
         .create(true)
@@ -231,7 +269,9 @@ pub fn cmd_bench(args: &[String]) -> Result<()> {
         )
         .map_err(|e| e.to_string())?;
     }
-    let ncpu = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) as f64;
+    let ncpu = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1) as f64;
     println!(
         "{:<10} {:>3} {:<18} {:>6} | {:>6} {:>6} {:>6} {:>6} {:>6} | {:>5} {:>5} {:>6} | {:>5} {:>5}",
         "scene", "fps", "config", "kbps", "out", "PSNR", "SSIM", "p5", "min", "VMAF", "vmin", "lat", "cpu", "idr"
@@ -270,29 +310,62 @@ pub fn cmd_bench(args: &[String]) -> Result<()> {
                         apply_fps_cap: c.cap,
                     };
                     let per_run_ref = c.cap;
-                    let ref_path = if per_run_ref { work.join("ref_run.yuv") } else { shared_ref.clone() };
+                    let ref_path = if per_run_ref {
+                        work.join("ref_run.yuv")
+                    } else {
+                        shared_ref.clone()
+                    };
                     let write_ref = per_run_ref || !shared_ref_ok;
                     let out_path = work.join("out.h264");
-                    let r = run_one(&spec, &mut gen, write_ref.then_some(ref_path.as_path()), &out_path);
+                    let r = run_one(
+                        &spec,
+                        &mut gen,
+                        write_ref.then_some(ref_path.as_path()),
+                        &out_path,
+                    );
                     let res = match r {
                         Ok(v) => v,
                         Err(e) => {
-                            println!("{:<10} {:>3} {:<18} {:>6} | error: {e}", scene.name(), fps, c.label, kbps);
+                            println!(
+                                "{:<10} {:>3} {:<18} {:>6} | error: {e}",
+                                scene.name(),
+                                fps,
+                                c.label,
+                                kbps
+                            );
                             continue;
                         }
                     };
                     if !per_run_ref {
                         shared_ref_ok = true;
                     }
-                    let sc = match ffmpeg_score(&out_path, &ref_path, w & !1, h & !1, in_fps, vmaf, &work) {
+                    let sc = match ffmpeg_score(
+                        &out_path,
+                        &ref_path,
+                        w & !1,
+                        h & !1,
+                        in_fps,
+                        vmaf,
+                        &work,
+                    ) {
                         Ok(s) => s,
                         Err(e) => {
-                            println!("{:<10} {:>3} {:<18} {:>6} | scoring error: {e}", scene.name(), fps, c.label, kbps);
+                            println!(
+                                "{:<10} {:>3} {:<18} {:>6} | scoring error: {e}",
+                                scene.name(),
+                                fps,
+                                c.label,
+                                kbps
+                            );
                             continue;
                         }
                     };
                     if sc.ssim.len() != res.frames.len() {
-                        println!("  warning: {} decoded frames vs {} encoded", sc.ssim.len(), res.frames.len());
+                        println!(
+                            "  warning: {} decoded frames vs {} encoded",
+                            sc.ssim.len(),
+                            res.frames.len()
+                        );
                     }
                     let n = res.frames.len().max(1) as f64;
                     let bytes: u64 = res.frames.iter().map(|f| f.bytes as u64).sum();
@@ -302,23 +375,59 @@ pub fn cmd_bench(args: &[String]) -> Result<()> {
                     let ssim_min = sc.ssim.iter().copied().fold(f64::INFINITY, f64::min);
                     let ssim_p5 = pct(&sc.ssim, 0.05);
                     // Keyframes after the first frame (requested IDRs).
-                    let idr: Vec<usize> = res.frames.iter().enumerate().skip(1).filter(|(_, f)| f.keyframe).map(|(i, _)| i).collect();
-                    let p_bytes: Vec<f64> = res.frames.iter().skip(1).filter(|f| !f.keyframe).map(|f| f.bytes as f64).collect();
+                    let idr: Vec<usize> = res
+                        .frames
+                        .iter()
+                        .enumerate()
+                        .skip(1)
+                        .filter(|(_, f)| f.keyframe)
+                        .map(|(i, _)| i)
+                        .collect();
+                    let p_bytes: Vec<f64> = res
+                        .frames
+                        .iter()
+                        .skip(1)
+                        .filter(|f| !f.keyframe)
+                        .map(|f| f.bytes as f64)
+                        .collect();
                     let p_avg = p_bytes.iter().sum::<f64>() / p_bytes.len().max(1) as f64;
-                    let idr_ratio = if idr.is_empty() { 0.0 } else { idr.iter().map(|&i| res.frames[i].bytes as f64).sum::<f64>() / idr.len() as f64 / p_avg.max(1.0) };
+                    let idr_ratio = if idr.is_empty() {
+                        0.0
+                    } else {
+                        idr.iter().map(|&i| res.frames[i].bytes as f64).sum::<f64>()
+                            / idr.len() as f64
+                            / p_avg.max(1.0)
+                    };
                     let idr_drop = if idr.is_empty() {
                         0.0
                     } else {
-                        idr.iter().filter_map(|&i| sc.ssim.get(i)).map(|v| ssim_avg - v).sum::<f64>() / idr.len() as f64
+                        idr.iter()
+                            .filter_map(|&i| sc.ssim.get(i))
+                            .map(|v| ssim_avg - v)
+                            .sum::<f64>()
+                            / idr.len() as f64
                     };
-                    let max_frame_ms = res.frames.iter().skip(1).map(|f| f.bytes as f64 * 8.0 / (kbps as f64)).fold(0.0, f64::max);
-                    let lats: Vec<f64> = res.frames.iter().map(|f| f.latency_us as f64 / 1000.0).collect();
+                    let max_frame_ms = res
+                        .frames
+                        .iter()
+                        .skip(1)
+                        .map(|f| f.bytes as f64 * 8.0 / (kbps as f64))
+                        .fold(0.0, f64::max);
+                    let lats: Vec<f64> = res
+                        .frames
+                        .iter()
+                        .map(|f| f.latency_us as f64 / 1000.0)
+                        .collect();
                     let lat_avg = lats.iter().sum::<f64>() / n;
-                    let cpu_pct = res.cpu_us_per_frame * in_fps.min(fps as f64) / 1e6 / ncpu * 100.0;
+                    let cpu_pct =
+                        res.cpu_us_per_frame * in_fps.min(fps as f64) / 1e6 / ncpu * 100.0;
                     let caps = {
                         let mut v: Vec<u32> = res.frames.iter().map(|f| f.fps_cap).collect();
                         v.dedup();
-                        v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(">")
+                        v.iter()
+                            .map(|x| x.to_string())
+                            .collect::<Vec<_>>()
+                            .join(">")
                     };
                     let (vm, vmin) = sc.vmaf.unwrap_or((f64::NAN, f64::NAN));
                     println!(
@@ -354,15 +463,27 @@ pub fn cmd_bench(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn run_one(spec: &BenchSpec, gen: &mut SceneGen, reference: Option<&Path>, out: &Path) -> Result<BenchResult> {
-    let mut out_w = std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(out).map_err(|e| e.to_string())?);
+fn run_one(
+    spec: &BenchSpec,
+    gen: &mut SceneGen,
+    reference: Option<&Path>,
+    out: &Path,
+) -> Result<BenchResult> {
+    let mut out_w = std::io::BufWriter::with_capacity(
+        1 << 20,
+        std::fs::File::create(out).map_err(|e| e.to_string())?,
+    );
     let mut ref_w = match reference {
-        Some(p) => Some(std::io::BufWriter::with_capacity(8 << 20, std::fs::File::create(p).map_err(|e| e.to_string())?)),
+        Some(p) => Some(std::io::BufWriter::with_capacity(
+            8 << 20,
+            std::fs::File::create(p).map_err(|e| e.to_string())?,
+        )),
         None => None,
     };
     let mut io_err: Option<String> = None;
     let input_fps = spec.input_fps;
-    let mut gen_fn = |i: u32, buf: &mut [u8], stride: usize| gen.render(i as f64 / input_fps, buf, stride);
+    let mut gen_fn =
+        |i: u32, buf: &mut [u8], stride: usize| gen.render(i as f64 / input_fps, buf, stride);
     let mut src_fn = |f: &Nv12Frame<'_>| {
         if let Some(wr) = ref_w.as_mut() {
             let (w, h) = (f.width as usize, f.height as usize);
@@ -379,8 +500,13 @@ fn run_one(spec: &BenchSpec, gen: &mut SceneGen, reference: Option<&Path>, out: 
             io_err.get_or_insert(e.to_string());
         }
     };
-    let src_opt: Option<&mut dyn FnMut(&Nv12Frame<'_>)> = if reference.is_some() { Some(&mut src_fn) } else { None };
-    let r = vox_capture::bench::run(spec, &mut gen_fn, src_opt, &mut out_fn).map_err(|e| e.to_string())?;
+    let src_opt: Option<&mut dyn FnMut(&Nv12Frame<'_>)> = if reference.is_some() {
+        Some(&mut src_fn)
+    } else {
+        None
+    };
+    let r = vox_capture::bench::run(spec, &mut gen_fn, src_opt, &mut out_fn)
+        .map_err(|e| e.to_string())?;
     out_w.flush().map_err(|e| e.to_string())?;
     if let Some(mut wr) = ref_w {
         wr.flush().map_err(|e| e.to_string())?;

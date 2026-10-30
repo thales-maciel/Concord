@@ -1,4 +1,4 @@
-//! Invites (v0.8, "Convidar amigos"): the token that lets a new person in without the server
+//! Invites (v0.8, "Invite amigos"): the token that lets a new person in without the server
 //! password. The rules and the code format are in `vox_proto::invite`; this is the hub side.
 //!
 //! - `invites`: one row per invite, the token stored as a sha256 hash (like sessions), with its
@@ -59,7 +59,10 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
 fn token_hash(hex: &str) -> Option<String> {
     let t = invite_token_from_hex(hex)?;
     // The salt keeps its pre-concord name: stored invites were hashed with it.
-    Some(sha256_hex(&format!("voxhub-invite:{}", invite_token_hex(&t))))
+    Some(sha256_hex(&format!(
+        "voxhub-invite:{}",
+        invite_token_hex(&t)
+    )))
 }
 
 const INVITE_COLS: &str = "i.id, i.created_by, u.username, i.created_at_ms, i.expires_at_ms, i.max_uses, i.uses, i.revoked_at_ms";
@@ -71,7 +74,9 @@ fn invite_row(r: &rusqlite::Row) -> rusqlite::Result<Invite> {
         created_by_name: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
         created_at_ms: r.get(3)?,
         expires_at_ms: r.get(4)?,
-        max_uses: r.get::<_, Option<i64>>(5)?.map(|n| n.clamp(0, u32::MAX as i64) as u32),
+        max_uses: r
+            .get::<_, Option<i64>>(5)?
+            .map(|n| n.clamp(0, u32::MAX as i64) as u32),
         uses: r.get::<_, i64>(6)?.clamp(0, u32::MAX as i64) as u32,
         revoked: r.get::<_, Option<i64>>(7)?.is_some(),
     })
@@ -104,7 +109,13 @@ fn count_active(conn: &Connection, now: i64) -> rusqlite::Result<i64> {
     )
 }
 
-pub fn insert(conn: &Connection, hash: &str, by: UserId, expires_at_ms: Option<i64>, max_uses: Option<u32>) -> rusqlite::Result<Invite> {
+pub fn insert(
+    conn: &Connection,
+    hash: &str,
+    by: UserId,
+    expires_at_ms: Option<i64>,
+    max_uses: Option<u32>,
+) -> rusqlite::Result<Invite> {
     let id = crate::ids::insert_with(conn, crate::ids::Seq::Invites, |id| {
         conn.execute(
             "INSERT INTO invites (id, token_hash, created_by, created_at_ms, expires_at_ms, max_uses) VALUES (?, ?, ?, ?, ?, ?)",
@@ -120,13 +131,20 @@ pub fn revoke_row(conn: &Connection, id: InviteId) -> rusqlite::Result<bool> {
     if get(conn, id)?.is_none() {
         return Ok(false);
     }
-    conn.execute("UPDATE invites SET revoked_at_ms = ? WHERE id = ? AND revoked_at_ms IS NULL", params![now_ms(), id])?;
+    conn.execute(
+        "UPDATE invites SET revoked_at_ms = ? WHERE id = ? AND revoked_at_ms IS NULL",
+        params![now_ms(), id],
+    )?;
     Ok(true)
 }
 
 /// Take one use of the invite, if it still works (one statement: two people racing for the last
 /// use cannot both get it). `Err` carries why it does not work.
-pub fn consume(conn: &Connection, id: InviteId, now: i64) -> rusqlite::Result<Result<(), &'static str>> {
+pub fn consume(
+    conn: &Connection,
+    id: InviteId,
+    now: i64,
+) -> rusqlite::Result<Result<(), &'static str>> {
     let n = conn.execute(
         "UPDATE invites SET uses = uses + 1 WHERE id = ?1 AND revoked_at_ms IS NULL
          AND (expires_at_ms IS NULL OR expires_at_ms > ?2) AND (max_uses IS NULL OR uses < max_uses)",
@@ -150,7 +168,13 @@ pub fn add_member(conn: &Connection, user_id: UserId, invite_id: InviteId) -> ru
 }
 
 pub fn is_member(conn: &Connection, user_id: UserId) -> rusqlite::Result<bool> {
-    conn.query_row("SELECT 1 FROM invite_members WHERE user_id = ?", [user_id], |_| Ok(())).optional().map(|r| r.is_some())
+    conn.query_row(
+        "SELECT 1 FROM invite_members WHERE user_id = ?",
+        [user_id],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|r| r.is_some())
 }
 
 fn state_error(state: InviteState) -> Option<&'static str> {
@@ -164,7 +188,9 @@ fn state_error(state: InviteState) -> Option<&'static str> {
 
 /// The invite a token belongs to, if it works right now; otherwise why not.
 async fn check_token(s: &AppState, token: &str) -> anyhow::Result<Result<Invite, &'static str>> {
-    let Some(hash) = token_hash(token) else { return Ok(Err(ERR_INVITE_INVALID)) };
+    let Some(hash) = token_hash(token) else {
+        return Ok(Err(ERR_INVITE_INVALID));
+    };
     let found = s.db.call(move |c| find_by_hash(c, &hash)).await?;
     Ok(match found {
         None => Err(ERR_INVITE_INVALID),
@@ -199,16 +225,21 @@ pub enum Admission {
 /// member (no use of an invite is taken for somebody already in), else the invite (new names
 /// only: [`Admission::ExistingName`]). `Ok(Err(..))` is the refusal to send (the caller counts
 /// it as a failure).
-pub async fn admit(s: &AppState, req: &LoginRequest, username: &str) -> anyhow::Result<Result<Admission, ApiErr>> {
+pub async fn admit(
+    s: &AppState,
+    req: &LoginRequest,
+    username: &str,
+) -> anyhow::Result<Result<Admission, ApiErr>> {
     if ct_eq(&req.server_password, &s.cfg.server_password) {
         return Ok(Ok(Admission::Password));
     }
     if let Some(device) = req.device_token.as_deref() {
         let (name, hash) = (username.to_string(), sha256_hex(device));
-        let ok = s
-            .db
-            .call(move |c| {
-                let Some(row) = crate::db::find_user(c, &name)? else { return Ok(false) };
+        let ok =
+            s.db.call(move |c| {
+                let Some(row) = crate::db::find_user(c, &name)? else {
+                    return Ok(false);
+                };
                 Ok(is_member(c, row.id)? && crate::db::use_device_token(c, row.id, &hash)?)
             })
             .await?;
@@ -220,18 +251,30 @@ pub async fn admit(s: &AppState, req: &LoginRequest, username: &str) -> anyhow::
         return Ok(match check_token(s, token).await? {
             Ok(i) => {
                 let name = username.to_string();
-                let exists = s.db.call(move |c| crate::db::find_user(c, &name)).await?.is_some();
-                Ok(if exists { Admission::ExistingName } else { Admission::Invite(i.id) })
+                let exists =
+                    s.db.call(move |c| crate::db::find_user(c, &name))
+                        .await?
+                        .is_some();
+                Ok(if exists {
+                    Admission::ExistingName
+                } else {
+                    Admission::Invite(i.id)
+                })
             }
             Err(e) => Err(ApiErr::new(StatusCode::UNAUTHORIZED, e)),
         });
     }
-    Ok(Err(ApiErr::new(StatusCode::UNAUTHORIZED, "wrong server password")))
+    Ok(Err(ApiErr::new(
+        StatusCode::UNAUTHORIZED,
+        "wrong server password",
+    )))
 }
 
 /// Before the session is made: take the invite's use (it may have run out meanwhile).
 pub async fn take_use(s: &AppState, admission: Admission) -> Result<(), ApiErr> {
-    let Admission::Invite(id) = admission else { return Ok(()) };
+    let Admission::Invite(id) = admission else {
+        return Ok(());
+    };
     match s.db.call(move |c| consume(c, id, now_ms())).await? {
         Ok(()) => Ok(()),
         Err(e) => Err(ApiErr::new(StatusCode::UNAUTHORIZED, e)),
@@ -241,7 +284,9 @@ pub async fn take_use(s: &AppState, admission: Admission) -> Result<(), ApiErr> 
 /// After the session is made: remember that `user` came in through the invite (only a new
 /// account: the caller makes the session with [`crate::db::login_new`] for an invite).
 pub async fn finish_login(s: &AppState, admission: Admission, user: UserId) -> anyhow::Result<()> {
-    let Admission::Invite(id) = admission else { return Ok(()) };
+    let Admission::Invite(id) = admission else {
+        return Ok(());
+    };
     s.db.call(move |c| add_member(c, user, id)).await?;
     audit(s, Some(user), AUDIT_INVITE_JOIN, None, format!("#{id}")).await;
     Ok(())
@@ -253,19 +298,39 @@ fn require_admin(me: &Authed) -> Result<(), ApiErr> {
     if me.role.can_admin() {
         Ok(())
     } else {
-        Err(ApiErr::new(StatusCode::FORBIDDEN, "your role does not allow this"))
+        Err(ApiErr::new(
+            StatusCode::FORBIDDEN,
+            "your role does not allow this",
+        ))
     }
 }
 
 /// `POST /api/invites`
-pub async fn create(State(s): State<AppState>, me: Authed, headers: HeaderMap, body: Result<Json<InviteCreateRequest>, JsonRejection>) -> ApiResult<InviteCreated> {
+pub async fn create(
+    State(s): State<AppState>,
+    me: Authed,
+    headers: HeaderMap,
+    body: Result<Json<InviteCreateRequest>, JsonRejection>,
+) -> ApiResult<InviteCreated> {
     let Json(req) = body?;
     require_admin(&me)?;
-    if req.expires_secs.is_some_and(|e| !(MIN_EXPIRY_SECS..=INVITE_MAX_EXPIRY_SECS).contains(&e)) {
-        return Err(ApiErr::new(StatusCode::BAD_REQUEST, "expires_secs out of range"));
+    if req
+        .expires_secs
+        .is_some_and(|e| !(MIN_EXPIRY_SECS..=INVITE_MAX_EXPIRY_SECS).contains(&e))
+    {
+        return Err(ApiErr::new(
+            StatusCode::BAD_REQUEST,
+            "expires_secs out of range",
+        ));
     }
-    if req.max_uses.is_some_and(|m| !(1..=INVITE_MAX_USES).contains(&m)) {
-        return Err(ApiErr::new(StatusCode::BAD_REQUEST, "max_uses out of range"));
+    if req
+        .max_uses
+        .is_some_and(|m| !(1..=INVITE_MAX_USES).contains(&m))
+    {
+        return Err(ApiErr::new(
+            StatusCode::BAD_REQUEST,
+            "max_uses out of range",
+        ));
     }
     let token = random_bytes::<INVITE_TOKEN_LEN>();
     let hex = invite_token_hex(&token);
@@ -273,9 +338,8 @@ pub async fn create(State(s): State<AppState>, me: Authed, headers: HeaderMap, b
     let now = now_ms();
     let expires = req.expires_secs.map(|e| now + (e as i64) * 1000);
     let (by, max) = (me.user.id, req.max_uses);
-    let invite = s
-        .db
-        .call(move |c| {
+    let invite =
+        s.db.call(move |c| {
             if count_active(c, now)? >= INVITE_MAX_ACTIVE as i64 {
                 return Ok(None);
             }
@@ -283,11 +347,26 @@ pub async fn create(State(s): State<AppState>, me: Authed, headers: HeaderMap, b
         })
         .await?
         .ok_or_else(|| ApiErr::new(StatusCode::CONFLICT, "too many active invites"))?;
-    let detail = format!("#{} {} {}", invite.id, req.expires_secs.map_or("sem prazo".to_string(), |e| format!("{e}s")), max.map_or("ilimitado".to_string(), |m| format!("{m}x")));
+    let detail = format!(
+        "#{} {} {}",
+        invite.id,
+        req.expires_secs
+            // Legacy audit tokens must remain readable by older clients.
+            .map_or("sem prazo".to_string(), |e| format!("{e}s")),
+        max.map_or("ilimitado".to_string(), |m| format!("{m}x"))
+    );
     audit(&s, Some(by), AUDIT_INVITE_CREATE, None, detail).await;
     // v1.0.2: with no public address of its own, the hub's global IPv6 (`ipv6.rs`).
-    let hints = crate::ipv6::with_ipv6(hints(&s, &headers), crate::listen::plan(&s.cfg.bind, s.cfg.ipv6).has_ipv6(), crate::ipv6::stable_ipv6());
-    Ok(Json(InviteCreated { invite, token: hex, hints }))
+    let hints = crate::ipv6::with_ipv6(
+        hints(&s, &headers),
+        crate::listen::plan(&s.cfg.bind, s.cfg.ipv6).has_ipv6(),
+        crate::ipv6::stable_ipv6(),
+    );
+    Ok(Json(InviteCreated {
+        invite,
+        token: hex,
+        hints,
+    }))
 }
 
 /// `GET /api/invites`
@@ -297,12 +376,23 @@ pub async fn list_invites(State(s): State<AppState>, me: Authed) -> ApiResult<Ve
 }
 
 /// `POST /api/invites/{id}/revoke`
-pub async fn revoke(State(s): State<AppState>, me: Authed, Path(id): Path<InviteId>) -> ApiResult<OkResponse> {
+pub async fn revoke(
+    State(s): State<AppState>,
+    me: Authed,
+    Path(id): Path<InviteId>,
+) -> ApiResult<OkResponse> {
     require_admin(&me)?;
     if !s.db.call(move |c| revoke_row(c, id)).await? {
         return Err(ApiErr::new(StatusCode::NOT_FOUND, "invite not found"));
     }
-    audit(&s, Some(me.user.id), AUDIT_INVITE_REVOKE, None, format!("#{id}")).await;
+    audit(
+        &s,
+        Some(me.user.id),
+        AUDIT_INVITE_REVOKE,
+        None,
+        format!("#{id}"),
+    )
+    .await;
     Ok(Json(OkResponse { ok: true }))
 }
 
@@ -320,7 +410,10 @@ pub async fn redeem(
     match check_token(&s, &req.token).await? {
         Ok(i) => {
             s.throttle.succeed(&ip);
-            Ok(Json(InviteRedeemResponse { server_name: s.cfg.server_name.clone(), expires_at_ms: i.expires_at_ms }))
+            Ok(Json(InviteRedeemResponse {
+                server_name: s.cfg.server_name.clone(),
+                expires_at_ms: i.expires_at_ms,
+            }))
         }
         Err(e) => {
             tracing::warn!(%peer, reason = e, "invite check refused");
@@ -333,16 +426,29 @@ pub async fn redeem(
 
 /// Where this hub can be reached, as far as it knows (the app completes it).
 fn hints(s: &AppState, headers: &HeaderMap) -> InviteHints {
-    let header_port = headers.get(header::HOST).and_then(|v| v.to_str().ok()).and_then(host_port);
-    let bind_port = s.cfg.bind.rsplit_once(':').and_then(|(_, p)| p.parse().ok());
+    let header_port = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .and_then(host_port);
+    let bind_port = s
+        .cfg
+        .bind
+        .rsplit_once(':')
+        .and_then(|(_, p)| p.parse().ok());
     let public = s.cfg.public_host.trim();
     let useless = public.is_empty()
         || public.eq_ignore_ascii_case("localhost")
-        || public.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback() || ip.is_unspecified());
+        || public
+            .parse::<IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback() || ip.is_unspecified());
     let lan = crate::host::net::lan_ipv4();
     InviteHints {
         hub_port: header_port.or(bind_port).unwrap_or(7890),
-        public_host: if useless { String::new() } else { public.to_string() },
+        public_host: if useless {
+            String::new()
+        } else {
+            public.to_string()
+        },
         lan_ipv4: lan.map(|(ip, _)| ip),
         lan_prefix: lan.map_or(0, |(_, p)| p),
     }
@@ -381,31 +487,55 @@ mod tests {
         let now = now_ms();
         let h = token_hash(&"ab".repeat(16)).unwrap();
         let i = insert(&c, &h, 1, Some(now + 60_000), Some(2)).unwrap();
-        assert_eq!((i.uses, i.max_uses, i.created_by_name.as_str()), (0, Some(2), "dono"));
+        assert_eq!(
+            (i.uses, i.max_uses, i.created_by_name.as_str()),
+            (0, Some(2), "dono")
+        );
         assert_eq!(find_by_hash(&c, &h).unwrap().unwrap().id, i.id);
         assert_eq!(consume(&c, i.id, now).unwrap(), Ok(()));
         assert_eq!(consume(&c, i.id, now).unwrap(), Ok(()));
         assert_eq!(consume(&c, i.id, now).unwrap(), Err(ERR_INVITE_USED_UP));
-        assert_eq!(get(&c, i.id).unwrap().unwrap().uses, 2, "a refused use is not counted");
+        assert_eq!(
+            get(&c, i.id).unwrap().unwrap().uses,
+            2,
+            "a refused use is not counted"
+        );
 
         let h2 = token_hash(&"cd".repeat(16)).unwrap();
         let j = insert(&c, &h2, 1, Some(now + 1000), None).unwrap();
         assert_eq!(consume(&c, j.id, now + 999).unwrap(), Ok(()));
-        assert_eq!(consume(&c, j.id, now + 1000).unwrap(), Err(ERR_INVITE_EXPIRED));
+        assert_eq!(
+            consume(&c, j.id, now + 1000).unwrap(),
+            Err(ERR_INVITE_EXPIRED)
+        );
         assert_eq!(count_active(&c, now).unwrap(), 1);
 
         let h3 = token_hash(&"ef".repeat(16)).unwrap();
         let k = insert(&c, &h3, 1, None, None).unwrap();
         for _ in 0..30 {
-            assert_eq!(consume(&c, k.id, now).unwrap(), Ok(()), "unlimited and never expiring");
+            assert_eq!(
+                consume(&c, k.id, now).unwrap(),
+                Ok(()),
+                "unlimited and never expiring"
+            );
         }
         assert!(revoke_row(&c, k.id).unwrap());
         assert!(revoke_row(&c, k.id).unwrap(), "revoking twice is fine");
         assert!(!revoke_row(&c, 999).unwrap());
         assert_eq!(consume(&c, k.id, now).unwrap(), Err(ERR_INVITE_REVOKED));
-        assert_eq!(get(&c, k.id).unwrap().unwrap().state(now), InviteState::Revoked);
+        assert_eq!(
+            get(&c, k.id).unwrap().unwrap().state(now),
+            InviteState::Revoked
+        );
         assert_eq!(consume(&c, 999, now).unwrap(), Err(ERR_INVITE_INVALID));
-        assert_eq!(list(&c, 10).unwrap().iter().map(|i| i.id).collect::<Vec<_>>(), [k.id, j.id, i.id]);
+        assert_eq!(
+            list(&c, 10)
+                .unwrap()
+                .iter()
+                .map(|i| i.id)
+                .collect::<Vec<_>>(),
+            [k.id, j.id, i.id]
+        );
 
         assert!(!is_member(&c, 2).unwrap());
         add_member(&c, 2, i.id).unwrap();

@@ -4,5 +4,9 @@
 mod winres;
 
 fn main() {
-    winres::embed(std::path::Path::new("../app/assets/logo/concord.ico"), "concord-server.exe", "concord-server");
+    winres::embed(
+        std::path::Path::new("../app/assets/logo/concord.ico"),
+        "concord-server.exe",
+        "concord-server",
+    );
 }

@@ -1,4 +1,4 @@
-//! "Modificador de voz": the settings section and the voice bar's quick menu.
+//! "Voice changer": the settings section and the voice bar's quick menu.
 //!
 //! The audio side is `vox_client_core::audio::voicefx`. Both places here write
 //! `settings.voice_fx` and apply it at once through the shared `NoiseControl`: the call and the
@@ -39,32 +39,42 @@ impl App {
         if vertical {
             ui.spacing_mut().item_spacing.y = 1.0;
             for e in VoiceEffect::ALL {
-                if effect_row(ui, e, cfg.effect == e).on_hover_text(e.hint()).clicked() {
+                if effect_row(ui, e, cfg.effect == e)
+                    .on_hover_text(e.hint())
+                    .clicked()
+                {
                     cfg.effect = e;
                 }
             }
             ui.add_space(space::M);
             ui.add_enabled_ui(cfg.effect.has_intensity(), |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Intensidade").color(theme::NEVOA).size(size::SMALL + 0.5));
+                    ui.label(
+                        RichText::new("Intensity")
+                            .color(theme::NEVOA)
+                            .size(size::SMALL + 0.5),
+                    );
                     ui.spacing_mut().slider_width = POPUP_W - 140.0;
                     let r = ui.add(egui::Slider::new(&mut cfg.intensity_pct, 0..=100).suffix("%"));
                     (dragging, released) = (r.dragged(), r.drag_stopped());
                 });
             });
         } else {
-            forms::row(ui, "Efeito", |ui| {
+            forms::row(ui, "Effect", |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = Vec2::splat(space::S);
                     for e in VoiceEffect::ALL {
-                        if forms::chip(ui, cfg.effect == e, e.label()).on_hover_text(e.hint()).clicked() {
+                        if forms::chip(ui, cfg.effect == e, e.label())
+                            .on_hover_text(e.hint())
+                            .clicked()
+                        {
                             cfg.effect = e;
                         }
                     }
                 });
             });
             ui.add_enabled_ui(cfg.effect.has_intensity(), |ui| {
-                forms::row(ui, "Intensidade", |ui| {
+                forms::row(ui, "Intensity", |ui| {
                     let r = ui.add(egui::Slider::new(&mut cfg.intensity_pct, 0..=100).suffix("%"));
                     (dragging, released) = (r.dragged(), r.drag_stopped());
                 });
@@ -79,24 +89,39 @@ impl App {
         }
     }
 
-    /// Configurações → Voz → "Modificador de voz". `toggle_test` starts or stops the mic test
-    /// (the same one as "Testar microfone": you hear yourself with the effect, nothing is sent).
+    /// Settings → Voz → "Voice changer". `toggle_test` starts or stops the mic test
+    /// (the same one as "Test microphone": you hear yourself with the effect, nothing is sent).
     pub(crate) fn voice_fx_section(&mut self, ui: &mut egui::Ui, toggle_test: &mut bool) {
-        forms::group(ui, "Modificador de voz");
+        forms::group(ui, "Voice changer");
         self.voice_fx_controls(ui, false);
         let e = self.settings.voice_fx.effect;
         forms::note(ui, e.hint(), true);
         let testing = self.settings_ui.mic_test != MicTestUi::Off;
-        forms::row(ui, "Testar", |ui| {
-            let (icon, label) = if testing { (ph::STOP, "Parar teste") } else { (ph::MASK_HAPPY, "Ouvir minha voz") };
-            if ui_kit::button_sized(ui, Kind::Secondary, Size::Small, Some(icon), label).on_hover_text("Ouça sua voz com o efeito (use fones para não dar eco). Nada é enviado.").clicked() {
+        forms::row(ui, "Test", |ui| {
+            let (icon, label) = if testing {
+                (ph::STOP, "Stop test")
+            } else {
+                (ph::MASK_HAPPY, "Hear my voice")
+            };
+            if ui_kit::button_sized(ui, Kind::Secondary, Size::Small, Some(icon), label)
+                .on_hover_text(
+                    "Hear your voice with the effect (use headphones to avoid echo). Nothing is sent.",
+                )
+                .clicked()
+            {
                 *toggle_test = true;
             }
             if testing {
-                ui.label(RichText::new("Fale: você se ouve com o efeito.").color(theme::NEVOA));
+                ui.label(
+                    RichText::new("Speak: you hear yourself with the effect.").color(theme::NEVOA),
+                );
             }
         });
-        forms::note(ui, "Muda só o microfone: transmissões (Go Live), soundboard e alertas continuam como são.", true);
+        forms::note(
+            ui,
+            "Only changes your microphone: streams (Go Live), soundboard and alerts are unchanged.",
+            true,
+        );
     }
 
     /// The content of the voice changer popup (the voice dock's mask button).
@@ -104,15 +129,17 @@ impl App {
         ui.set_width(POPUP_W);
         ui.horizontal(|ui| {
             ui.add_space(space::S);
-            ui_kit::title(ui, "Modificador de voz");
+            ui_kit::title(ui, "Voice changer");
         });
         ui.add_space(space::S);
         self.voice_fx_controls(ui, true);
         ui.add_space(space::XS);
-        let text = "Só o microfone muda. Para se ouvir com o efeito: Configurações, Voz.";
+        let text = "Only your microphone changes. To hear the effect: Settings, Voice.";
         ui.horizontal(|ui| {
             ui.add_space(space::S);
-            ui.add(egui::Label::new(RichText::new(text).size(size::SMALL).color(theme::NEVOA)).wrap());
+            ui.add(
+                egui::Label::new(RichText::new(text).size(size::SMALL).color(theme::NEVOA)).wrap(),
+            );
         });
     }
 }
@@ -127,13 +154,35 @@ fn effect_row(ui: &mut egui::Ui, e: VoiceEffect, current: bool) -> egui::Respons
         if resp.hovered() {
             p.rect_filled(rect, radius::ROW, theme::MOVEL_HOVER);
         }
-        let fg = if current || resp.hovered() { theme::GIZ } else { theme::TEXTO };
-        let font = if current { theme::semibold(13.5) } else { theme::body(13.5) };
-        p.text(Pos2::new(rect.left() + 10.0, rect.center().y), Align2::LEFT_CENTER, e.label(), font, fg);
+        let fg = if current || resp.hovered() {
+            theme::GIZ
+        } else {
+            theme::TEXTO
+        };
+        let font = if current {
+            theme::semibold(13.5)
+        } else {
+            theme::body(13.5)
+        };
+        p.text(
+            Pos2::new(rect.left() + 10.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            e.label(),
+            font,
+            fg,
+        );
         if current {
-            p.text(Pos2::new(rect.right() - 10.0, rect.center().y), Align2::RIGHT_CENTER, ph::CHECK, theme::body(15.0), theme::GIZ);
+            p.text(
+                Pos2::new(rect.right() - 10.0, rect.center().y),
+                Align2::RIGHT_CENTER,
+                ph::CHECK,
+                theme::body(15.0),
+                theme::GIZ,
+            );
         }
     }
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, current, e.label()));
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, current, e.label())
+    });
     resp
 }

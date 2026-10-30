@@ -49,7 +49,12 @@ impl Default for UiPlayer {
 
 impl UiPlayer {
     pub fn new() -> Self {
-        Self { shared: Arc::new(Shared { mixer: Arc::new(Mixer::new()), state: Mutex::new(State::default()) }) }
+        Self {
+            shared: Arc::new(Shared {
+                mixer: Arc::new(Mixer::new()),
+                state: Mutex::new(State::default()),
+            }),
+        }
     }
 
     /// Queue `kind` at `gain` on `device` (`None` = system default; a substring of the device
@@ -60,7 +65,7 @@ impl UiPlayer {
     }
 
     /// Like [`UiPlayer::play`] for any clip: `samples` are interleaved stereo, 48 kHz (the trim
-    /// editor's "Ouvir trecho" plays the clip it would upload).
+    /// editor's "Listen to clip" plays the clip it would upload).
     pub fn play_pcm(&self, samples: Arc<[i16]>, gain: f32, device: Option<&str>) -> bool {
         let mut st = self.shared.state.lock();
         if st.retry_at.is_some_and(|t| Instant::now() < t) {
@@ -75,7 +80,9 @@ impl UiPlayer {
             st.running = true;
             let shared = self.shared.clone();
             let device = device.map(str::to_string);
-            let spawned = std::thread::Builder::new().name("vox-ui-sound".into()).spawn(move || worker(shared, device));
+            let spawned = std::thread::Builder::new()
+                .name("vox-ui-sound".into())
+                .spawn(move || worker(shared, device));
             if let Err(e) = spawned {
                 warn!(error = %e, "cannot start the alert sound thread");
                 st.running = false;
@@ -105,14 +112,20 @@ fn worker(shared: Arc<Shared>, device: Option<String>) {
         }),
     );
     if !io.playback_ok {
-        warn!(error = io.playback_error.as_deref().unwrap_or("unknown"), "alert sounds: cannot open the output device");
+        warn!(
+            error = io.playback_error.as_deref().unwrap_or("unknown"),
+            "alert sounds: cannot open the output device"
+        );
         let mut st = shared.state.lock();
         st.running = false;
         st.retry_at = Some(Instant::now() + RETRY_AFTER);
         shared.mixer.clear_ui();
         return;
     }
-    debug!(ms = started.elapsed().as_millis() as u64, "alert sounds: output opened");
+    debug!(
+        ms = started.elapsed().as_millis() as u64,
+        "alert sounds: output opened"
+    );
     let mut idle_since: Option<Instant> = None;
     let mut busy_since = Instant::now();
     loop {

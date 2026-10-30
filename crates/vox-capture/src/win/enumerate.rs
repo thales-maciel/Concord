@@ -247,7 +247,8 @@ pub(crate) fn exe_path_of(pid: u32) -> Option<String> {
         let h = OwnedHandle(h);
         let mut buf = [0u16; 1024];
         let mut size = buf.len() as u32;
-        QueryFullProcessImageNameW(h.0, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut size).ok()?;
+        QueryFullProcessImageNameW(h.0, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut size)
+            .ok()?;
         Some(String::from_utf16_lossy(&buf[..size as usize]))
     }
 }
@@ -257,5 +258,8 @@ pub(crate) fn exe_name_of(pid: u32) -> String {
     let Some(path) = exe_path_of(pid) else {
         return String::new();
     };
-    path.rsplit(['\\', '/']).next().unwrap_or_default().to_string()
+    path.rsplit(['\\', '/'])
+        .next()
+        .unwrap_or_default()
+        .to_string()
 }

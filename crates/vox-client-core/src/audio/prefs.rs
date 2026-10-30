@@ -29,7 +29,12 @@ pub struct UserAudio {
 
 impl Default for UserAudio {
     fn default() -> Self {
-        Self { volume: 1.0, muted: false, stream_volume: 1.0, stream_muted: false }
+        Self {
+            volume: 1.0,
+            muted: false,
+            stream_volume: 1.0,
+            stream_muted: false,
+        }
     }
 }
 
@@ -41,8 +46,18 @@ impl UserAudio {
 
     /// Same values with the volumes forced into `0.0..=MAX_GAIN` (NaN becomes 100 %).
     pub fn sanitized(self) -> Self {
-        let fix = |v: f32| if v.is_nan() { 1.0 } else { v.clamp(0.0, MAX_GAIN) };
-        Self { volume: fix(self.volume), stream_volume: fix(self.stream_volume), ..self }
+        let fix = |v: f32| {
+            if v.is_nan() {
+                1.0
+            } else {
+                v.clamp(0.0, MAX_GAIN)
+            }
+        };
+        Self {
+            volume: fix(self.volume),
+            stream_volume: fix(self.stream_volume),
+            ..self
+        }
     }
 }
 
@@ -50,8 +65,8 @@ impl UserAudio {
 struct UserGains {
     mic: Arc<Gain>,
     stream: Arc<Gain>,
-    /// Their stream is silenced because another watched stream is in focus ("som só da
-    /// transmissão em foco", item 9). Not part of the saved settings.
+    /// Their stream is silenced because another watched stream is in focus ("audio only from
+    /// the focused stream", item 9). Not part of the saved settings.
     stream_unfocused: Arc<AtomicBool>,
 }
 
@@ -68,7 +83,11 @@ impl AudioPrefs {
     }
 
     fn user(&self, identity: &str) -> Arc<UserGains> {
-        self.users.lock().entry(identity.to_string()).or_default().clone()
+        self.users
+            .lock()
+            .entry(identity.to_string())
+            .or_default()
+            .clone()
     }
 
     pub fn set_user_volume(&self, identity: &str, gain: f32) {
@@ -121,17 +140,25 @@ impl AudioPrefs {
 
     /// Mixer control for `identity`'s microphone track.
     pub fn mic_ctl(&self, identity: &str) -> SourceCtl {
-        SourceCtl::new(self.user(identity).mic.clone(), Some(self.others_muted.clone()))
+        SourceCtl::new(
+            self.user(identity).mic.clone(),
+            Some(self.others_muted.clone()),
+        )
     }
 
     /// Silence `identity`'s screenshare audio while another stream is in focus, without touching
     /// its volume / mute (they come back as they were).
     pub fn set_stream_focus_muted(&self, identity: &str, muted: bool) {
-        self.user(identity).stream_unfocused.store(muted, Ordering::Relaxed);
+        self.user(identity)
+            .stream_unfocused
+            .store(muted, Ordering::Relaxed);
     }
 
     pub fn stream_focus_muted(&self, identity: &str) -> bool {
-        self.users.lock().get(identity).is_some_and(|u| u.stream_unfocused.load(Ordering::Relaxed))
+        self.users
+            .lock()
+            .get(identity)
+            .is_some_and(|u| u.stream_unfocused.load(Ordering::Relaxed))
     }
 
     /// Mixer control for `identity`'s screenshare audio track.
@@ -188,7 +215,12 @@ mod tests {
         assert_eq!(play(&m, bob, 1000), 1000);
         assert_eq!(
             p.user_audio("ana"),
-            UserAudio { volume: 0.5, muted: true, stream_volume: 2.0, stream_muted: false }
+            UserAudio {
+                volume: 0.5,
+                muted: true,
+                stream_volume: 2.0,
+                stream_muted: false
+            }
         );
     }
 
@@ -202,7 +234,14 @@ mod tests {
         let bob = m.add_source_with(p.mic_ctl("bob"));
         let cat = m.add_source_with(p.mic_ctl("cat"));
         let share = m.add_source_with(p.stream_ctl("ana"));
-        let heard = |m: &Mixer| (play(m, ana, 1000), play(m, bob, 1000), play(m, cat, 1000), play(m, share, 1000));
+        let heard = |m: &Mixer| {
+            (
+                play(m, ana, 1000),
+                play(m, bob, 1000),
+                play(m, cat, 1000),
+                play(m, share, 1000),
+            )
+        };
         assert_eq!(heard(&m), (1500, 0, 1000, 1000));
         p.set_others_muted(true);
         assert_eq!(heard(&m), (0, 0, 0, 1000), "stream audio has its own mute");
@@ -249,13 +288,30 @@ mod tests {
     #[test]
     fn snapshots_roundtrip_and_sanitize() {
         let p = AudioPrefs::new();
-        let a = UserAudio { volume: 0.25, muted: true, stream_volume: 1.75, stream_muted: true };
+        let a = UserAudio {
+            volume: 0.25,
+            muted: true,
+            stream_volume: 1.75,
+            stream_muted: true,
+        };
         p.set_user_audio("x", a);
         assert_eq!(p.user_audio("x"), a);
-        let wild = UserAudio { volume: 9.0, muted: false, stream_volume: f32::NAN, stream_muted: false }.sanitized();
+        let wild = UserAudio {
+            volume: 9.0,
+            muted: false,
+            stream_volume: f32::NAN,
+            stream_muted: false,
+        }
+        .sanitized();
         assert_eq!(wild.volume, MAX_GAIN);
         assert_eq!(wild.stream_volume, 1.0);
-        p.set_user_audio("y", UserAudio { volume: -3.0, ..Default::default() });
+        p.set_user_audio(
+            "y",
+            UserAudio {
+                volume: -3.0,
+                ..Default::default()
+            },
+        );
         assert_eq!(p.user_audio("y").volume, 0.0);
     }
 }

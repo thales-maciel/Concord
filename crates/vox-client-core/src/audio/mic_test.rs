@@ -1,4 +1,4 @@
-//! "Testar microfone": open the selected mic (in or out of a voice channel), run it through the
+//! "Test microphone": open the selected mic (in or out of a voice channel), run it through the
 //! same chain as the real thing (echo cancellation, AGC, the selected noise suppression, then the
 //! gate) and
 //! play the result back on the selected output, so you hear yourself as the others would.
@@ -9,8 +9,8 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
-use super::device::{new_voice_apm, AudioIo, MicConfig, MicSink, PlaybackConfig};
 use super::denoise::NoiseControl;
+use super::device::{new_voice_apm, AudioIo, MicConfig, MicSink, PlaybackConfig};
 use super::gate::VoiceGate;
 use super::mixer::Mixer;
 use crate::stats::StreamCounters;
@@ -48,7 +48,11 @@ impl MicTest {
         let volume = Arc::new(AtomicU32::new(cfg.volume.clamp(0.0, 2.0).to_bits()));
         let mic = MicConfig {
             device: cfg.input_device,
-            sink: if cfg.playback { MicSink::Loopback(mixer.clone()) } else { MicSink::Discard },
+            sink: if cfg.playback {
+                MicSink::Loopback(mixer.clone())
+            } else {
+                MicSink::Discard
+            },
             muted: Arc::new(AtomicBool::new(false)),
             apm: apm.clone(),
             counters: Arc::new(StreamCounters::default()),
@@ -64,19 +68,33 @@ impl MicTest {
         });
         let io = AudioIo::start(Some(mic), playback);
         if !io.mic_ok {
-            let why = io.mic_error.clone().unwrap_or_else(|| "unknown error".into());
+            let why = io
+                .mic_error
+                .clone()
+                .unwrap_or_else(|| "unknown error".into());
             drop(io);
             cfg.gate.clear_outputs();
             return Err(why);
         }
         let playing = cfg.playback && io.playback_ok;
-        let playback_error = if cfg.playback { io.playback_error.clone() } else { None };
-        Ok(MicTest { io: Some(io), gate: cfg.gate, volume, playback_error, playing })
+        let playback_error = if cfg.playback {
+            io.playback_error.clone()
+        } else {
+            None
+        };
+        Ok(MicTest {
+            io: Some(io),
+            gate: cfg.gate,
+            volume,
+            playback_error,
+            playing,
+        })
     }
 
     /// Output volume while running (1.0 = unity, up to 2.0).
     pub fn set_volume(&self, volume: f32) {
-        self.volume.store(volume.clamp(0.0, 2.0).to_bits(), Ordering::Relaxed);
+        self.volume
+            .store(volume.clamp(0.0, 2.0).to_bits(), Ordering::Relaxed);
     }
 }
 

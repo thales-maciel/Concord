@@ -1,11 +1,5 @@
-//! Windows shell integration for the chat notifications: the tray icon (restore / quit menu and
-//! the balloon that Windows 10/11 shows as a toast) and the red number on the taskbar button.
-//!
-//! Everything runs on one small thread with a hidden message-only window of its own, so the UI
-//! thread never waits for the shell and keeps working while the main window is hidden. The app
-//! talks to it through a queue (`Tray::balloon`, `Tray::set_badge`) and hears back through a
-//! channel ([`TrayEvent`]) plus the repaint waker. The decisions (who deserves a notification,
-//! what the badge says) are not here: see `notify.rs`.
+//! Windows tray icon, notifications and taskbar badge. Shell calls run on a dedicated
+//! message-window thread, communicating through queues and [`TrayEvent`]. Policy lives in `notify.rs`.
 
 #[cfg(not(windows))]
 use std::sync::mpsc::Sender;
@@ -13,9 +7,9 @@ use std::sync::mpsc::Sender;
 /// What the tray told the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayEvent {
-    /// Left click, double click or "Abrir concord": show the window and focus it.
+    /// Left click, double click or "Open concord": show the window and focus it.
     Open,
-    /// "Sair".
+    /// "Quit".
     Quit,
     /// The balloon (toast) was clicked: show the window on the conversation it was about.
     BalloonClicked,
@@ -37,17 +31,39 @@ pub fn badge_text(count: u32) -> Option<String> {
 /// 5x7 glyphs of the digits and the plus sign, one row per entry (bit 4 = leftmost column).
 fn glyph(c: char) -> [u8; 7] {
     match c {
-        '0' => [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
-        '1' => [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
-        '2' => [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],
-        '3' => [0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110],
-        '4' => [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010],
-        '5' => [0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110],
-        '6' => [0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110],
-        '7' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000],
-        '8' => [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
-        '9' => [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100],
-        '+' => [0b00000, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0b00000],
+        '0' => [
+            0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
+        ],
+        '1' => [
+            0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        '2' => [
+            0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111,
+        ],
+        '3' => [
+            0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110,
+        ],
+        '4' => [
+            0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
+        ],
+        '5' => [
+            0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110,
+        ],
+        '6' => [
+            0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110,
+        ],
+        '7' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
+        ],
+        '8' => [
+            0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
+        ],
+        '9' => [
+            0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100,
+        ],
+        '+' => [
+            0b00000, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0b00000,
+        ],
         _ => [0; 7],
     }
 }
@@ -64,7 +80,8 @@ pub fn render_badge(text: &str) -> Vec<u32> {
             let (dx, dy) = (x as f32 + 0.5 - mid, y as f32 + 0.5 - mid);
             let cover = (mid - (dx * dx + dy * dy).sqrt() + 0.5).clamp(0.0, 1.0);
             if cover > 0.0 {
-                px[y * n + x] = (((cover * 255.0) as u32) << 24) | (RED.0 << 16) | (RED.1 << 8) | RED.2;
+                px[y * n + x] =
+                    (((cover * 255.0) as u32) << 24) | (RED.0 << 16) | (RED.1 << 8) | RED.2;
             }
         }
     }
@@ -95,22 +112,33 @@ mod imp {
     use std::thread::JoinHandle;
     use std::time::Duration;
 
-    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+        COINIT_APARTMENTTHREADED,
+    };
     use windows::Win32::UI::Shell::{ITaskbarList3, TaskbarList};
     use windows::Win32::UI::WindowsAndMessaging::HICON as ComHicon;
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
-    use windows_sys::Win32::Graphics::Gdi::{CreateBitmap, CreateDIBSection, DeleteObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS};
+    use windows_sys::Win32::Graphics::Gdi::{
+        CreateBitmap, CreateDIBSection, DeleteObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+        DIB_RGB_COLORS,
+    };
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::Shell::{
-        Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO, NIIF_LARGE_ICON, NIIF_NOSOUND, NIIF_USER, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_BALLOONUSERCLICK, NIN_SELECT,
-        NOTIFYICONDATAW, NOTIFYICON_VERSION_4,
+        Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO,
+        NIIF_LARGE_ICON, NIIF_NOSOUND, NIIF_USER, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION,
+        NIN_BALLOONUSERCLICK, NIN_SELECT, NOTIFYICONDATAW, NOTIFYICON_VERSION_4,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GetClassLongPtrW, GetCursorPos, GetMessageW,
-        GetSystemMetrics, GetWindowLongPtrW, LoadIconW, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SendMessageW, SetForegroundWindow, SetMenuDefaultItem, SetWindowLongPtrW, TrackPopupMenu,
-        TranslateMessage,
-        CREATESTRUCTW, GCLP_HICONSM, GWLP_USERDATA, HICON, HWND_MESSAGE, ICONINFO, ICON_BIG, ICON_SMALL, IDI_APPLICATION, MF_SEPARATOR, SM_CXICON, SM_CXSMICON, MF_STRING, MSG, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_COMMAND,
-        WM_CONTEXTMENU, WM_DESTROY, WM_GETICON, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NCCREATE, WM_NULL, WNDCLASSW,
+        AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
+        DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GetClassLongPtrW, GetCursorPos,
+        GetMessageW, GetSystemMetrics, GetWindowLongPtrW, LoadIconW, PostMessageW, PostQuitMessage,
+        RegisterClassW, RegisterWindowMessageW, SendMessageW, SetForegroundWindow,
+        SetMenuDefaultItem, SetWindowLongPtrW, TrackPopupMenu, TranslateMessage, CREATESTRUCTW,
+        GCLP_HICONSM, GWLP_USERDATA, HICON, HWND_MESSAGE, ICONINFO, ICON_BIG, ICON_SMALL,
+        IDI_APPLICATION, MF_SEPARATOR, MF_STRING, MSG, SM_CXICON, SM_CXSMICON, TPM_RETURNCMD,
+        TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_GETICON,
+        WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NCCREATE, WM_NULL, WNDCLASSW,
     };
 
     use super::{badge_text, render_badge, TrayEvent, BADGE_PX};
@@ -176,11 +204,21 @@ mod imp {
     impl Tray {
         /// Show the icon. `main` is the app window (its taskbar button gets the badge, its icon
         /// is the tray icon); events arrive on `tx` and `wake` is called after each one.
-        pub fn start(main: isize, tooltip: &str, tx: Sender<TrayEvent>, wake: impl Fn() + Send + Sync + 'static) -> Result<Tray, String> {
+        pub fn start(
+            main: isize,
+            tooltip: &str,
+            tx: Sender<TrayEvent>,
+            wake: impl Fn() + Send + Sync + 'static,
+        ) -> Result<Tray, String> {
             // The concord logo at the tray's size (`brand.rs`), else the window's own icon, else the
             // system's default one. The balloon gets the logo at the large icon size.
             // SAFETY: plain queries on a window of this process (this is the UI thread).
-            let (small, large) = unsafe { (GetSystemMetrics(SM_CXSMICON).max(16) as u32, GetSystemMetrics(SM_CXICON).max(32) as u32) };
+            let (small, large) = unsafe {
+                (
+                    GetSystemMetrics(SM_CXSMICON).max(16) as u32,
+                    GetSystemMetrics(SM_CXICON).max(32) as u32,
+                )
+            };
             let balloon_icon = crate::brand::hicon(large).unwrap_or(0);
             let icon = unsafe {
                 let h = main as HWND;
@@ -199,29 +237,63 @@ mod imp {
                 }
                 i
             };
-            let shared = Arc::new(Shared { queue: Mutex::new(VecDeque::new()) });
+            let shared = Arc::new(Shared {
+                queue: Mutex::new(VecDeque::new()),
+            });
             let (ready_tx, ready_rx) = channel::<Result<isize, String>>();
-            let (s2, tip, wake) = (shared.clone(), wide(tooltip), Arc::new(wake) as Arc<dyn Fn() + Send + Sync>);
+            let (s2, tip, wake) = (
+                shared.clone(),
+                wide(tooltip),
+                Arc::new(wake) as Arc<dyn Fn() + Send + Sync>,
+            );
             let thread = std::thread::Builder::new()
                 .name("tray".into())
-                .spawn(move || run(State { main, hwnd: std::ptr::null_mut(), icon, balloon_icon, tip, tx, wake, shared: s2, taskbar: None, overlay: None, taskbar_created: 0 }, ready_tx))
+                .spawn(move || {
+                    run(
+                        State {
+                            main,
+                            hwnd: std::ptr::null_mut(),
+                            icon,
+                            balloon_icon,
+                            tip,
+                            tx,
+                            wake,
+                            shared: s2,
+                            taskbar: None,
+                            overlay: None,
+                            taskbar_created: 0,
+                        },
+                        ready_tx,
+                    )
+                })
                 .map_err(|e| e.to_string())?;
             match ready_rx.recv_timeout(Duration::from_secs(3)) {
-                Ok(Ok(hwnd)) => Ok(Tray { hwnd, shared, thread: Some(thread) }),
+                Ok(Ok(hwnd)) => Ok(Tray {
+                    hwnd,
+                    shared,
+                    thread: Some(thread),
+                }),
                 Ok(Err(e)) => Err(e),
                 Err(_) => Err("the tray thread did not start".into()),
             }
         }
 
         fn push(&self, cmd: Cmd) {
-            self.shared.queue.lock().unwrap_or_else(|e| e.into_inner()).push_back(cmd);
+            self.shared
+                .queue
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push_back(cmd);
             // SAFETY: the message-only window lives until `drop` joins the thread.
             unsafe { PostMessageW(self.hwnd as HWND, WM_QUEUE, 0, 0) };
         }
 
         /// A Windows notification (the tray balloon, shown as a toast on Windows 10/11).
         pub fn balloon(&self, title: &str, body: &str) {
-            self.push(Cmd::Balloon { title: title.to_string(), body: body.to_string() });
+            self.push(Cmd::Balloon {
+                title: title.to_string(),
+                body: body.to_string(),
+            });
         }
 
         /// The number on the taskbar button; 0 removes it.
@@ -236,9 +308,16 @@ mod imp {
             // SAFETY: as in `push`.
             unsafe {
                 match ev {
-                    TrayEvent::Open => PostMessageW(h, WM_TRAYICON, ICON_ID as usize, NIN_SELECT as isize),
+                    TrayEvent::Open => {
+                        PostMessageW(h, WM_TRAYICON, ICON_ID as usize, NIN_SELECT as isize)
+                    }
                     TrayEvent::Quit => PostMessageW(h, WM_COMMAND, CMD_QUIT, 0),
-                    TrayEvent::BalloonClicked => PostMessageW(h, WM_TRAYICON, ICON_ID as usize, NIN_BALLOONUSERCLICK as isize),
+                    TrayEvent::BalloonClicked => PostMessageW(
+                        h,
+                        WM_TRAYICON,
+                        ICON_ID as usize,
+                        NIN_BALLOONUSERCLICK as isize,
+                    ),
                 };
             }
         }
@@ -293,7 +372,11 @@ mod imp {
                 return;
             }
             let ok = add_icon(&*state);
-            let _ = ready.send(if ok { Ok(hwnd as isize) } else { Err("Shell_NotifyIcon refused the icon".into()) });
+            let _ = ready.send(if ok {
+                Ok(hwnd as isize)
+            } else {
+                Err("Shell_NotifyIcon refused the icon".into())
+            });
             if !ok {
                 DestroyWindow(hwnd);
             }
@@ -353,7 +436,10 @@ mod imp {
     /// The red number on the taskbar button (`ITaskbarList3::SetOverlayIcon`).
     unsafe fn badge(st: &mut State, count: u32) {
         if st.taskbar.is_none() {
-            st.taskbar = CoCreateInstance::<_, ITaskbarList3>(&TaskbarList, None, CLSCTX_INPROC_SERVER).ok().filter(|t| t.HrInit().is_ok());
+            st.taskbar =
+                CoCreateInstance::<_, ITaskbarList3>(&TaskbarList, None, CLSCTX_INPROC_SERVER)
+                    .ok()
+                    .filter(|t| t.HrInit().is_ok());
         }
         let Some(tb) = st.taskbar.clone() else {
             tracing::warn!("no taskbar list: the unread badge is not shown");
@@ -363,10 +449,18 @@ mod imp {
         let new = badge_text(count).map(|t| (make_icon(&render_badge(&t)), t));
         let result = match &new {
             Some((icon, _)) => {
-                let desc = wide(&if count == 1 { "1 mensagem não lida".to_string() } else { format!("{count} mensagens não lidas") });
+                let desc = wide(&if count == 1 {
+                    "1 unread message".to_string()
+                } else {
+                    format!("{count} unread messages")
+                });
                 tb.SetOverlayIcon(main, ComHicon(*icon), windows::core::PCWSTR(desc.as_ptr()))
             }
-            None => tb.SetOverlayIcon(main, ComHicon(std::ptr::null_mut()), windows::core::PCWSTR::null()),
+            None => tb.SetOverlayIcon(
+                main,
+                ComHicon(std::ptr::null_mut()),
+                windows::core::PCWSTR::null(),
+            ),
         };
         match result {
             Ok(()) => tracing::info!(count, "taskbar badge set"),
@@ -383,14 +477,35 @@ mod imp {
     unsafe fn make_icon(px: &[u32]) -> HICON {
         let n = BADGE_PX as i32;
         let mut bi: BITMAPINFO = std::mem::zeroed();
-        bi.bmiHeader = BITMAPINFOHEADER { biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32, biWidth: n, biHeight: -n, biPlanes: 1, biBitCount: 32, biCompression: BI_RGB, ..std::mem::zeroed() };
+        bi.bmiHeader = BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: n,
+            biHeight: -n,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB,
+            ..std::mem::zeroed()
+        };
         let mut bits: *mut c_void = std::ptr::null_mut();
-        let color = CreateDIBSection(std::ptr::null_mut(), &bi, DIB_RGB_COLORS, &mut bits, std::ptr::null_mut(), 0);
+        let color = CreateDIBSection(
+            std::ptr::null_mut(),
+            &bi,
+            DIB_RGB_COLORS,
+            &mut bits,
+            std::ptr::null_mut(),
+            0,
+        );
         if !bits.is_null() {
             std::ptr::copy_nonoverlapping(px.as_ptr(), bits as *mut u32, px.len());
         }
         let mask = CreateBitmap(n, n, 1, 1, std::ptr::null());
-        let info = ICONINFO { fIcon: 1, xHotspot: 0, yHotspot: 0, hbmMask: mask, hbmColor: color };
+        let info = ICONINFO {
+            fIcon: 1,
+            xHotspot: 0,
+            yHotspot: 0,
+            hbmMask: mask,
+            hbmColor: color,
+        };
         let icon = CreateIconIndirect(&info);
         DeleteObject(mask);
         DeleteObject(color);
@@ -399,11 +514,11 @@ mod imp {
 
     unsafe fn menu(st: &State) -> Option<usize> {
         let m = CreatePopupMenu();
-        // v1.0: sentence case, "Abrir" in bold (what a double click does), "Sair" set apart.
-        AppendMenuW(m, MF_STRING, CMD_OPEN, wide("Abrir concord").as_ptr());
+        // v1.0: sentence case, "Open" in bold (what a double click does), "Quit" set apart.
+        AppendMenuW(m, MF_STRING, CMD_OPEN, wide("Open concord").as_ptr());
         SetMenuDefaultItem(m, CMD_OPEN as u32, 0);
         AppendMenuW(m, MF_SEPARATOR, 0, std::ptr::null());
-        AppendMenuW(m, MF_STRING, CMD_QUIT, wide("Sair do concord").as_ptr());
+        AppendMenuW(m, MF_STRING, CMD_QUIT, wide("Quit concord").as_ptr());
         let mut p = POINT { x: 0, y: 0 };
         GetCursorPos(&mut p);
         // The menu closes when you click elsewhere only if its owner is the foreground window
@@ -411,7 +526,15 @@ mod imp {
         if !vox_client_core::testmode::background() {
             SetForegroundWindow(st.hwnd);
         }
-        let cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, p.x, p.y, 0, st.hwnd, std::ptr::null());
+        let cmd = TrackPopupMenu(
+            m,
+            TPM_RETURNCMD | TPM_RIGHTBUTTON,
+            p.x,
+            p.y,
+            0,
+            st.hwnd,
+            std::ptr::null(),
+        );
         PostMessageW(st.hwnd, WM_NULL, 0, 0);
         DestroyMenu(m);
         (cmd > 0).then_some(cmd as usize)
@@ -438,7 +561,9 @@ mod imp {
         let st = &mut *st;
         match msg {
             WM_TRAYICON => match (lp & 0xFFFF) as u32 {
-                NIN_SELECT | NIN_KEYSELECT | WM_LBUTTONUP | WM_LBUTTONDBLCLK => tell(st, TrayEvent::Open),
+                NIN_SELECT | NIN_KEYSELECT | WM_LBUTTONUP | WM_LBUTTONDBLCLK => {
+                    tell(st, TrayEvent::Open)
+                }
                 NIN_BALLOONUSERCLICK => tell(st, TrayEvent::BalloonClicked),
                 WM_CONTEXTMENU => match menu(st) {
                     Some(CMD_OPEN) => tell(st, TrayEvent::Open),
@@ -453,7 +578,12 @@ mod imp {
                 _ => {}
             },
             WM_QUEUE => loop {
-                let cmd = st.shared.queue.lock().unwrap_or_else(|e| e.into_inner()).pop_front();
+                let cmd = st
+                    .shared
+                    .queue
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .pop_front();
                 match cmd {
                     Some(Cmd::Balloon { title, body }) => balloon(st, &title, &body),
                     Some(Cmd::Badge(n)) => badge(st, n),
@@ -492,7 +622,12 @@ pub struct Tray;
 
 #[cfg(not(windows))]
 impl Tray {
-    pub fn start(_main: isize, _tooltip: &str, _tx: Sender<TrayEvent>, _wake: impl Fn() + Send + Sync + 'static) -> Result<Tray, String> {
+    pub fn start(
+        _main: isize,
+        _tooltip: &str,
+        _tx: Sender<TrayEvent>,
+        _wake: impl Fn() + Send + Sync + 'static,
+    ) -> Result<Tray, String> {
         Err("no tray on this system".into())
     }
     pub fn balloon(&self, _title: &str, _body: &str) {}
@@ -524,13 +659,25 @@ mod tests {
             assert_eq!(px.len(), BADGE_PX * BADGE_PX);
             assert_eq!(at(&px, 0, 0) >> 24, 0, "{text}: the corner is transparent");
             assert_eq!(at(&px, 31, 31) >> 24, 0);
-            assert_eq!(at(&px, 3, 16), 0xFF_ED4245, "{text}: the disc is the app's red");
+            assert_eq!(
+                at(&px, 3, 16),
+                0xFF_ED4245,
+                "{text}: the disc is the app's red"
+            );
             let white = px.iter().filter(|p| **p == 0xFFFF_FFFF).count();
-            assert!(white > 20, "{text}: the digits are drawn ({white} white pixels)");
+            assert!(
+                white > 20,
+                "{text}: the digits are drawn ({white} white pixels)"
+            );
         }
         // Different numbers look different, and "9+" has more ink than "9".
         assert_ne!(render_badge("1"), render_badge("2"));
-        let ink = |t: &str| render_badge(t).iter().filter(|p| **p == 0xFFFF_FFFF).count();
+        let ink = |t: &str| {
+            render_badge(t)
+                .iter()
+                .filter(|p| **p == 0xFFFF_FFFF)
+                .count()
+        };
         assert!(ink("9+") > ink("9"));
     }
 
@@ -540,7 +687,10 @@ mod tests {
         let px = render_badge("9+");
         let red_or_white = |p: u32| p >> 24 == 0xFF;
         for (x, y) in [(5, 9), (26, 9), (5, 22), (26, 22)] {
-            assert!(red_or_white(at(&px, x, y)), "({x},{y}) lies outside the disc");
+            assert!(
+                red_or_white(at(&px, x, y)),
+                "({x},{y}) lies outside the disc"
+            );
         }
     }
 }

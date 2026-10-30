@@ -24,14 +24,14 @@ round.
   answering address's `/api/health`: with a known identity, only a matching one gets them; with
   none yet, only the exact address they were saved under (an older hub there works as before).
   Otherwise an invite login goes on with the invite's own token alone, and a saved-entry login
-  sends nothing and says "Este endereço não é o mesmo servidor que você salvou", letting the
+  sends nothing and says "This address is not the server you saved", letting the
   user type the credentials again. Identities are pinned only by a confirmed login (matching
   identity, the address the user typed or picked, or an accepted invite). Re-logins check the
   identity first. Removing an entry no longer deletes another entry's token.
 - **Invites create accounts only.** An invite on an existing name admits nobody by itself; the
   account's own personal password, remembered device or reset code is needed, and even then the
-  invite is not used and the account is not marked as an invite member. Otherwise: "Esse nome já
-  existe neste servidor. Escolha outro nome ou peça a senha do servidor."
+  invite is not used and the account is not marked as an invite member. Otherwise: "This name already
+  exists on this server. Choose another name or ask for the server password."
 - **Voice join tokens.** 60 s instead of 10 min (LiveKit adds 60 s of clock leeway). The app
   fetches a new token right before each join, retry and DM call answer; the SDK's own reconnects
   use the token LiveKit refreshes for the session. After any removal the hub checks the rooms

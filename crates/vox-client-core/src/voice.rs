@@ -33,10 +33,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use futures_util::StreamExt;
 use livekit::options::{AudioEncoding, TrackPublishOptions};
 use livekit::prelude::*;
-use livekit::webrtc::stats::{IceCandidatePairState, RtcStats};
 use livekit::webrtc::audio_source::native::NativeAudioSource;
 use livekit::webrtc::audio_source::{AudioSourceOptions, RtcAudioSource};
 use livekit::webrtc::audio_stream::native::NativeAudioStream;
+use livekit::webrtc::stats::{IceCandidatePairState, RtcStats};
 use livekit::webrtc::video_stream::native::NativeVideoStream;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
@@ -45,14 +45,23 @@ use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::audio::device::{new_voice_apm, AudioIo, MicConfig, MicSink, PlaybackConfig};
-use crate::audio::{AlertKind, AudioPrefs, Mixer, NoiseControl, SourceId, UserAudio, VoiceGate, MIX_CHANNELS, MIX_RATE};
 use crate::audio::sine::SineGenerator;
-use crate::golive::publish::{paced, ProducerThread};
-use crate::golive::camera::{camera_failure_pt, ActiveCamera, CameraOptions, CameraPublication, PreviewFactory};
+use crate::audio::{
+    AlertKind, AudioPrefs, Mixer, NoiseControl, SourceId, UserAudio, VoiceGate, MIX_CHANNELS,
+    MIX_RATE,
+};
+use crate::golive::camera::{
+    camera_failure_pt, ActiveCamera, CameraOptions, CameraPublication, PreviewFactory,
+};
 use crate::golive::encoders;
-use crate::golive::{AUDIO_ONLY_TRACK_NAME, ActiveShare, ShareOptions, SharePreview, SharePublication, ShareSource, SwitchReport, SwitchRequest, TileStyle, VideoPath, Viewer, ViewerNotice, ViewerStream, SELF_SHARE_KEY};
-use livekit::webrtc::audio_frame::AudioFrame;
+use crate::golive::publish::{paced, ProducerThread};
+use crate::golive::{
+    ActiveShare, ShareOptions, SharePreview, SharePublication, ShareSource, SwitchReport,
+    SwitchRequest, TileStyle, VideoPath, Viewer, ViewerNotice, ViewerStream, AUDIO_ONLY_TRACK_NAME,
+    SELF_SHARE_KEY,
+};
 use crate::stats::{Direction, EncodedFeedback, StreamCounters, StreamEntry};
+use livekit::webrtc::audio_frame::AudioFrame;
 
 #[derive(Debug, Clone, Default)]
 pub struct VoiceConfig {
@@ -78,47 +87,86 @@ pub struct VoiceConfig {
     /// Voice-activity gate settings and level meter, owned by the caller so the UI can change
     /// and read it at any time. `None` = a default gate (automatic) nobody reads.
     pub gate: Option<Arc<VoiceGate>>,
-    /// Noise suppression level ("Supressão de ruído"), owned by the caller so the UI can change
-    /// it mid-call. `None` = the default level ("IA leve").
+    /// Noise suppression level ("Noise suppression"), owned by the caller so the UI can change
+    /// it mid-call. `None` = the default level ("Light AI").
     pub noise: Option<Arc<NoiseControl>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VoiceEvent {
-    Connected { room: String, identity: String, participants: Vec<String> },
-    ParticipantJoined { identity: String, name: String },
-    ParticipantLeft { identity: String },
+    Connected {
+        room: String,
+        identity: String,
+        participants: Vec<String>,
+    },
+    ParticipantJoined {
+        identity: String,
+        name: String,
+    },
+    ParticipantLeft {
+        identity: String,
+    },
     /// Identities currently speaking (may include ourselves).
-    ActiveSpeakers { identities: Vec<String> },
-    ShareStarted { identity: String },
-    ShareStopped { identity: String },
-    /// Whether `identity`'s live is audio-only ("Só áudio": no video publication, just the
+    ActiveSpeakers {
+        identities: Vec<String>,
+    },
+    ShareStarted {
+        identity: String,
+    },
+    ShareStopped {
+        identity: String,
+    },
+    /// Whether `identity`'s live is audio-only ("Audio only": no video publication, just the
     /// `audio-only` track), sent whenever that changes. It is read from the LiveKit publications,
     /// so it is only known for people in our own room.
-    ShareKind { identity: String, audio_only: bool },
+    ShareKind {
+        identity: String,
+        audio_only: bool,
+    },
     /// Our own Go Live ended without being asked to (capture target closed, device lost).
-    LocalShareEnded { reason: String },
-    WatchStarted { identity: String },
-    WatchEnded { identity: String, reason: String },
+    LocalShareEnded {
+        reason: String,
+    },
+    WatchStarted {
+        identity: String,
+    },
+    WatchEnded {
+        identity: String,
+        reason: String,
+    },
     /// A participant's camera came on (subscribed while the tiles are visible: frames go to the
     /// viewer tile [`camera_key`]).
-    CameraStarted { identity: String },
-    CameraStopped { identity: String },
+    CameraStarted {
+        identity: String,
+    },
+    CameraStopped {
+        identity: String,
+    },
     /// Our own camera stopped without being asked to (unplugged, taken by another app). The
-    /// reason is Portuguese, ready to show.
-    LocalCameraEnded { reason: String },
+    /// reason is English, ready to show.
+    LocalCameraEnded {
+        reason: String,
+    },
     Reconnecting,
     Reconnected,
-    Disconnected { reason: String },
+    Disconnected {
+        reason: String,
+    },
     /// The voice server stopped (or resumed) accepting our microphone: a moderator server-muted
     /// us (item 12). While muted the mic is not published at all; it comes back by itself.
-    ServerMuted { muted: bool },
+    ServerMuted {
+        muted: bool,
+    },
     /// Our Go Live (`camera == false`) or camera restarted on another encoder because its video
     /// was unstable: keyframe requests without pause on a clean uplink that a viewer confirmed
     /// (it decoded badly while its own network lost nothing), or WebRTC dropping our frames (v0.7).
-    /// `label` is Portuguese ("NVIDIA GeForce GTX 1650 (NVENC)", "Processador (sem aceleração)"),
+    /// `label` is English ("NVIDIA GeForce GTX 1650 (NVENC)", "CPU (no acceleration)"),
     /// `backend` is "nvenc" / "mf" / "software".
-    EncoderSwitched { camera: bool, label: String, backend: String },
+    EncoderSwitched {
+        camera: bool,
+        label: String,
+        backend: String,
+    },
 }
 
 /// Budget for `Room::connect` (signal WebSocket + ICE/DTLS). The SDK's own limits add up to 20 s
@@ -184,7 +232,12 @@ pub struct JoinError {
 
 impl std::fmt::Display for JoinError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "voice join failed at the {} after {} ms", self.step, self.elapsed.as_millis())
+        write!(
+            f,
+            "voice join failed at the {} after {} ms",
+            self.step,
+            self.elapsed.as_millis()
+        )
     }
 }
 
@@ -207,7 +260,12 @@ pub struct JoinReport {
 /// Log a failed join with its full error chain and, when the media link is the suspect, whether
 /// the usual ICE-TCP port (signal port + 1 in the default config) accepts a TCP connection from
 /// here. Returns the error to hand to the caller.
-async fn join_failed(step: JoinStep, started: Instant, source: anyhow::Error, url: &str) -> anyhow::Error {
+async fn join_failed(
+    step: JoinStep,
+    started: Instant,
+    source: anyhow::Error,
+    url: &str,
+) -> anyhow::Error {
     let elapsed = started.elapsed();
     let tcp_probe = if step == JoinStep::Media {
         match probe_tcp(url, 1, SIGNAL_PROBE_TIMEOUT).await {
@@ -224,19 +282,33 @@ async fn join_failed(step: JoinStep, started: Instant, source: anyhow::Error, ur
         error = %format!("{source:#}"),
         "voice join: FAILED"
     );
-    anyhow::Error::new(JoinError { step, elapsed, source })
+    anyhow::Error::new(JoinError {
+        step,
+        elapsed,
+        source,
+    })
 }
 
 /// TCP connect to the host of `url` at its port plus `port_offset`; returns the time it took.
 async fn probe_tcp(url: &str, port_offset: u16, limit: Duration) -> Result<u64> {
     let u = Url::parse(url).with_context(|| format!("invalid LiveKit url {url:?}"))?;
-    let host = u.host_str().ok_or_else(|| anyhow!("LiveKit url {url:?} has no host"))?.trim_matches(|c| c == '[' || c == ']').to_string();
-    let port = u.port_or_known_default().ok_or_else(|| anyhow!("LiveKit url {url:?} has no port"))?.saturating_add(port_offset);
+    let host = u
+        .host_str()
+        .ok_or_else(|| anyhow!("LiveKit url {url:?} has no host"))?
+        .trim_matches(|c| c == '[' || c == ']')
+        .to_string();
+    let port = u
+        .port_or_known_default()
+        .ok_or_else(|| anyhow!("LiveKit url {url:?} has no port"))?
+        .saturating_add(port_offset);
     let started = Instant::now();
     match tokio::time::timeout(limit, tokio::net::TcpStream::connect((host.as_str(), port))).await {
         Ok(Ok(_)) => Ok(started.elapsed().as_millis() as u64),
         Ok(Err(e)) => Err(anyhow!("tcp connect to {host}:{port} failed: {e}")),
-        Err(_) => Err(anyhow!("tcp connect to {host}:{port} timed out after {} s", limit.as_secs())),
+        Err(_) => Err(anyhow!(
+            "tcp connect to {host}:{port} timed out after {} s",
+            limit.as_secs()
+        )),
     }
 }
 
@@ -254,15 +326,27 @@ async fn log_selected_pair(room: &Room, when: &str) {
             return;
         }
     };
-    let all: Vec<&RtcStats> = stats.publisher_stats.iter().chain(stats.subscriber_stats.iter()).collect();
+    let all: Vec<&RtcStats> = stats
+        .publisher_stats
+        .iter()
+        .chain(stats.subscriber_stats.iter())
+        .collect();
     let selected_id = all.iter().find_map(|s| match s {
-        RtcStats::Transport(t) if !t.transport.selected_candidate_pair_id.is_empty() => Some(t.transport.selected_candidate_pair_id.clone()),
+        RtcStats::Transport(t) if !t.transport.selected_candidate_pair_id.is_empty() => {
+            Some(t.transport.selected_candidate_pair_id.clone())
+        }
         _ => None,
     });
     let pair = all.iter().find_map(|s| match s {
         RtcStats::CandidatePair(p) if Some(&p.rtc.id) == selected_id.as_ref() => Some(p),
         // No transport entry: fall back to the nominated, succeeded pair.
-        RtcStats::CandidatePair(p) if selected_id.is_none() && p.candidate_pair.nominated && p.candidate_pair.state == Some(IceCandidatePairState::Succeeded) => Some(p),
+        RtcStats::CandidatePair(p)
+            if selected_id.is_none()
+                && p.candidate_pair.nominated
+                && p.candidate_pair.state == Some(IceCandidatePairState::Succeeded) =>
+        {
+            Some(p)
+        }
         _ => None,
     });
     let Some(pair) = pair else {
@@ -273,12 +357,20 @@ async fn log_selected_pair(room: &Room, when: &str) {
         all.iter()
             .find_map(|s| match s {
                 RtcStats::LocalCandidate(c) if local && c.rtc.id == id => Some(&c.local_candidate),
-                RtcStats::RemoteCandidate(c) if !local && c.rtc.id == id => Some(&c.remote_candidate),
+                RtcStats::RemoteCandidate(c) if !local && c.rtc.id == id => {
+                    Some(&c.remote_candidate)
+                }
                 _ => None,
             })
             .map(|c| {
-                let kind = c.candidate_type.map(|t| format!("{t:?}").to_lowercase()).unwrap_or_else(|| "?".into());
-                let tcp = c.tcp_type.map(|t| format!("/{}", format!("{t:?}").to_lowercase())).unwrap_or_default();
+                let kind = c
+                    .candidate_type
+                    .map(|t| format!("{t:?}").to_lowercase())
+                    .unwrap_or_else(|| "?".into());
+                let tcp = c
+                    .tcp_type
+                    .map(|t| format!("/{}", format!("{t:?}").to_lowercase()))
+                    .unwrap_or_default();
                 format!("{}/{kind}{tcp} {}:{}", c.protocol, c.address, c.port)
             })
             .unwrap_or_else(|| "?".into())
@@ -458,7 +550,7 @@ struct Inner {
     share_preview_counters: Arc<StreamCounters>,
     /// Camera tiles are on screen (call view shown, app not minimized).
     cams_visible: AtomicBool,
-    /// People whose camera I chose to hide ("Ocultar câmera para mim"): paused at the SFU like
+    /// People whose camera I chose to hide ("Hide camera for me"): paused at the SFU like
     /// a hidden tile, whatever the call view shows.
     cams_hidden: Mutex<std::collections::HashSet<String>>,
     /// Subscribed remote cameras, by identity.
@@ -484,7 +576,10 @@ fn pick_mic(current: Option<&str>, sids: &[String]) -> Option<usize> {
     if let Some(i) = current.and_then(|c| sids.iter().position(|s| s == c)) {
         return Some(i);
     }
-    sids.iter().enumerate().min_by(|a, b| a.1.cmp(b.1)).map(|(i, _)| i)
+    sids.iter()
+        .enumerate()
+        .min_by(|a, b| a.1.cmp(b.1))
+        .map(|(i, _)| i)
 }
 
 fn ident(p: &RemoteParticipant) -> String {
@@ -499,9 +594,18 @@ impl VoiceSession {
     /// Failures of the signal/media connection come back as a [`JoinError`]; a missing
     /// microphone or speaker does not fail the join, it is reported in [`VoiceSession::join_report`].
     /// Every step is logged with its timing, and a failure logs the full error chain.
-    pub async fn connect(url: &str, token: &str, cfg: VoiceConfig) -> Result<(VoiceSession, mpsc::UnboundedReceiver<VoiceEvent>)> {
+    pub async fn connect(
+        url: &str,
+        token: &str,
+        cfg: VoiceConfig,
+    ) -> Result<(VoiceSession, mpsc::UnboundedReceiver<VoiceEvent>)> {
         let t0 = Instant::now();
-        info!(url, mic = cfg.mic, playback = cfg.playback, "voice join: start");
+        info!(
+            url,
+            mic = cfg.mic,
+            playback = cfg.playback,
+            "voice join: start"
+        );
 
         // ---- step 1: can we even reach the signal port?
         let signal_ms = match probe_tcp(url, 0, SIGNAL_PROBE_TIMEOUT).await {
@@ -509,7 +613,15 @@ impl VoiceSession {
                 info!(signal_ms = ms, "voice join: signal port reachable (tcp)");
                 ms
             }
-            Err(e) => return Err(join_failed(JoinStep::Signal, t0, e.context("LiveKit signal port unreachable"), url).await),
+            Err(e) => {
+                return Err(join_failed(
+                    JoinStep::Signal,
+                    t0,
+                    e.context("LiveKit signal port unreachable"),
+                    url,
+                )
+                .await)
+            }
         };
 
         // ---- step 2: signal WebSocket + ICE/DTLS, in a task so a native stall cannot block us
@@ -521,15 +633,29 @@ impl VoiceSession {
         // gets a retry button instead.
         options.join_retries = 0;
         let (u, t) = (url.to_string(), token.to_string());
-        let mut task = AbortOnDrop(tokio::spawn(async move { Room::connect(&u, &t, options).await }));
+        let mut task = AbortOnDrop(tokio::spawn(
+            async move { Room::connect(&u, &t, options).await },
+        ));
         let connected = match tokio::time::timeout(CONNECT_TIMEOUT, &mut task.0).await {
             Ok(Ok(Ok(c))) => c,
             Ok(Ok(Err(e))) => {
-                let step = if e.to_string().contains("signal failure") { JoinStep::Signal } else { JoinStep::Media };
+                let step = if e.to_string().contains("signal failure") {
+                    JoinStep::Signal
+                } else {
+                    JoinStep::Media
+                };
                 let e = anyhow::Error::new(e).context(format!("connect to LiveKit at {url}"));
                 return Err(join_failed(step, t0, e, url).await);
             }
-            Ok(Err(e)) => return Err(join_failed(JoinStep::Media, t0, anyhow!("connect task failed: {e}"), url).await),
+            Ok(Err(e)) => {
+                return Err(join_failed(
+                    JoinStep::Media,
+                    t0,
+                    anyhow!("connect task failed: {e}"),
+                    url,
+                )
+                .await)
+            }
             Err(_) => {
                 drop(task);
                 let e = anyhow!("no answer within {} s", CONNECT_TIMEOUT.as_secs());
@@ -557,7 +683,9 @@ impl VoiceSession {
             deafened: Arc::new(AtomicBool::new(false)),
             muted_before_deafen: AtomicBool::new(false),
             mic_unavailable: AtomicBool::new(false),
-            volume: Arc::new(AtomicU32::new(cfg.output_volume.unwrap_or(1.0).clamp(0.0, 2.0).to_bits())),
+            volume: Arc::new(AtomicU32::new(
+                cfg.output_volume.unwrap_or(1.0).clamp(0.0, 2.0).to_bits(),
+            )),
             mixer: mixer.clone(),
             headless: !cfg.playback,
             gate: cfg.gate.clone().unwrap_or_default(),
@@ -591,7 +719,9 @@ impl VoiceSession {
         // leaving a ghost participant behind.
         let mut guard = CloseOnDrop(Some(inner.clone()));
         log_selected_pair(&inner.room, "connected").await;
-        let backends: Vec<_> = livekit::options::VideoEncoderBackend::list_available().into_iter().collect();
+        let backends: Vec<_> = livekit::options::VideoEncoderBackend::list_available()
+            .into_iter()
+            .collect();
         info!(?backends, "available video encoder backends");
         let mut report = JoinReport::default();
 
@@ -601,7 +731,9 @@ impl VoiceSession {
         // The SDK's AudioSourceOptions are not applied to NativeAudioSource frames (they
         // bypass WebRTC's ADM/APM path), so AEC/NS/AGC run in our own WebRTC APM instance
         // (see audio::device) with the playback mix as far-end reference.
-        let mic_source = cfg.mic.then(|| NativeAudioSource::new(AudioSourceOptions::default(), MIX_RATE, 1, 0));
+        let mic_source = cfg
+            .mic
+            .then(|| NativeAudioSource::new(AudioSourceOptions::default(), MIX_RATE, 1, 0));
         let counters = Arc::new(StreamCounters::default());
         let mic_cfg = match (&mic_source, cfg.mic_test_tone) {
             (Some(src), None) => Some(MicConfig {
@@ -645,10 +777,18 @@ impl VoiceSession {
         }
         if let Some(io) = &io {
             if want_mic_dev && !io.mic_ok {
-                report.mic_error = Some(io.mic_error.clone().unwrap_or_else(|| "unknown error".into()));
+                report.mic_error = Some(
+                    io.mic_error
+                        .clone()
+                        .unwrap_or_else(|| "unknown error".into()),
+                );
             }
             if want_out_dev && !io.playback_ok {
-                report.playback_error = Some(io.playback_error.clone().unwrap_or_else(|| "unknown error".into()));
+                report.playback_error = Some(
+                    io.playback_error
+                        .clone()
+                        .unwrap_or_else(|| "unknown error".into()),
+                );
             }
         }
         let audio_ms = audio_t.elapsed().as_millis() as u64;
@@ -663,37 +803,65 @@ impl VoiceSession {
         let mic_t = Instant::now();
         // Server-muted (item 12): the token does not allow a microphone. Keep it ready instead of
         // waiting for a publish the server refuses; it is published when the permission returns.
-        let mic_held = mic_source.is_some() && report.mic_error.is_none() && !mic_allowed(&inner.room.local_participant());
+        let mic_held = mic_source.is_some()
+            && report.mic_error.is_none()
+            && !mic_allowed(&inner.room.local_participant());
         if let (true, Some(src)) = (mic_held, &mic_source) {
-            let track = LocalAudioTrack::create_audio_track("microphone", RtcAudioSource::Native(src.clone()));
+            let track = LocalAudioTrack::create_audio_track(
+                "microphone",
+                RtcAudioSource::Native(src.clone()),
+            );
             if let Some(hz) = cfg.mic_test_tone {
-                *inner.mic_tone.lock() = Some(spawn_mic_tone(hz, src.clone(), inner.muted.clone(), counters.clone()));
+                *inner.mic_tone.lock() = Some(spawn_mic_tone(
+                    hz,
+                    src.clone(),
+                    inner.muted.clone(),
+                    counters.clone(),
+                ));
             }
             inner.server_mute.hold(track, counters.clone());
             let _ = inner.events.send(VoiceEvent::ServerMuted { muted: true });
             info!("voice join: server-muted, microphone held back");
         }
         if let (Some(src), None, false) = (&mic_source, &report.mic_error, mic_held) {
-            let track = LocalAudioTrack::create_audio_track("microphone", RtcAudioSource::Native(src.clone()));
+            let track = LocalAudioTrack::create_audio_track(
+                "microphone",
+                RtcAudioSource::Native(src.clone()),
+            );
             let publish = mic_publish_options();
             let local = inner.room.local_participant();
             let publishing = local.publish_track(LocalTrack::Audio(track.clone()), publish);
             let published = match tokio::time::timeout(PUBLISH_TIMEOUT, publishing).await {
                 Ok(Ok(p)) => Ok(p),
                 Ok(Err(e)) => Err(format!("publish microphone: {:#}", anyhow::Error::new(e))),
-                Err(_) => Err(format!("publish microphone: no answer within {} s", PUBLISH_TIMEOUT.as_secs())),
+                Err(_) => Err(format!(
+                    "publish microphone: no answer within {} s",
+                    PUBLISH_TIMEOUT.as_secs()
+                )),
             };
             match published {
                 Ok(publication) => {
                     if let Some(hz) = cfg.mic_test_tone {
-                        *inner.mic_tone.lock() = Some(spawn_mic_tone(hz, src.clone(), inner.muted.clone(), counters.clone()));
+                        *inner.mic_tone.lock() = Some(spawn_mic_tone(
+                            hz,
+                            src.clone(),
+                            inner.muted.clone(),
+                            counters.clone(),
+                        ));
                         info!(hz, "microphone replaced by test tone");
                     }
                     if cfg.start_muted {
                         publication.mute();
                     }
-                    *inner.mic.lock() = Some(MicPublished { publication, track, counters: counters.clone() });
-                    info!(mic_ms = mic_t.elapsed().as_millis() as u64, "voice join: microphone published");
+                    *inner.mic.lock() = Some(MicPublished {
+                        publication,
+                        track,
+                        counters: counters.clone(),
+                    });
+                    info!(
+                        mic_ms = mic_t.elapsed().as_millis() as u64,
+                        "voice join: microphone published"
+                    );
                 }
                 Err(why) => {
                     warn!(error = %why, "voice join: microphone not published; listening only");
@@ -708,12 +876,22 @@ impl VoiceSession {
                         .await;
                         match restarted {
                             Ok(new_io) => {
-                                if want_out_dev && !new_io.playback_ok && report.playback_error.is_none() {
-                                    report.playback_error = Some(new_io.playback_error.clone().unwrap_or_else(|| "unknown error".into()));
+                                if want_out_dev
+                                    && !new_io.playback_ok
+                                    && report.playback_error.is_none()
+                                {
+                                    report.playback_error = Some(
+                                        new_io
+                                            .playback_error
+                                            .clone()
+                                            .unwrap_or_else(|| "unknown error".into()),
+                                    );
                                 }
                                 io = Some(new_io);
                             }
-                            Err(e) => warn!(error = %e, "could not reopen playback after the mic failure"),
+                            Err(e) => {
+                                warn!(error = %e, "could not reopen playback after the mic failure")
+                            }
                         }
                     }
                 }
@@ -744,12 +922,23 @@ impl VoiceSession {
                 inner.on_publication(publication, p);
             }
         }
-        let _ = inner.events.send(VoiceEvent::Connected { room: room_name, identity, participants });
+        let _ = inner.events.send(VoiceEvent::Connected {
+            room: room_name,
+            identity,
+            participants,
+        });
 
         let event_task = tokio::spawn(run_events(inner.clone(), room_rx, viewer_rx));
         *inner.rx_health.lock() = Some(tokio::spawn(rx_health_guard(Arc::downgrade(&inner))));
         guard.0 = None; // the session owns the room now
-        Ok((VoiceSession { inner, event_task, report }, ev_rx))
+        Ok((
+            VoiceSession {
+                inner,
+                event_task,
+                report,
+            },
+            ev_rx,
+        ))
     }
 
     /// What happened to the optional parts of the join (mic, speakers).
@@ -807,7 +996,9 @@ impl VoiceSession {
             return;
         }
         if deafened {
-            inner.muted_before_deafen.store(inner.muted.load(Ordering::Relaxed), Ordering::Relaxed);
+            inner
+                .muted_before_deafen
+                .store(inner.muted.load(Ordering::Relaxed), Ordering::Relaxed);
             inner.set_muted(true);
         } else {
             inner.set_muted(inner.muted_before_deafen.load(Ordering::Relaxed));
@@ -820,7 +1011,9 @@ impl VoiceSession {
 
     /// Master output volume 0.0..=2.0 (1.0 = unity).
     pub fn set_output_volume(&self, volume: f32) {
-        self.inner.volume.store(volume.clamp(0.0, 2.0).to_bits(), Ordering::Relaxed);
+        self.inner
+            .volume
+            .store(volume.clamp(0.0, 2.0).to_bits(), Ordering::Relaxed);
     }
 
     pub fn output_volume(&self) -> f32 {
@@ -897,7 +1090,9 @@ impl VoiceSession {
         if self.is_deafened() || !(self.has_playback() || self.inner.headless) {
             return false;
         }
-        self.inner.mixer.play_sound(clip.samples.clone(), clip.channels)
+        self.inner
+            .mixer
+            .play_sound(clip.samples.clone(), clip.channels)
     }
 
     /// Hear a clip locally without the room (the "preview" button): like an alert it is not
@@ -924,7 +1119,11 @@ impl VoiceSession {
 
     /// The speakers are open (alerts and voices can be heard).
     pub fn has_playback(&self) -> bool {
-        self.inner.audio_io.lock().as_ref().is_some_and(|io| io.playback_ok)
+        self.inner
+            .audio_io
+            .lock()
+            .as_ref()
+            .is_some_and(|io| io.playback_ok)
     }
 
     pub async fn is_sharing(&self) -> bool {
@@ -933,12 +1132,24 @@ impl VoiceSession {
 
     /// Video path of the running share (pre-encoded or raw + software encoder).
     pub async fn share_path(&self) -> Option<VideoPath> {
-        self.inner.share.lock().await.active.as_ref().and_then(|s| s.path)
+        self.inner
+            .share
+            .lock()
+            .await
+            .active
+            .as_ref()
+            .and_then(|s| s.path)
     }
 
     /// The running share has an audio capture going.
     pub async fn share_has_audio(&self) -> bool {
-        self.inner.share.lock().await.active.as_ref().is_some_and(|s| s.has_audio())
+        self.inner
+            .share
+            .lock()
+            .await
+            .active
+            .as_ref()
+            .is_some_and(|s| s.has_audio())
     }
 
     /// Encoder behind the running share: `"nvenc"` / `"mf"` (hardware, pre-encoded path),
@@ -986,8 +1197,13 @@ impl VoiceSession {
             None => slot.idle.take(),
         };
         // (An audio-only live has no picture, so no preview tile either.)
-        let preview = if source.is_audio_only() { None } else { self.inner.open_share_preview() };
-        match ActiveShare::start_with_preview(&self.inner.room, source, opts, reuse, preview).await {
+        let preview = if source.is_audio_only() {
+            None
+        } else {
+            self.inner.open_share_preview()
+        };
+        match ActiveShare::start_with_preview(&self.inner.room, source, opts, reuse, preview).await
+        {
             Ok(share) => slot.active = Some(share),
             Err(e) => {
                 slot.idle = e.publication.map(|p| *p);
@@ -1006,11 +1222,11 @@ impl VoiceSession {
 
     /// Switch the running Go Live to another window / monitor without ending it (same
     /// publication, hub `streaming` untouched). On failure the old source keeps streaming when it
-    /// is still alive; the error is Portuguese, ready to show. `Err` also when not sharing.
+    /// is still alive; the error is English, ready to show. `Err` also when not sharing.
     pub async fn switch_share(&self, req: SwitchRequest) -> Result<SwitchReport> {
         let mut slot = self.inner.share.lock().await;
         let Some(share) = slot.active.as_mut() else {
-            bail!("Você não está transmitindo.");
+            bail!("You are not streaming.");
         };
         share.switch_source(&self.inner.room, req).await
     }
@@ -1036,7 +1252,7 @@ impl VoiceSession {
     /// picture of what we share, taken by the capture itself at `cfg.fps` at most and about
     /// `cfg.max_width` x `cfg.max_height` big. `cfg.on = false` stops it completely (no GPU work,
     /// no frames): use it whenever the tile is not visible. Remembered for later shares; applies
-    /// at once to a running one (and follows "Trocar tela").
+    /// at once to a running one (and follows "Switch screen").
     pub async fn set_share_preview(&self, cfg: vox_capture::PreviewConfig) {
         let inner = &self.inner;
         {
@@ -1049,24 +1265,36 @@ impl VoiceSession {
         if let Some(s) = inner.share.lock().await.active.as_ref() {
             s.set_preview(cfg);
         }
-        info!(on = cfg.on, fps = cfg.fps, max = format!("{}x{}", cfg.max_width, cfg.max_height), "share preview settings");
+        info!(
+            on = cfg.on,
+            fps = cfg.fps,
+            max = format!("{}x{}", cfg.max_width, cfg.max_height),
+            "share preview settings"
+        );
     }
 
     /// Turn our camera on (replaces a running one, e.g. another device or quality). Independent
-    /// of Go Live. The error is Portuguese, ready to show. While the camera tiles are visible,
+    /// of Go Live. The error is English, ready to show. While the camera tiles are visible,
     /// the self-view (viewer tile [`SELF_CAMERA_KEY`], mirrored) gets small preview frames.
     pub async fn start_camera(&self, opts: CameraOptions) -> Result<CameraStatus> {
         let inner = &self.inner;
         let mut slot = inner.camera.lock().await;
         let reuse = match slot.active.take() {
-            Some(old) => Some(tokio::task::spawn_blocking(move || old.stop()).await.unwrap_or_default()),
+            Some(old) => Some(
+                tokio::task::spawn_blocking(move || old.stop())
+                    .await
+                    .unwrap_or_default(),
+            ),
             None => slot.idle.take(),
         };
         let preview = inner.self_view_factory();
         match ActiveCamera::start(&inner.room, opts, reuse, Some(preview)).await {
             Ok(cam) => {
                 cam.set_preview(inner.cams_visible.load(Ordering::Relaxed));
-                let status = CameraStatus { backend: cam.backend(), format: cam.format.clone() };
+                let status = CameraStatus {
+                    backend: cam.backend(),
+                    format: cam.format.clone(),
+                };
                 slot.active = Some(cam);
                 drop(slot);
                 let task = tokio::spawn(camera_watchdog(Arc::downgrade(inner)));
@@ -1094,8 +1322,14 @@ impl VoiceSession {
             t.abort();
         }
         let mut slot = inner.camera.lock().await;
-        let Some(cam) = slot.active.take() else { return false };
-        slot.idle = Some(tokio::task::spawn_blocking(move || cam.stop()).await.unwrap_or_default());
+        let Some(cam) = slot.active.take() else {
+            return false;
+        };
+        slot.idle = Some(
+            tokio::task::spawn_blocking(move || cam.stop())
+                .await
+                .unwrap_or_default(),
+        );
         drop(slot);
         inner.close_self_view();
         true
@@ -1107,14 +1341,23 @@ impl VoiceSession {
 
     /// Run `f` on our running camera's capture (image controls, picture processing, frame rate);
     /// `None` when the camera is off. `f` must not block.
-    pub async fn with_camera<R>(&self, f: impl FnOnce(&vox_capture::CameraCapture) -> R) -> Option<R> {
+    pub async fn with_camera<R>(
+        &self,
+        f: impl FnOnce(&vox_capture::CameraCapture) -> R,
+    ) -> Option<R> {
         let slot = self.inner.camera.lock().await;
         slot.active.as_ref().and_then(|c| c.capture()).map(f)
     }
 
     /// Encoder behind our camera (`"nvenc"` / `"mf"` / `"software"`), `None` when off.
     pub async fn camera_encoder(&self) -> Option<String> {
-        self.inner.camera.lock().await.active.as_ref().map(|c| c.backend())
+        self.inner
+            .camera
+            .lock()
+            .await
+            .active
+            .as_ref()
+            .map(|c| c.backend())
     }
 
     /// Whether the camera tiles are on screen. Hidden (chat shown, app minimized): remote cameras
@@ -1130,7 +1373,11 @@ impl VoiceSession {
         if let Some(c) = inner.camera.lock().await.active.as_ref() {
             c.set_preview(visible);
         }
-        info!(visible, remote = inner.remote_cams.lock().len(), "camera tiles visibility");
+        info!(
+            visible,
+            remote = inner.remote_cams.lock().len(),
+            "camera tiles visibility"
+        );
     }
 
     /// Hide (or show again) one person's camera only for me: while hidden their video is paused
@@ -1139,7 +1386,11 @@ impl VoiceSession {
         let inner = &self.inner;
         let changed = {
             let mut set = inner.cams_hidden.lock();
-            if hidden { set.insert(identity.to_string()) } else { set.remove(identity) }
+            if hidden {
+                set.insert(identity.to_string())
+            } else {
+                set.remove(identity)
+            }
         };
         if !changed {
             return;
@@ -1184,7 +1435,16 @@ impl VoiceSession {
                 return Err(anyhow::Error::new(WatchLimit { max: MAX_WATCHED }));
             }
             // In the set before any track subscribes, so `on_track_subscribed` takes it.
-            watched.insert(identity.clone(), Watched { view: None, video: None, visible: true, wanted: true, visible_gen: 0 });
+            watched.insert(
+                identity.clone(),
+                Watched {
+                    view: None,
+                    video: None,
+                    visible: true,
+                    wanted: true,
+                    visible_gen: 0,
+                },
+            );
         }
         // An audio-only live has nothing to draw: no viewer surface, no video subscription.
         let audio_only = is_audio_only(p);
@@ -1192,7 +1452,11 @@ impl VoiceSession {
             None
         } else {
             match Viewer::get() {
-                Ok(v) => Some(v.open(&identity, &format!("concord - {}", p.name()), inner.viewer_tx.clone())),
+                Ok(v) => Some(v.open(
+                    &identity,
+                    &format!("concord - {}", p.name()),
+                    inner.viewer_tx.clone(),
+                )),
                 Err(e) => {
                     warn!(error = %e, "viewer unavailable; frames will only be counted");
                     None
@@ -1212,7 +1476,9 @@ impl VoiceSession {
         select_share_video(p);
         let count = inner.watched.lock().len();
         info!(identity = %identity, has_share, audio_only, watching = count, "watching");
-        let _ = inner.events.send(VoiceEvent::WatchStarted { identity: identity.clone() });
+        let _ = inner.events.send(VoiceEvent::WatchStarted {
+            identity: identity.clone(),
+        });
         Ok(identity)
     }
 
@@ -1234,7 +1500,7 @@ impl VoiceSession {
         v
     }
 
-    /// `identity`'s live is audio-only ("Só áudio"; see [`VoiceEvent::ShareKind`]).
+    /// `identity`'s live is audio-only ("Audio only"; see [`VoiceEvent::ShareKind`]).
     pub fn is_audio_only(&self, identity: &str) -> bool {
         self.inner.audio_only.lock().contains(identity)
     }
@@ -1251,7 +1517,9 @@ impl VoiceSession {
         let inner = &self.inner;
         let gen = {
             let mut watched = inner.watched.lock();
-            let Some(w) = watched.get_mut(identity) else { return };
+            let Some(w) = watched.get_mut(identity) else {
+                return;
+            };
             if w.wanted == visible {
                 return;
             }
@@ -1288,8 +1556,8 @@ impl VoiceSession {
         }
     }
 
-    /// Silence `identity`'s screenshare audio because another stream is in focus ("som só da
-    /// transmissão em foco"). Independent of the saved stream volume / mute.
+    /// Silence `identity`'s screenshare audio because another stream is in focus ("audio only from
+    /// the focused stream"). Independent of the saved stream volume / mute.
     pub fn set_stream_focus_muted(&self, identity: &str, muted: bool) {
         self.inner.prefs.set_stream_focus_muted(identity, muted);
     }
@@ -1384,7 +1652,11 @@ impl VoiceSession {
             });
         }
         for sub in inner.remote_audio.lock().values() {
-            let kind = if sub.source == TrackSource::ScreenshareAudio { "watch-audio" } else { "voice" };
+            let kind = if sub.source == TrackSource::ScreenshareAudio {
+                "watch-audio"
+            } else {
+                "voice"
+            };
             out.push(StreamEntry {
                 label: format!("{kind}:{}", sub.identity),
                 dir: Direction::Recv,
@@ -1466,7 +1738,10 @@ impl Inner {
             return;
         }
         info!(identity = %identity, audio_only = now, "live kind changed");
-        let _ = self.events.send(VoiceEvent::ShareKind { identity: identity.clone(), audio_only: now });
+        let _ = self.events.send(VoiceEvent::ShareKind {
+            identity: identity.clone(),
+            audio_only: now,
+        });
         enum Act {
             CloseView,
             OpenView,
@@ -1484,7 +1759,11 @@ impl Inner {
             }
             Some(Act::OpenView) => {
                 if let Ok(v) = Viewer::get() {
-                    let view = v.open(&identity, &format!("concord - {}", p.name()), self.viewer_tx.clone());
+                    let view = v.open(
+                        &identity,
+                        &format!("concord - {}", p.name()),
+                        self.viewer_tx.clone(),
+                    );
                     if let Some(w) = self.watched.lock().get_mut(&identity) {
                         w.view = Some(view);
                     }
@@ -1534,8 +1813,15 @@ impl Inner {
     /// Open our mirrored self-view tile and make the preview callback that feeds it.
     fn self_view_factory(&self) -> PreviewFactory {
         let stream = match Viewer::get() {
-            // (The capture mirrors the self-view itself, switchable: "Espelhar minha prévia".)
-            Ok(v) if v.is_native() => v.open_tile(SELF_CAMERA_KEY, TileStyle { mirror: false, fill: true }, self.viewer_tx.clone()),
+            // (The capture mirrors the self-view itself, switchable: "Mirror my preview".)
+            Ok(v) if v.is_native() => v.open_tile(
+                SELF_CAMERA_KEY,
+                TileStyle {
+                    mirror: false,
+                    fill: true,
+                },
+                self.viewer_tx.clone(),
+            ),
             _ => ViewerStream::null(),
         };
         let counters = self.self_view_counters.clone();
@@ -1565,7 +1851,9 @@ impl Inner {
         let next = encoders::demote(id, reason, persist);
         self.rx_reports.lock().clear(encoders::StreamKind::Share);
         let mut slot = self.share.lock().await;
-        let Some(share) = slot.active.take() else { return };
+        let Some(share) = slot.active.take() else {
+            return;
+        };
         if share.attempt().map(|a| a.id.as_str()) != Some(id) {
             slot.active = Some(share); // restarted meanwhile
             return;
@@ -1573,20 +1861,34 @@ impl Inner {
         warn!(from = %encoders::label(id), to = %next, reason, "Go Live video unstable; switching encoder");
         let (source, opts) = (share.source.clone(), share.opts);
         let reuse = share.stop();
-        let preview = if source.is_audio_only() { None } else { self.open_share_preview() };
-        match ActiveShare::start_with_preview(&self.room, source, opts, Some(reuse), preview).await {
+        let preview = if source.is_audio_only() {
+            None
+        } else {
+            self.open_share_preview()
+        };
+        match ActiveShare::start_with_preview(&self.room, source, opts, Some(reuse), preview).await
+        {
             Ok(new) => {
                 let label = new.attempt().map(|a| a.label.clone()).unwrap_or_default();
-                let backend = new.encoder_report().map(|r| r.backend).unwrap_or_else(|| "software".into());
+                let backend = new
+                    .encoder_report()
+                    .map(|r| r.backend)
+                    .unwrap_or_else(|| "software".into());
                 slot.active = Some(new);
-                let _ = self.events.send(VoiceEvent::EncoderSwitched { camera: false, label, backend });
+                let _ = self.events.send(VoiceEvent::EncoderSwitched {
+                    camera: false,
+                    label,
+                    backend,
+                });
             }
             Err(e) => {
                 warn!(error = %format!("{:#}", e.error), "Go Live restart on the next encoder failed");
                 slot.idle = e.publication.map(|p| *p);
                 drop(slot);
                 self.close_share_preview();
-                let _ = self.events.send(VoiceEvent::LocalShareEnded { reason: "encoder switch failed".into() });
+                let _ = self.events.send(VoiceEvent::LocalShareEnded {
+                    reason: "encoder switch failed".into(),
+                });
             }
         }
     }
@@ -1596,28 +1898,45 @@ impl Inner {
         let next = encoders::demote(id, reason, persist);
         self.rx_reports.lock().clear(encoders::StreamKind::Camera);
         let mut slot = self.camera.lock().await;
-        let Some(cam) = slot.active.take() else { return };
+        let Some(cam) = slot.active.take() else {
+            return;
+        };
         if cam.attempt().id != id {
             slot.active = Some(cam);
             return;
         }
         warn!(from = %encoders::label(id), to = %next, reason, "camera video unstable; switching encoder");
         let opts = cam.opts.clone();
-        let reuse = tokio::task::spawn_blocking(move || cam.stop()).await.unwrap_or_default();
-        match ActiveCamera::start(&self.room, opts, Some(reuse), Some(self.self_view_factory())).await {
+        let reuse = tokio::task::spawn_blocking(move || cam.stop())
+            .await
+            .unwrap_or_default();
+        match ActiveCamera::start(
+            &self.room,
+            opts,
+            Some(reuse),
+            Some(self.self_view_factory()),
+        )
+        .await
+        {
             Ok(new) => {
                 new.set_preview(self.cams_visible.load(Ordering::Relaxed));
                 let label = new.attempt().label.clone();
                 let backend = new.backend();
                 slot.active = Some(new);
-                let _ = self.events.send(VoiceEvent::EncoderSwitched { camera: true, label, backend });
+                let _ = self.events.send(VoiceEvent::EncoderSwitched {
+                    camera: true,
+                    label,
+                    backend,
+                });
             }
             Err(e) => {
                 warn!(error = %format!("{:#}", e.error), "camera restart on the next encoder failed");
                 slot.idle = Some(e.publication);
                 drop(slot);
                 self.close_self_view();
-                let _ = self.events.send(VoiceEvent::LocalCameraEnded { reason: e.message });
+                let _ = self
+                    .events
+                    .send(VoiceEvent::LocalCameraEnded { reason: e.message });
             }
         }
     }
@@ -1626,10 +1945,21 @@ impl Inner {
     /// share's capture feeds it small frames while the app asks for them.
     fn open_share_preview(&self) -> Option<SharePreview> {
         let stream = match Viewer::get() {
-            Ok(v) if v.is_native() => v.open_tile(SELF_SHARE_KEY, TileStyle { mirror: false, fill: false }, self.viewer_tx.clone()),
+            Ok(v) if v.is_native() => v.open_tile(
+                SELF_SHARE_KEY,
+                TileStyle {
+                    mirror: false,
+                    fill: false,
+                },
+                self.viewer_tx.clone(),
+            ),
             _ => return None,
         };
-        Some(SharePreview::new(stream, self.share_preview_counters.clone(), *self.share_preview_cfg.lock()))
+        Some(SharePreview::new(
+            stream,
+            self.share_preview_counters.clone(),
+            *self.share_preview_cfg.lock(),
+        ))
     }
 
     fn close_share_preview(&self) {
@@ -1652,8 +1982,12 @@ impl Inner {
     /// other. `gone`: a publication that is being unpublished.
     fn select_mic(&self, p: &RemoteParticipant, gone: Option<&TrackSid>) {
         let identity = ident(p);
-        let pubs: Vec<RemoteTrackPublication> =
-            p.track_publications().values().filter(|x| x.source() == TrackSource::Microphone && Some(&x.sid()) != gone).cloned().collect();
+        let pubs: Vec<RemoteTrackPublication> = p
+            .track_publications()
+            .values()
+            .filter(|x| x.source() == TrackSource::Microphone && Some(&x.sid()) != gone)
+            .cloned()
+            .collect();
         let sids: Vec<String> = pubs.iter().map(|x| x.sid().to_string()).collect();
         let pick = {
             let mut picks = self.mic_picks.lock();
@@ -1682,15 +2016,24 @@ impl Inner {
 
     /// Is this microphone publication the participant's picked one?
     fn is_picked_mic(&self, identity: &str, sid: &TrackSid) -> bool {
-        self.mic_picks.lock().get(identity).is_some_and(|s| s == sid)
+        self.mic_picks
+            .lock()
+            .get(identity)
+            .is_some_and(|s| s == sid)
     }
 
     /// Apply the camera policy to one participant: their live (unmuted) camera publication is
     /// subscribed while the tiles are visible and disabled while hidden; idle ones (a camera that
     /// is off, or the other path's publication) are unsubscribed. Emits started / stopped.
     fn select_camera(&self, p: &RemoteParticipant) {
-        let visible = self.cams_visible.load(Ordering::Relaxed) && !self.cams_hidden.lock().contains(&ident(p));
-        let pubs: Vec<RemoteTrackPublication> = p.track_publications().values().filter(|x| x.source() == TrackSource::Camera).cloned().collect();
+        let visible = self.cams_visible.load(Ordering::Relaxed)
+            && !self.cams_hidden.lock().contains(&ident(p));
+        let pubs: Vec<RemoteTrackPublication> = p
+            .track_publications()
+            .values()
+            .filter(|x| x.source() == TrackSource::Camera)
+            .cloned()
+            .collect();
         let live = pubs.iter().find(|x| !x.is_muted()).map(|x| x.sid());
         for x in &pubs {
             if Some(x.sid()) != live {
@@ -1716,14 +2059,30 @@ impl Inner {
         if changed {
             let on = live.is_some();
             info!(identity = %identity, on, visible, "participant camera");
-            let _ = self.events.send(if on { VoiceEvent::CameraStarted { identity } } else { VoiceEvent::CameraStopped { identity } });
+            let _ = self.events.send(if on {
+                VoiceEvent::CameraStarted { identity }
+            } else {
+                VoiceEvent::CameraStopped { identity }
+            });
         }
     }
 
-    fn on_camera_subscribed(&self, video: RemoteVideoTrack, publication: RemoteTrackPublication, identity: String) {
+    fn on_camera_subscribed(
+        &self,
+        video: RemoteVideoTrack,
+        publication: RemoteTrackPublication,
+        identity: String,
+    ) {
         let key = camera_key(&identity);
         let viewer = match Viewer::get() {
-            Ok(v) => v.open_tile(&key, TileStyle { mirror: false, fill: true }, self.viewer_tx.clone()),
+            Ok(v) => v.open_tile(
+                &key,
+                TileStyle {
+                    mirror: false,
+                    fill: true,
+                },
+                self.viewer_tx.clone(),
+            ),
             Err(_) => ViewerStream::null(),
         };
         let counters = Arc::new(StreamCounters::default());
@@ -1739,12 +2098,22 @@ impl Inner {
                 viewer.submit(frame);
             }
         });
-        if !self.cams_visible.load(Ordering::Relaxed) || self.cams_hidden.lock().contains(&identity) {
+        if !self.cams_visible.load(Ordering::Relaxed) || self.cams_hidden.lock().contains(&identity)
+        {
             publication.set_enabled(false);
         }
         info!(identity = %identity, "camera video subscribed");
         // Replaces an older subscription of the same person (the tile stays open).
-        self.remote_cams.lock().insert(identity.clone(), RemoteVideoSub { identity, track: video, publication, counters, task });
+        self.remote_cams.lock().insert(
+            identity.clone(),
+            RemoteVideoSub {
+                identity,
+                track: video,
+                publication,
+                counters,
+                task,
+            },
+        );
     }
 
     /// A participant left: forget their camera.
@@ -1755,7 +2124,9 @@ impl Inner {
             }
         }
         if self.cams_live.lock().remove(identity) {
-            let _ = self.events.send(VoiceEvent::CameraStopped { identity: identity.to_string() });
+            let _ = self.events.send(VoiceEvent::CameraStopped {
+                identity: identity.to_string(),
+            });
         }
     }
 
@@ -1772,45 +2143,72 @@ impl Inner {
     /// Stop watching one stream (the others go on). Returns its identity when it was watched.
     fn unwatch(&self, identity: &str, reason: &str) -> Option<String> {
         let gone = self.watched.lock().remove(identity)?;
-        if let Some(p) = self.room.remote_participants().values().find(|p| p.identity().0 == identity) {
+        if let Some(p) = self
+            .room
+            .remote_participants()
+            .values()
+            .find(|p| p.identity().0 == identity)
+        {
             for publication in p.track_publications().values() {
-                if matches!(publication.source(), TrackSource::Screenshare | TrackSource::ScreenshareAudio) {
+                if matches!(
+                    publication.source(),
+                    TrackSource::Screenshare | TrackSource::ScreenshareAudio
+                ) {
                     publication.set_subscribed(false);
                 }
             }
         }
         drop(gone);
-        self.remote_audio.lock().retain(|_, s| !(s.source == TrackSource::ScreenshareAudio && s.identity == identity));
+        self.remote_audio
+            .lock()
+            .retain(|_, s| !(s.source == TrackSource::ScreenshareAudio && s.identity == identity));
         self.prefs.set_stream_focus_muted(identity, false);
         if let Ok(v) = Viewer::get() {
             v.close(identity);
         }
         let left = self.watched.lock().len();
         info!(identity = %identity, reason, still_watching = left, "stopped watching");
-        let _ = self.events.send(VoiceEvent::WatchEnded { identity: identity.to_string(), reason: reason.to_string() });
+        let _ = self.events.send(VoiceEvent::WatchEnded {
+            identity: identity.to_string(),
+            reason: reason.to_string(),
+        });
         Some(identity.to_string())
     }
 
     fn unwatch_all(&self, reason: &str) -> Vec<String> {
         let mut all: Vec<String> = self.watched.lock().keys().cloned().collect();
         all.sort();
-        all.into_iter().filter_map(|id| self.unwatch(&id, reason)).collect()
+        all.into_iter()
+            .filter_map(|id| self.unwatch(&id, reason))
+            .collect()
     }
 
-    fn on_track_subscribed(&self, track: RemoteTrack, publication: RemoteTrackPublication, p: RemoteParticipant) {
+    fn on_track_subscribed(
+        &self,
+        track: RemoteTrack,
+        publication: RemoteTrackPublication,
+        p: RemoteParticipant,
+    ) {
         let identity = ident(&p);
         match track {
             RemoteTrack::Audio(audio) => {
                 let source = publication.source();
-                if source == TrackSource::Microphone && !self.is_picked_mic(&identity, &publication.sid()) {
+                if source == TrackSource::Microphone
+                    && !self.is_picked_mic(&identity, &publication.sid())
+                {
                     // A second microphone of the same person (see `select_mic`): not played.
                     publication.set_subscribed(false);
                     return;
                 }
-                let ctl = if source == TrackSource::ScreenshareAudio { self.prefs.stream_ctl(&identity) } else { self.prefs.mic_ctl(&identity) };
+                let ctl = if source == TrackSource::ScreenshareAudio {
+                    self.prefs.stream_ctl(&identity)
+                } else {
+                    self.prefs.mic_ctl(&identity)
+                };
                 let id = self.mixer.add_source_with(ctl);
                 let counters = Arc::new(StreamCounters::default());
-                let mut stream = NativeAudioStream::new(audio.rtc_track(), MIX_RATE as i32, MIX_CHANNELS as i32);
+                let mut stream =
+                    NativeAudioStream::new(audio.rtc_track(), MIX_RATE as i32, MIX_CHANNELS as i32);
                 let mixer = self.mixer.clone();
                 let c = counters.clone();
                 // (`MIX_CHANNELS` = 2: the shared sound keeps its stereo image, so measure it.)
@@ -1829,10 +2227,21 @@ impl Inner {
                     publication.set_enabled(false);
                 }
                 info!(identity = %identity, ?source, "remote audio subscribed");
-                let sub = RemoteAudioSub { identity, source, publication: publication.clone(), track: audio, mixer_id: id, counters, task, mixer: self.mixer.clone() };
+                let sub = RemoteAudioSub {
+                    identity,
+                    source,
+                    publication: publication.clone(),
+                    track: audio,
+                    mixer_id: id,
+                    counters,
+                    task,
+                    mixer: self.mixer.clone(),
+                };
                 self.remote_audio.lock().insert(publication.sid(), sub);
             }
-            RemoteTrack::Video(video) if publication.source() == TrackSource::Camera => self.on_camera_subscribed(video, publication, identity),
+            RemoteTrack::Video(video) if publication.source() == TrackSource::Camera => {
+                self.on_camera_subscribed(video, publication, identity)
+            }
             RemoteTrack::Video(video) => {
                 // Not watched (any more), or a sharer's idle publication while the live one is
                 // already here (a sharer has up to two screenshare video publications, raw and
@@ -1841,7 +2250,8 @@ impl Inner {
                     let watched = self.watched.lock();
                     match watched.get(&identity) {
                         Some(w) if publication.source() == TrackSource::Screenshare => {
-                            let idle_dup = publication.is_muted() && w.video.as_ref().is_some_and(|v| !v.publication.is_muted());
+                            let idle_dup = publication.is_muted()
+                                && w.video.as_ref().is_some_and(|v| !v.publication.is_muted());
                             (!idle_dup).then(|| w.view.clone())
                         }
                         _ => None,
@@ -1862,7 +2272,13 @@ impl Inner {
                         }
                     }
                 });
-                let sub = RemoteVideoSub { identity: identity.clone(), track: video, publication, counters, task };
+                let sub = RemoteVideoSub {
+                    identity: identity.clone(),
+                    track: video,
+                    publication,
+                    counters,
+                    task,
+                };
                 let mut watched = self.watched.lock();
                 let Some(w) = watched.get_mut(&identity) else {
                     // Unwatched meanwhile.
@@ -1881,13 +2297,22 @@ impl Inner {
     }
 
     fn on_track_unsubscribed(&self, publication: &RemoteTrackPublication) {
-        if self.remote_audio.lock().remove(&publication.sid()).is_some() {
+        if self
+            .remote_audio
+            .lock()
+            .remove(&publication.sid())
+            .is_some()
+        {
             debug!(sid = %publication.sid(), "remote audio unsubscribed");
         }
         let gone = {
             let mut cams = self.remote_cams.lock();
-            let who = cams.iter().find(|(_, v)| v.publication.sid() == publication.sid()).map(|(k, _)| k.clone());
-            who.and_then(|k| cams.remove(&k)).map(|v| v.identity.clone())
+            let who = cams
+                .iter()
+                .find(|(_, v)| v.publication.sid() == publication.sid())
+                .map(|(k, _)| k.clone());
+            who.and_then(|k| cams.remove(&k))
+                .map(|v| v.identity.clone())
         };
         if let Some(identity) = gone {
             if let Ok(v) = Viewer::get() {
@@ -1896,7 +2321,12 @@ impl Inner {
             debug!(identity = %identity, "camera video unsubscribed");
         }
         let sid = publication.sid();
-        let gone = self.watched.lock().values_mut().find(|w| w.video.as_ref().is_some_and(|v| v.track.sid() == sid)).and_then(|w| w.video.take());
+        let gone = self
+            .watched
+            .lock()
+            .values_mut()
+            .find(|w| w.video.as_ref().is_some_and(|v| v.track.sid() == sid))
+            .and_then(|w| w.video.take());
         if let Some(v) = gone {
             debug!(identity = %v.identity, %sid, "screenshare video unsubscribed");
         }
@@ -1909,7 +2339,12 @@ impl Inner {
 /// publication stays subscribed (instant resume, as in Phase 1); with several we wait for the
 /// unmute.
 fn select_share_video(p: &RemoteParticipant) {
-    let pubs: Vec<RemoteTrackPublication> = p.track_publications().values().filter(|x| x.source() == TrackSource::Screenshare).cloned().collect();
+    let pubs: Vec<RemoteTrackPublication> = p
+        .track_publications()
+        .values()
+        .filter(|x| x.source() == TrackSource::Screenshare)
+        .cloned()
+        .collect();
     if is_audio_only(p) {
         // Audio-only live: whatever video publications are left over from earlier screen shares
         // are muted and stay unsubscribed.
@@ -1935,7 +2370,12 @@ fn select_share_video(p: &RemoteParticipant) {
 /// one is unmuted at a time. A lone publication stays subscribed even while muted (instant
 /// resume); with several we wait for the unmute.
 fn select_share_audio(p: &RemoteParticipant) {
-    let pubs: Vec<RemoteTrackPublication> = p.track_publications().values().filter(|x| x.source() == TrackSource::ScreenshareAudio).cloned().collect();
+    let pubs: Vec<RemoteTrackPublication> = p
+        .track_publications()
+        .values()
+        .filter(|x| x.source() == TrackSource::ScreenshareAudio)
+        .cloned()
+        .collect();
     match pubs.iter().find(|x| !x.is_muted()) {
         Some(live) => {
             for x in &pubs {
@@ -1954,15 +2394,24 @@ type PubFacts = (TrackSource, String, bool);
 /// Is the live made of nothing but the `audio-only` track (no screenshare video that is on)?
 /// There is no protocol field for this, so it is the track's name and the absence of video.
 fn audio_only_live(pubs: &[PubFacts]) -> bool {
-    let video_on = pubs.iter().any(|(s, _, muted)| *s == TrackSource::Screenshare && !muted);
-    let audio_only_on = pubs.iter().any(|(s, n, muted)| *s == TrackSource::ScreenshareAudio && n == AUDIO_ONLY_TRACK_NAME && !muted);
+    let video_on = pubs
+        .iter()
+        .any(|(s, _, muted)| *s == TrackSource::Screenshare && !muted);
+    let audio_only_on = pubs.iter().any(|(s, n, muted)| {
+        *s == TrackSource::ScreenshareAudio && n == AUDIO_ONLY_TRACK_NAME && !muted
+    });
     audio_only_on && !video_on
 }
 
 fn share_facts(p: &RemoteParticipant) -> Vec<PubFacts> {
     p.track_publications()
         .values()
-        .filter(|x| matches!(x.source(), TrackSource::Screenshare | TrackSource::ScreenshareAudio))
+        .filter(|x| {
+            matches!(
+                x.source(),
+                TrackSource::Screenshare | TrackSource::ScreenshareAudio
+            )
+        })
         .map(|x| (x.source(), x.name(), x.is_muted()))
         .collect()
 }
@@ -1979,7 +2428,9 @@ async fn share_watchdog(inner: std::sync::Weak<Inner>) {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         let Some(inner) = inner.upgrade() else { return };
         let mut slot = inner.share.lock().await;
-        let Some(share) = slot.active.as_ref() else { return };
+        let Some(share) = slot.active.as_ref() else {
+            return;
+        };
         if !share.video_running() || share.source_gone() {
             let share = slot.active.take().expect("checked above");
             let reason = format!("{:?} capture stopped (target closed or lost)", share.source);
@@ -2011,13 +2462,22 @@ struct GuardState {
 
 impl GuardState {
     /// This window's sample; `None` for an encoder's first window (it only sets the baseline).
-    async fn sample(&mut self, id: &str, track: &LocalVideoTrack, fb: &EncodedFeedback, hook: bool) -> Option<encoders::StormSample> {
+    async fn sample(
+        &mut self,
+        id: &str,
+        track: &LocalVideoTrack,
+        fb: &EncodedFeedback,
+        hook: bool,
+    ) -> Option<encoders::StormSample> {
         if self.id.as_deref() != Some(id) {
             self.id = Some(id.to_string());
             self.prev = None;
             self.detector.reset_windows();
         }
-        let stats = tokio::time::timeout(STATS_TIMEOUT, track.get_stats()).await.ok()?.ok()?;
+        let stats = tokio::time::timeout(STATS_TIMEOUT, track.get_stats())
+            .await
+            .ok()?
+            .ok()?;
         let h = crate::stats::send_health(&stats);
         let drops = fb.drop_events.load(Ordering::Relaxed);
         let (t0, h0, d0) = self.prev.replace((Instant::now(), h, drops))?;
@@ -2053,15 +2513,34 @@ async fn encoder_guard(inner: std::sync::Weak<Inner>) {
     loop {
         tokio::time::sleep(encoders::STORM_WINDOW).await;
         let Some(inner) = inner.upgrade() else { return };
-        let sp = inner.share.lock().await.active.as_ref().map(|s| s.encoder_probe());
-        let cp = inner.camera.lock().await.active.as_ref().map(|c| c.encoder_probe());
+        let sp = inner
+            .share
+            .lock()
+            .await
+            .active
+            .as_ref()
+            .map(|s| s.encoder_probe());
+        let cp = inner
+            .camera
+            .lock()
+            .await
+            .active
+            .as_ref()
+            .map(|c| c.encoder_probe());
         if sp.is_none() && cp.is_none() {
             return;
         }
-        for (kind, st, probe) in [(encoders::StreamKind::Share, &mut share, sp.flatten()), (encoders::StreamKind::Camera, &mut cam, cp.flatten())] {
+        for (kind, st, probe) in [
+            (encoders::StreamKind::Share, &mut share, sp.flatten()),
+            (encoders::StreamKind::Camera, &mut cam, cp.flatten()),
+        ] {
             let is_cam = kind == encoders::StreamKind::Camera;
-            let Some((id, track, fb)) = probe else { continue };
-            let Some(s) = st.sample(&id, &track, &fb, hook).await else { continue };
+            let Some((id, track, fb)) = probe else {
+                continue;
+            };
+            let Some(s) = st.sample(&id, &track, &fb, hook).await else {
+                continue;
+            };
             let now = Instant::now();
             let ev = inner.rx_reports.lock().evidence(kind, now);
             if s.stormy() || ev.confirmed {
@@ -2145,11 +2624,22 @@ async fn rx_health_guard(inner: std::sync::Weak<Inner>) {
         }
         tracks.retain(|k, _| live.iter().any(|(w, kind, _)| (w, kind) == (&k.0, &k.1)));
         for (who, kind, track) in live {
-            let Ok(Ok(stats)) = tokio::time::timeout(STATS_TIMEOUT, track.get_stats()).await else { continue };
-            let Some(h) = crate::stats::recv_health(&stats) else { continue };
+            let Ok(Ok(stats)) = tokio::time::timeout(STATS_TIMEOUT, track.get_stats()).await else {
+                continue;
+            };
+            let Some(h) = crate::stats::recv_health(&stats) else {
+                continue;
+            };
             let key = (who, kind);
             let now = Instant::now();
-            let Some((t0, h0)) = tracks.entry(key.clone()).or_default().prev.replace((now, h)) else { continue };
+            let Some((t0, h0)) = tracks
+                .entry(key.clone())
+                .or_default()
+                .prev
+                .replace((now, h))
+            else {
+                continue;
+            };
             let mut r = encoders::RxHealthReport {
                 kind,
                 secs: (now.duration_since(t0).as_secs_f64() * 100.0).round() / 100.0,
@@ -2164,7 +2654,8 @@ async fn rx_health_guard(inner: std::sync::Weak<Inner>) {
                 let n = hook_sent.entry(key.clone()).or_default();
                 if *n < RX_TEST_HOOK_REPORTS {
                     *n += 1;
-                    r.decode_errors += (encoders::RX_DECODE_ERRORS_PER_S * r.secs * 2.0).ceil() as u64;
+                    r.decode_errors +=
+                        (encoders::RX_DECODE_ERRORS_PER_S * r.secs * 2.0).ceil() as u64;
                 }
             }
             if !gate.allow(&key.0, &r, now) {
@@ -2177,7 +2668,9 @@ async fn rx_health_guard(inner: std::sync::Weak<Inner>) {
                 destination_identities: vec![ParticipantIdentity(key.0.clone())],
             };
             match inner.room.local_participant().publish_data(packet).await {
-                Ok(()) => info!(to = %key.0, ?kind, report = %r.describe(), "told the publisher its video decodes badly here"),
+                Ok(()) => {
+                    info!(to = %key.0, ?kind, report = %r.describe(), "told the publisher its video decodes badly here")
+                }
                 Err(e) => debug!(to = %key.0, error = %e, "decode-health report not sent"),
             }
         }
@@ -2191,7 +2684,9 @@ async fn camera_watchdog(inner: std::sync::Weak<Inner>) {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         let Some(inner) = inner.upgrade() else { return };
         let mut slot = inner.camera.lock().await;
-        let Some(cam) = slot.active.as_ref() else { return };
+        let Some(cam) = slot.active.as_ref() else {
+            return;
+        };
         if cam.running() {
             continue;
         }
@@ -2200,10 +2695,14 @@ async fn camera_watchdog(inner: std::sync::Weak<Inner>) {
                 warn!(fault = ?f.fault, detail = %f.detail, "camera ended by itself");
                 camera_failure_pt(&f)
             }
-            None => "A câmera parou.".to_string(),
+            None => "The camera stopped.".to_string(),
         };
         let cam = slot.active.take().expect("checked above");
-        slot.idle = Some(tokio::task::spawn_blocking(move || cam.stop()).await.unwrap_or_default());
+        slot.idle = Some(
+            tokio::task::spawn_blocking(move || cam.stop())
+                .await
+                .unwrap_or_default(),
+        );
         drop(slot);
         inner.close_self_view();
         let _ = inner.events.send(VoiceEvent::LocalCameraEnded { reason });
@@ -2227,7 +2726,12 @@ fn schedule_trim(inner: std::sync::Weak<Inner>) {
 }
 
 /// 10 ms mono sine chunks into the mic source, honouring mute.
-fn spawn_mic_tone(hz: f32, source: NativeAudioSource, muted: Arc<AtomicBool>, counters: Arc<StreamCounters>) -> ProducerThread {
+fn spawn_mic_tone(
+    hz: f32,
+    source: NativeAudioSource,
+    muted: Arc<AtomicBool>,
+    counters: Arc<StreamCounters>,
+) -> ProducerThread {
     use futures_util::FutureExt;
     ProducerThread::spawn("vox-mic-tone", move |stop| {
         let mut gen = SineGenerator::new(MIX_RATE, hz as f64, hz as f64, 0.2);
@@ -2241,7 +2745,12 @@ fn spawn_mic_tone(hz: f32, source: NativeAudioSource, muted: Arc<AtomicBool>, co
             for (m, f) in mono.iter_mut().zip(stereo.as_chunks::<2>().0) {
                 *m = f[0];
             }
-            let frame = AudioFrame { data: std::borrow::Cow::Borrowed(&mono), sample_rate: MIX_RATE, num_channels: 1, samples_per_channel: 480 };
+            let frame = AudioFrame {
+                data: std::borrow::Cow::Borrowed(&mono),
+                sample_rate: MIX_RATE,
+                num_channels: 1,
+                samples_per_channel: 480,
+            };
             if let Some(Ok(())) = source.capture_frame(&frame).now_or_never() {
                 counters.audio(&mono);
             }
@@ -2282,7 +2791,10 @@ fn handle_room_event(inner: &Inner, ev: RoomEvent) -> bool {
     match ev {
         RoomEvent::ParticipantConnected(p) => {
             info!(identity = %ident(&p), "participant joined");
-            emit(VoiceEvent::ParticipantJoined { identity: ident(&p), name: p.name() });
+            emit(VoiceEvent::ParticipantJoined {
+                identity: ident(&p),
+                name: p.name(),
+            });
         }
         RoomEvent::ParticipantDisconnected(p) => {
             let identity = ident(&p);
@@ -2290,19 +2802,30 @@ fn handle_room_event(inner: &Inner, ev: RoomEvent) -> bool {
             inner.unwatch(&identity, "participant left");
             inner.camera_gone(&identity);
             if inner.audio_only.lock().remove(&identity) {
-                emit(VoiceEvent::ShareKind { identity: identity.clone(), audio_only: false });
+                emit(VoiceEvent::ShareKind {
+                    identity: identity.clone(),
+                    audio_only: false,
+                });
             }
             emit(VoiceEvent::ParticipantLeft { identity });
         }
-        RoomEvent::TrackPublished { publication, participant } => {
+        RoomEvent::TrackPublished {
+            publication,
+            participant,
+        } => {
             inner.on_publication(&publication, &participant);
             inner.refresh_kind(&participant);
             if publication.source() == TrackSource::Screenshare && !publication.is_muted() {
                 info!(identity = %ident(&participant), "participant started Go Live");
-                emit(VoiceEvent::ShareStarted { identity: ident(&participant) });
+                emit(VoiceEvent::ShareStarted {
+                    identity: ident(&participant),
+                });
             }
         }
-        RoomEvent::TrackUnpublished { publication, participant } => {
+        RoomEvent::TrackUnpublished {
+            publication,
+            participant,
+        } => {
             inner.on_track_unsubscribed(&publication);
             inner.refresh_kind(&participant);
             if publication.source() == TrackSource::Microphone {
@@ -2313,59 +2836,98 @@ fn handle_room_event(inner: &Inner, ev: RoomEvent) -> bool {
             }
             if publication.source() == TrackSource::Screenshare {
                 info!(identity = %ident(&participant), "participant stopped Go Live");
-                emit(VoiceEvent::ShareStopped { identity: ident(&participant) });
+                emit(VoiceEvent::ShareStopped {
+                    identity: ident(&participant),
+                });
             }
         }
-        RoomEvent::TrackSubscribed { track, publication, participant } => {
+        RoomEvent::TrackSubscribed {
+            track,
+            publication,
+            participant,
+        } => {
             inner.on_track_subscribed(track, publication, participant);
         }
         RoomEvent::TrackUnsubscribed { publication, .. } => {
             inner.on_track_unsubscribed(&publication);
         }
-        RoomEvent::TrackSubscriptionFailed { participant, error, track_sid } => {
+        RoomEvent::TrackSubscriptionFailed {
+            participant,
+            error,
+            track_sid,
+        } => {
             warn!(identity = %ident(&participant), %track_sid, error = %error, "track subscription failed");
         }
-        RoomEvent::TrackMuted { participant: Participant::Remote(p), publication } | RoomEvent::TrackUnmuted { participant: Participant::Remote(p), publication }
-            if publication.source() == TrackSource::Camera =>
-        {
+        RoomEvent::TrackMuted {
+            participant: Participant::Remote(p),
+            publication,
+        }
+        | RoomEvent::TrackUnmuted {
+            participant: Participant::Remote(p),
+            publication,
+        } if publication.source() == TrackSource::Camera => {
             inner.select_camera(&p);
         }
-        RoomEvent::TrackMuted { participant: Participant::Remote(p), publication } | RoomEvent::TrackUnmuted { participant: Participant::Remote(p), publication }
-            if publication.source() == TrackSource::ScreenshareAudio =>
-        {
+        RoomEvent::TrackMuted {
+            participant: Participant::Remote(p),
+            publication,
+        }
+        | RoomEvent::TrackUnmuted {
+            participant: Participant::Remote(p),
+            publication,
+        } if publication.source() == TrackSource::ScreenshareAudio => {
             // Which of the sharer's audio tracks is on (and whether the live is audio-only).
             inner.refresh_kind(&p);
             if inner.watched.lock().contains_key(ident(&p).as_str()) {
                 select_share_audio(&p);
             }
         }
-        RoomEvent::TrackMuted { participant: Participant::Remote(p), publication } if publication.source() == TrackSource::Screenshare => {
+        RoomEvent::TrackMuted {
+            participant: Participant::Remote(p),
+            publication,
+        } if publication.source() == TrackSource::Screenshare => {
             inner.refresh_kind(&p);
             info!(identity = %ident(&p), "participant stopped Go Live (track muted)");
-            emit(VoiceEvent::ShareStopped { identity: ident(&p) });
+            emit(VoiceEvent::ShareStopped {
+                identity: ident(&p),
+            });
         }
-        RoomEvent::TrackUnmuted { participant: Participant::Remote(p), publication } if publication.source() == TrackSource::Screenshare => {
+        RoomEvent::TrackUnmuted {
+            participant: Participant::Remote(p),
+            publication,
+        } if publication.source() == TrackSource::Screenshare => {
             inner.refresh_kind(&p);
             info!(identity = %ident(&p), "participant started Go Live (track unmuted)");
             if inner.watched.lock().contains_key(ident(&p).as_str()) {
                 select_share_video(&p);
             }
-            emit(VoiceEvent::ShareStarted { identity: ident(&p) });
+            emit(VoiceEvent::ShareStarted {
+                identity: ident(&p),
+            });
         }
-        RoomEvent::DataReceived { payload, topic, participant: Some(p), .. } if topic.as_deref() == Some(encoders::RX_HEALTH_TOPIC) => {
+        RoomEvent::DataReceived {
+            payload,
+            topic,
+            participant: Some(p),
+            ..
+        } if topic.as_deref() == Some(encoders::RX_HEALTH_TOPIC) => {
             match encoders::RxHealthReport::from_payload(&payload) {
                 Some(r) => {
                     debug!(viewer = %ident(&p), kind = ?r.kind, report = %r.describe(), "viewer decode-health report");
                     inner.rx_reports.lock().add(&ident(&p), r, Instant::now());
                 }
-                None => debug!(viewer = %ident(&p), bytes = payload.len(), "unreadable decode-health report ignored"),
+                None => {
+                    debug!(viewer = %ident(&p), bytes = payload.len(), "unreadable decode-health report ignored")
+                }
             }
         }
         RoomEvent::ActiveSpeakersChanged { speakers } => {
             let identities = speakers.iter().map(|p| p.identity().0.clone()).collect();
             emit(VoiceEvent::ActiveSpeakers { identities });
         }
-        RoomEvent::Connected { participants_with_tracks } => {
+        RoomEvent::Connected {
+            participants_with_tracks,
+        } => {
             for (p, pubs) in participants_with_tracks {
                 for publication in pubs {
                     inner.on_publication(&publication, &p);
@@ -2396,7 +2958,9 @@ fn handle_room_event(inner: &Inner, ev: RoomEvent) -> bool {
             } else {
                 warn!(?reason, "disconnected from voice room");
             }
-            emit(VoiceEvent::Disconnected { reason: format!("{reason:?}") });
+            emit(VoiceEvent::Disconnected {
+                reason: format!("{reason:?}"),
+            });
             return false;
         }
         _ => {}
@@ -2410,7 +2974,9 @@ fn handle_room_event(inner: &Inner, ev: RoomEvent) -> bool {
 fn mic_publish_options() -> TrackPublishOptions {
     TrackPublishOptions {
         source: TrackSource::Microphone,
-        audio_encoding: Some(AudioEncoding { max_bitrate: 32_000 }),
+        audio_encoding: Some(AudioEncoding {
+            max_bitrate: 32_000,
+        }),
         dtx: true,
         red: true,
         ..Default::default()
@@ -2424,7 +2990,11 @@ const PROTO_SOURCE_MICROPHONE: i32 = 2;
 fn mic_allowed(local: &LocalParticipant) -> bool {
     match local.permission() {
         None => true,
-        Some(p) => p.can_publish && (p.can_publish_sources.is_empty() || p.can_publish_sources.contains(&PROTO_SOURCE_MICROPHONE)),
+        Some(p) => {
+            p.can_publish
+                && (p.can_publish_sources.is_empty()
+                    || p.can_publish_sources.contains(&PROTO_SOURCE_MICROPHONE))
+        }
     }
 }
 
@@ -2471,13 +3041,18 @@ async fn apply_mic_permission(inner: Arc<Inner>) {
     }
     let held = inner.server_mute.held.lock().take();
     if let Some((track, counters)) = held {
-        let publishing = local.publish_track(LocalTrack::Audio(track.clone()), mic_publish_options());
+        let publishing =
+            local.publish_track(LocalTrack::Audio(track.clone()), mic_publish_options());
         match tokio::time::timeout(PUBLISH_TIMEOUT, publishing).await {
             Ok(Ok(publication)) => {
                 if inner.muted.load(Ordering::Relaxed) {
                     publication.mute();
                 }
-                *inner.mic.lock() = Some(MicPublished { publication, track, counters });
+                *inner.mic.lock() = Some(MicPublished {
+                    publication,
+                    track,
+                    counters,
+                });
                 info!("server unmute: microphone published again");
             }
             Ok(Err(e)) => {
@@ -2499,18 +3074,32 @@ mod tests {
     use super::*;
 
     fn facts(items: &[(TrackSource, &str, bool)]) -> Vec<PubFacts> {
-        items.iter().map(|(s, n, m)| (*s, n.to_string(), *m)).collect()
+        items
+            .iter()
+            .map(|(s, n, m)| (*s, n.to_string(), *m))
+            .collect()
     }
 
     #[test]
     fn one_microphone_per_participant() {
         let v = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(pick_mic(None, &[]), None);
-        assert_eq!(pick_mic(None, &v(&["TR_b", "TR_a", "TR_c"])), Some(1), "the first by sid");
+        assert_eq!(
+            pick_mic(None, &v(&["TR_b", "TR_a", "TR_c"])),
+            Some(1),
+            "the first by sid"
+        );
         // Extra ones published later do not take the place of the one playing.
-        assert_eq!(pick_mic(Some("TR_b"), &v(&["TR_b", "TR_a", "TR_c"])), Some(0));
+        assert_eq!(
+            pick_mic(Some("TR_b"), &v(&["TR_b", "TR_a", "TR_c"])),
+            Some(0)
+        );
         let many: Vec<String> = (0..500).map(|i| format!("TR_{i:04}")).collect();
-        assert_eq!(pick_mic(Some("TR_0250"), &many), Some(250), "hundreds of them: still one");
+        assert_eq!(
+            pick_mic(Some("TR_0250"), &many),
+            Some(250),
+            "hundreds of them: still one"
+        );
         // The playing one is unpublished: the next one takes over.
         assert_eq!(pick_mic(Some("TR_gone"), &v(&["TR_x", "TR_w"])), Some(1));
     }
@@ -2521,16 +3110,39 @@ mod tests {
         // Nothing published: not live.
         assert!(!audio_only_live(&[]));
         // The audio-only track is on, no video publication at all.
-        assert!(audio_only_live(&facts(&[(A, AUDIO_ONLY_TRACK_NAME, false)])));
+        assert!(audio_only_live(&facts(&[(
+            A,
+            AUDIO_ONLY_TRACK_NAME,
+            false
+        )])));
         // Leftovers of earlier screen shares are muted: still audio-only.
-        assert!(audio_only_live(&facts(&[(V, "screenshare", true), (V, "screenshare", true), (A, "screenshare_audio", true), (A, AUDIO_ONLY_TRACK_NAME, false)])));
+        assert!(audio_only_live(&facts(&[
+            (V, "screenshare", true),
+            (V, "screenshare", true),
+            (A, "screenshare_audio", true),
+            (A, AUDIO_ONLY_TRACK_NAME, false)
+        ])));
         // A screen share is on (with its own audio, or the audio-only track still unmuted).
-        assert!(!audio_only_live(&facts(&[(V, "screenshare", false), (A, "screenshare_audio", false)])));
-        assert!(!audio_only_live(&facts(&[(V, "screenshare", false), (A, AUDIO_ONLY_TRACK_NAME, false)])));
+        assert!(!audio_only_live(&facts(&[
+            (V, "screenshare", false),
+            (A, "screenshare_audio", false)
+        ])));
+        assert!(!audio_only_live(&facts(&[
+            (V, "screenshare", false),
+            (A, AUDIO_ONLY_TRACK_NAME, false)
+        ])));
         // The audio-only track is muted (between shares, or a screen share's own sound is on).
-        assert!(!audio_only_live(&facts(&[(A, AUDIO_ONLY_TRACK_NAME, true)])));
+        assert!(!audio_only_live(&facts(&[(
+            A,
+            AUDIO_ONLY_TRACK_NAME,
+            true
+        )])));
         assert!(!audio_only_live(&facts(&[(A, "screenshare_audio", false)])));
         // Other sources never count.
-        assert!(!audio_only_live(&facts(&[(TrackSource::Microphone, AUDIO_ONLY_TRACK_NAME, false)])));
+        assert!(!audio_only_live(&facts(&[(
+            TrackSource::Microphone,
+            AUDIO_ONLY_TRACK_NAME,
+            false
+        )])));
     }
 }

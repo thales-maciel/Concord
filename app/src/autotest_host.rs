@@ -1,9 +1,9 @@
 //! Host mode and invites, end to end in real apps (v0.8; a child module of `autotest`).
 //!
-//! - `host-a`: creates a server in host mode ("Criar servidor"), which runs inside this app on the
+//! - `host-a`: creates a server in host mode ("Create server"), which runs inside this app on the
 //!   test ports (`VOX_HOST_FIRST_BLOCK=1`: 7990 / 7980-7982) with the network part off
 //!   (`VOX_HOST_OFFLINE=1`: the router is never touched), logs into it through 127.0.0.1 (and so
-//!   becomes its Dono), sets its personal password, makes an invite and writes the code to
+//!   becomes its Owner), sets its personal password, makes an invite and writes the code to
 //!   `<--mode dir>/invite.txt`. Once B has chatted and joined voice, A joins too, then revokes the
 //!   invite (`revoked.txt`), waits for C's verdict (`c-done.txt`) and stops the server.
 //! - `host-b`: has only the code: joins with it, chats, joins voice, sees A there.
@@ -59,7 +59,11 @@ impl Auto {
                 if self.logged_in(app) {
                     let st = app.host.status();
                     let me = app.me.clone().map(|u| (u.username, u.role));
-                    log(&format!("running {:?} on {:?}, logged in as {me:?}", st.as_ref().map(|s| s.ports), st.as_ref().and_then(|s| s.hub_addr)));
+                    log(&format!(
+                        "running {:?} on {:?}, logged in as {me:?}",
+                        st.as_ref().map(|s| s.ports),
+                        st.as_ref().and_then(|s| s.hub_addr)
+                    ));
                     if me.as_ref().map(|m| m.1) != Some(Role::Owner) {
                         return self.fail("the host is not the Dono of its own server");
                     }
@@ -69,15 +73,28 @@ impl Auto {
                     } else {
                         self.goto(3, "Dono already protected");
                     }
-                } else if self.waited(90) || (app.form.error.is_some() && !app.form.busy && app.screen == Screen::Connect && !app.host.hosting()) {
-                    return self.fail(&format!("the hosted server did not come up: {:?} / {:?}", app.form.error, app.host.status().map(|s| s.phase)));
+                } else if self.waited(90)
+                    || (app.form.error.is_some()
+                        && !app.form.busy
+                        && app.screen == Screen::Connect
+                        && !app.host.hosting())
+                {
+                    return self.fail(&format!(
+                        "the hosted server did not come up: {:?} / {:?}",
+                        app.form.error,
+                        app.host.status().map(|s| s.phase)
+                    ));
                 }
             }
             2 => {
                 if let Some((false, e)) = &app.roles.pw_msg {
                     return self.fail(&format!("personal password failed: {e}"));
                 }
-                if app.roles.account.is_some_and(|a| a.has_password && !a.must_set_password) {
+                if app
+                    .roles
+                    .account
+                    .is_some_and(|a| a.has_password && !a.must_set_password)
+                {
                     self.goto(3, "personal password set");
                 } else if self.waited(15) {
                     return self.fail("the personal password was not confirmed");
@@ -108,9 +125,17 @@ impl Auto {
             }
             5 => {
                 let me = app.my_id();
-                let b = app.voice_members.values().find(|m| Some(m.user.id) != me && m.channel_id.is_some()).cloned();
+                let b = app
+                    .voice_members
+                    .values()
+                    .find(|m| Some(m.user.id) != me && m.channel_id.is_some())
+                    .cloned();
                 if let Some(b) = b.filter(|_| Self::saw_message(app, &self.host_tag("hello"))) {
-                    log(&format!("{} chatted and is in voice; online here: {}", b.user.username, app.online.len()));
+                    log(&format!(
+                        "{} chatted and is in voice; online here: {}",
+                        b.user.username,
+                        app.online.len()
+                    ));
                     app.join_voice(b.channel_id.unwrap_or_default());
                     self.goto(6, "joining B in voice");
                 } else if self.waited(150) {
@@ -127,12 +152,17 @@ impl Auto {
                 }
             }
             7 if self.waited(4) => {
-                let Some(id) = self.host.invite else { return self.fail("no invite id") };
+                let Some(id) = self.host.invite else {
+                    return self.fail("no invite id");
+                };
                 app.invite_cmd(InviteCmd::Revoke(id));
                 self.goto(8, "revoking the invite");
             }
             8 => {
-                let revoked = app.host.inv.list.iter().any(|i| Some(i.id) == self.host.invite && i.state(crate::app::now_ms()) == InviteState::Revoked);
+                let revoked = app.host.inv.list.iter().any(|i| {
+                    Some(i.id) == self.host.invite
+                        && i.state(crate::app::now_ms()) == InviteState::Revoked
+                });
                 if revoked {
                     let _ = std::fs::write(self.host_dir().join("revoked.txt"), "revoked");
                     self.goto(9, "revoked; waiting for C's attempt");
@@ -161,7 +191,10 @@ impl Auto {
                     log("server stopped");
                     return self.pass();
                 } else if self.waited(20) {
-                    return self.fail(&format!("the server did not stop: {:?}", app.host.status().map(|s| s.phase)));
+                    return self.fail(&format!(
+                        "the server did not stop: {:?}",
+                        app.host.status().map(|s| s.phase)
+                    ));
                 }
             }
             _ => {}
@@ -188,25 +221,44 @@ impl Auto {
             1 => {
                 if self.logged_in(app) {
                     let me = app.me.clone().map(|u| (u.username, u.role));
-                    log(&format!("joined {} at {} as {me:?}", app.server_name, app.form.url));
+                    log(&format!(
+                        "joined {} at {} as {me:?}",
+                        app.server_name, app.form.url
+                    ));
                     if vox_proto::looks_like_invite(&app.form.url) {
                         return self.fail("the address field still shows the code");
                     }
-                    if app.settings.device_token(&crate::backend::normalize_url(&app.session_url), &self.args.name).is_none() {
+                    if app
+                        .settings
+                        .device_token(
+                            &crate::backend::normalize_url(&app.session_url),
+                            &self.args.name,
+                        )
+                        .is_none()
+                    {
                         return self.fail("no device token kept for next time");
                     }
                     let tag = self.host_tag("hello");
                     Self::say(app, &tag);
-                    let Some(vc) = Self::first_voice(app) else { return self.fail("no voice channel") };
+                    let Some(vc) = Self::first_voice(app) else {
+                        return self.fail("no voice channel");
+                    };
                     app.join_voice(vc);
                     self.goto(2, "chatted; joining voice");
                 } else if self.waited(40) || (app.form.error.is_some() && !app.form.busy) {
-                    return self.fail(&format!("could not join with the invite: {:?}", app.form.error));
+                    return self.fail(&format!(
+                        "could not join with the invite: {:?}",
+                        app.form.error
+                    ));
                 }
             }
             2 => {
                 if app.voice.channel.is_some() && Self::saw_message(app, &self.host_tag("ok")) {
-                    let a_here = app.voice_members.values().filter(|m| m.channel_id == app.voice.channel).count();
+                    let a_here = app
+                        .voice_members
+                        .values()
+                        .filter(|m| m.channel_id == app.voice.channel)
+                        .count();
                     log(&format!("in voice with {a_here} people"));
                     if a_here < 2 {
                         return self.fail("A is not in the voice channel");
@@ -234,7 +286,8 @@ impl Auto {
                     }
                     return None;
                 }
-                let code = std::fs::read_to_string(self.host_dir().join("invite.txt")).unwrap_or_default();
+                let code =
+                    std::fs::read_to_string(self.host_dir().join("invite.txt")).unwrap_or_default();
                 app.form.url = code.trim().to_string();
                 app.form.user = self.args.name.clone();
                 app.connect();
@@ -250,7 +303,7 @@ impl Auto {
                 }
                 if let Some(e) = app.form.error.clone().filter(|_| !app.form.busy) {
                     log(&format!("refused: {e}"));
-                    if !e.contains("cancelado") {
+                    if !e.contains("revoked") {
                         report(&format!("wrong message: {e}"));
                         return self.fail(&format!("unexpected message: {e}"));
                     }

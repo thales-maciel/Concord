@@ -13,8 +13,9 @@
 use windows::core::Interface;
 use windows::Win32::Media::DirectShow::{IAMCameraControl, IAMVideoProcAmp};
 use windows::Win32::Media::KernelStreaming::{
-    IKsControl, KSIDENTIFIER, KSPROPERTY_CAMERACONTROL_AUTO_EXPOSURE_PRIORITY, KSPROPERTY_CAMERACONTROL_S,
-    KSPROPERTY_TYPE_GET, KSPROPERTY_TYPE_SET, PROPSETID_VIDCAP_CAMERACONTROL,
+    IKsControl, KSIDENTIFIER, KSPROPERTY_CAMERACONTROL_AUTO_EXPOSURE_PRIORITY,
+    KSPROPERTY_CAMERACONTROL_S, KSPROPERTY_TYPE_GET, KSPROPERTY_TYPE_SET,
+    PROPSETID_VIDCAP_CAMERACONTROL,
 };
 use windows::Win32::Media::MediaFoundation::IMFMediaSource;
 
@@ -46,13 +47,19 @@ fn kind_of(id: CameraControlId) -> Kind {
         CameraControlId::Zoom => Kind::Cam(3),
         CameraControlId::Exposure => Kind::Cam(4),
         CameraControlId::Focus => Kind::Cam(6),
-        CameraControlId::ExposurePriority => Kind::Ks(KSPROPERTY_CAMERACONTROL_AUTO_EXPOSURE_PRIORITY.0),
+        CameraControlId::ExposurePriority => {
+            Kind::Ks(KSPROPERTY_CAMERACONTROL_AUTO_EXPOSURE_PRIORITY.0)
+        }
     }
 }
 
 enum Backend {
     None,
-    Mf { amp: Option<IAMVideoProcAmp>, cam: Option<IAMCameraControl>, ks: Option<IKsControl> },
+    Mf {
+        amp: Option<IAMVideoProcAmp>,
+        cam: Option<IAMCameraControl>,
+        ks: Option<IKsControl>,
+    },
     Fake,
 }
 
@@ -64,7 +71,10 @@ pub(crate) struct Controls {
 
 impl Controls {
     pub(crate) fn none() -> Self {
-        Self { backend: Backend::None, list: Vec::new() }
+        Self {
+            backend: Backend::None,
+            list: Vec::new(),
+        }
     }
 
     /// Ask the media source which controls it has.
@@ -72,9 +82,14 @@ impl Controls {
         let amp = source.cast::<IAMVideoProcAmp>().ok();
         let cam = source.cast::<IAMCameraControl>().ok();
         let ks = source.cast::<IKsControl>().ok();
-        let mut c = Self { backend: Backend::Mf { amp, cam, ks }, list: Vec::new() };
+        let mut c = Self {
+            backend: Backend::Mf { amp, cam, ks },
+            list: Vec::new(),
+        };
         for id in CameraControlId::ALL {
-            let Some((min, max, step, default, caps)) = c.hw_range(id) else { continue };
+            let Some((min, max, step, default, caps)) = c.hw_range(id) else {
+                continue;
+            };
             if max <= min {
                 continue;
             }
@@ -136,14 +151,20 @@ impl Controls {
     /// Automatic exposure is on. `None` when the camera has no exposure control (then a slow
     /// camera cannot be blamed on the light).
     pub(crate) fn exposure_auto(&self) -> Option<bool> {
-        self.list.iter().find(|c| c.id == CameraControlId::Exposure).map(|c| c.auto)
+        self.list
+            .iter()
+            .find(|c| c.id == CameraControlId::Exposure)
+            .map(|c| c.auto)
     }
 
     /// Automatic exposure may lower the frame rate in a dim room: exposure is automatic and the
     /// camera's auto-exposure priority (when it has one) allows it.
     pub(crate) fn may_slow_down(&self) -> Option<bool> {
         let auto = self.exposure_auto()?;
-        let priority = self.list.iter().find(|c| c.id == CameraControlId::ExposurePriority);
+        let priority = self
+            .list
+            .iter()
+            .find(|c| c.id == CameraControlId::ExposurePriority);
         Some(auto && priority.is_none_or(|p| p.value > p.min))
     }
 
@@ -152,7 +173,11 @@ impl Controls {
         let mut p = KSPROPERTY_CAMERACONTROL_S::default();
         p.Property.Anonymous.Anonymous.Set = PROPSETID_VIDCAP_CAMERACONTROL;
         p.Property.Anonymous.Anonymous.Id = id as u32;
-        p.Property.Anonymous.Anonymous.Flags = if set.is_some() { KSPROPERTY_TYPE_SET } else { KSPROPERTY_TYPE_GET };
+        p.Property.Anonymous.Anonymous.Flags = if set.is_some() {
+            KSPROPERTY_TYPE_SET
+        } else {
+            KSPROPERTY_TYPE_GET
+        };
         if let Some(v) = set {
             p.Value = v;
             p.Flags = FLAG_MANUAL as u32;
@@ -161,17 +186,33 @@ impl Controls {
         let mut out = p;
         let mut got = 0u32;
         // SAFETY: both buffers are a whole KSPROPERTY_CAMERACONTROL_S, as the property expects.
-        unsafe { ks.KsProperty(&p.Property as *const KSIDENTIFIER, size, &mut out as *mut _ as *mut _, size, &mut got)? };
+        unsafe {
+            ks.KsProperty(
+                &p.Property as *const KSIDENTIFIER,
+                size,
+                &mut out as *mut _ as *mut _,
+                size,
+                &mut got,
+            )?
+        };
         Ok(if set.is_some() { p.Value } else { out.Value })
     }
 
     fn hw_range(&self, id: CameraControlId) -> Option<(i32, i32, i32, i32, i32)> {
-        let Backend::Mf { amp, cam, ks } = &self.backend else { return None };
+        let Backend::Mf { amp, cam, ks } = &self.backend else {
+            return None;
+        };
         let (mut min, mut max, mut step, mut def, mut caps) = (0, 0, 0, 0, 0);
         let ok = unsafe {
             match kind_of(id) {
-                Kind::Amp(p) => amp.as_ref()?.GetRange(p, &mut min, &mut max, &mut step, &mut def, &mut caps).is_ok(),
-                Kind::Cam(p) => cam.as_ref()?.GetRange(p, &mut min, &mut max, &mut step, &mut def, &mut caps).is_ok(),
+                Kind::Amp(p) => amp
+                    .as_ref()?
+                    .GetRange(p, &mut min, &mut max, &mut step, &mut def, &mut caps)
+                    .is_ok(),
+                Kind::Cam(p) => cam
+                    .as_ref()?
+                    .GetRange(p, &mut min, &mut max, &mut step, &mut def, &mut caps)
+                    .is_ok(),
                 // An on / off property: present when it can be read. Its "default" is what the
                 // camera had when it was opened (restoring it puts the camera back as found).
                 Kind::Ks(p) => {
@@ -185,7 +226,9 @@ impl Controls {
     }
 
     fn hw_get(&self, id: CameraControlId) -> Option<(i32, bool)> {
-        let Backend::Mf { amp, cam, ks } = &self.backend else { return None };
+        let Backend::Mf { amp, cam, ks } = &self.backend else {
+            return None;
+        };
         let (mut v, mut flags) = (0, 0);
         let ok = unsafe {
             match kind_of(id) {
@@ -201,12 +244,16 @@ impl Controls {
     }
 
     fn hw_set(&self, id: CameraControlId, value: i32, flags: i32) -> windows_core::Result<()> {
-        let Backend::Mf { amp, cam, ks } = &self.backend else { return Ok(()) };
+        let Backend::Mf { amp, cam, ks } = &self.backend else {
+            return Ok(());
+        };
         unsafe {
             match kind_of(id) {
                 Kind::Amp(p) => amp.as_ref().map_or(Ok(()), |a| a.Set(p, value, flags)),
                 Kind::Cam(p) => cam.as_ref().map_or(Ok(()), |a| a.Set(p, value, flags)),
-                Kind::Ks(p) => ks.as_ref().map_or(Ok(()), |k| Self::ks(k, p, Some(value)).map(|_| ())),
+                Kind::Ks(p) => ks
+                    .as_ref()
+                    .map_or(Ok(()), |k| Self::ks(k, p, Some(value)).map(|_| ())),
             }
         }
     }
@@ -227,10 +274,16 @@ impl Controls {
 
     /// Apply one change and read the control back (the driver may round or refuse).
     pub(crate) fn set(&mut self, adj: CameraAdjust) {
-        let Some(i) = self.list.iter().position(|c| c.id == adj.id) else { return };
+        let Some(i) = self.list.iter().position(|c| c.id == adj.id) else {
+            return;
+        };
         let c = self.list[i];
         // Automatic only where the driver has it; manual only where it allows it.
-        let auto = if adj.auto { c.can_auto } else { !c.can_manual && c.can_auto };
+        let auto = if adj.auto {
+            c.can_auto
+        } else {
+            !c.can_manual && c.can_auto
+        };
         let value = c.snap(adj.value);
         let flags = if auto { FLAG_AUTO } else { FLAG_MANUAL };
         match self.backend {
@@ -265,12 +318,20 @@ impl Controls {
             .filter(|c| id.is_none_or(|i| i == c.id))
             .map(|c| {
                 let (value, auto) = c.default_setting();
-                CameraAdjust { id: c.id, value, auto }
+                CameraAdjust {
+                    id: c.id,
+                    value,
+                    auto,
+                }
             })
             .collect();
         // Manual values first, automatic modes last: an automatic control ignores its value, and
         // some drivers refuse a manual value while another control is automatic.
-        for a in todo.iter().filter(|a| !a.auto).chain(todo.iter().filter(|a| a.auto)) {
+        for a in todo
+            .iter()
+            .filter(|a| !a.auto)
+            .chain(todo.iter().filter(|a| a.auto))
+        {
             self.set(*a);
         }
     }
@@ -296,7 +357,8 @@ impl CtlQueue {
     pub(crate) fn push_set(&mut self, a: CameraAdjust) {
         // A later set of the same control replaces the earlier one (and anything before a
         // reset of everything is moot).
-        self.ops.retain(|o| !matches!(o, Op::Set(x) if x.id == a.id));
+        self.ops
+            .retain(|o| !matches!(o, Op::Set(x) if x.id == a.id));
         self.ops.push(Op::Set(a));
     }
 
@@ -338,8 +400,16 @@ mod tests {
     #[test]
     fn queue_keeps_the_newest_set_per_control() {
         let mut q = CtlQueue::default();
-        let b = |v| CameraAdjust { id: CameraControlId::Brightness, value: v, auto: false };
-        let c = |v| CameraAdjust { id: CameraControlId::Contrast, value: v, auto: false };
+        let b = |v| CameraAdjust {
+            id: CameraControlId::Brightness,
+            value: v,
+            auto: false,
+        };
+        let c = |v| CameraAdjust {
+            id: CameraControlId::Contrast,
+            value: v,
+            auto: false,
+        };
         q.push_set(b(1));
         q.push_set(c(5));
         q.push_set(b(2));
@@ -351,7 +421,11 @@ mod tests {
     #[test]
     fn reset_all_drops_older_requests() {
         let mut q = CtlQueue::default();
-        let b = CameraAdjust { id: CameraControlId::Brightness, value: 9, auto: false };
+        let b = CameraAdjust {
+            id: CameraControlId::Brightness,
+            value: 9,
+            auto: false,
+        };
         q.push_set(b);
         q.push_reset(None);
         q.push_set(b);
@@ -366,17 +440,44 @@ mod tests {
         let mut c = Controls::fake();
         assert_eq!(c.exposure_auto(), Some(true));
         // Manual exposure snaps into the range.
-        c.set(CameraAdjust { id: CameraControlId::Exposure, value: -50, auto: false });
-        let e = c.list().iter().find(|x| x.id == CameraControlId::Exposure).copied().unwrap();
+        c.set(CameraAdjust {
+            id: CameraControlId::Exposure,
+            value: -50,
+            auto: false,
+        });
+        let e = c
+            .list()
+            .iter()
+            .find(|x| x.id == CameraControlId::Exposure)
+            .copied()
+            .unwrap();
         assert_eq!((e.value, e.auto), (-11, false));
         assert_eq!(c.exposure_auto(), Some(false));
         // White balance 4567 K lands on the 10 K grid.
-        c.set(CameraAdjust { id: CameraControlId::WhiteBalance, value: 4567, auto: false });
-        let w = c.list().iter().find(|x| x.id == CameraControlId::WhiteBalance).copied().unwrap();
+        c.set(CameraAdjust {
+            id: CameraControlId::WhiteBalance,
+            value: 4567,
+            auto: false,
+        });
+        let w = c
+            .list()
+            .iter()
+            .find(|x| x.id == CameraControlId::WhiteBalance)
+            .copied()
+            .unwrap();
         assert_eq!(w.value, 4570);
         // A control without automatic mode ignores `auto`.
-        c.set(CameraAdjust { id: CameraControlId::Brightness, value: 10, auto: true });
-        let b = c.list().iter().find(|x| x.id == CameraControlId::Brightness).copied().unwrap();
+        c.set(CameraAdjust {
+            id: CameraControlId::Brightness,
+            value: 10,
+            auto: true,
+        });
+        let b = c
+            .list()
+            .iter()
+            .find(|x| x.id == CameraControlId::Brightness)
+            .copied()
+            .unwrap();
         assert_eq!((b.value, b.auto), (10, false));
         // Reset: everything back to default, automatic where there is one.
         c.reset(None);
@@ -395,14 +496,34 @@ mod tests {
         let mut c = Controls::fake();
         // Automatic exposure, priority on (the camera's default): dim light lowers the rate.
         assert_eq!(c.may_slow_down(), Some(true));
-        c.set(CameraAdjust { id: CameraControlId::ExposurePriority, value: 0, auto: false });
+        c.set(CameraAdjust {
+            id: CameraControlId::ExposurePriority,
+            value: 0,
+            auto: false,
+        });
         assert_eq!(c.may_slow_down(), Some(false), "frame rate kept");
-        c.set(CameraAdjust { id: CameraControlId::ExposurePriority, value: 1, auto: false });
-        c.set(CameraAdjust { id: CameraControlId::Exposure, value: -5, auto: false });
-        assert_eq!(c.may_slow_down(), Some(false), "manual exposure never slows down");
+        c.set(CameraAdjust {
+            id: CameraControlId::ExposurePriority,
+            value: 1,
+            auto: false,
+        });
+        c.set(CameraAdjust {
+            id: CameraControlId::Exposure,
+            value: -5,
+            auto: false,
+        });
+        assert_eq!(
+            c.may_slow_down(),
+            Some(false),
+            "manual exposure never slows down"
+        );
         // A camera without the priority control: automatic exposure alone decides.
         c.list.retain(|x| x.id != CameraControlId::ExposurePriority);
-        c.set(CameraAdjust { id: CameraControlId::Exposure, value: 0, auto: true });
+        c.set(CameraAdjust {
+            id: CameraControlId::Exposure,
+            value: 0,
+            auto: true,
+        });
         assert_eq!(c.may_slow_down(), Some(true));
         c.list.retain(|x| x.id != CameraControlId::Exposure);
         assert_eq!(c.may_slow_down(), None);

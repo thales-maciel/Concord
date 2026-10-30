@@ -5,9 +5,9 @@
 //! text channel), C is a bystander. The phases:
 //!
 //! 1. B has the channel open and in front: A writes; nothing counts, nothing sounds.
-//! 2. B is behind another window ("Só mensagens diretas e menções", the default): a channel line
+//! 2. B is behind another window ("Direct messages and mentions only", the default): a channel line
 //!    counts as unread and asks for the soft channel sound, but no Windows notification.
-//! 3. B asks for "Todas as mensagens": the next line also raises the notification (title, preview),
+//! 3. B asks for "All messages": the next line also raises the notification (title, preview),
 //!    the taskbar flash and the badge.
 //! 4. A writes a DM: B's DM counter, the DM sound, the notification and the badge (DMs only).
 //! 5. B comes to the front: the open channel is read by itself, opening the DM reads it; the badge
@@ -17,7 +17,7 @@
 //! 7. (`VOX_TRAY_TEST=1`) the tray: the close button hides the window (really hidden, the tray
 //!    icon kept), the app idles for 8 s measuring its CPU, A writes and the hidden app still
 //!    receives it, notifies and counts; a tray click brings the window back; a clicked
-//!    notification opens the channel; "Sair" closes the app with exit code 0.
+//!    notification opens the channel; "Quit" closes the app with exit code 0.
 //!
 //! C must never see anything of the DM between A and B. Everything is recorded, not shown: the
 //! Windows notification and the flash are only counted unless `VOX_NOTIFY_REAL=1`, and with
@@ -70,7 +70,10 @@ fn window_state(_app: &App) -> (bool, bool) {
 fn cpu_time() -> u64 {
     use windows_sys::Win32::Foundation::FILETIME;
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
-    let z = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+    let z = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
     let (mut c, mut e, mut k, mut u) = (z, z, z, z);
     // SAFETY: plain query with live out-pointers.
     unsafe { GetProcessTimes(GetCurrentProcess(), &mut c, &mut e, &mut k, &mut u) };
@@ -81,7 +84,9 @@ fn cpu_time() -> u64 {
 #[cfg(windows)]
 fn window_state(app: &App) -> (bool, bool) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindowVisible};
-    let Some(h) = app.video.parent else { return (false, false) };
+    let Some(h) = app.video.parent else {
+        return (false, false);
+    };
     // SAFETY: queries on our own window.
     unsafe { (IsWindowVisible(h as _) != 0, IsIconic(h as _) != 0) }
 }
@@ -103,7 +108,11 @@ impl Auto {
 
     fn nt_ready(&mut self, app: &mut App, n: u32) {
         let content = self.nt_tag(&format!("ntready {n}"));
-        app.backend.send(Cmd::SendMessage { channel: self.nt.ch, content, extras: Default::default() });
+        app.backend.send(Cmd::SendMessage {
+            channel: self.nt.ch,
+            content,
+            extras: Default::default(),
+        });
         log(&format!("told A I am ready for phase {n}"));
     }
 
@@ -120,7 +129,10 @@ impl Auto {
     }
 
     fn nt_wait_ready(&mut self, app: &App, timeout: u64) -> Result<bool, Option<i32>> {
-        if self.logged_in(app) && Self::nt_online(app, &self.nt_name('A')).is_some() && Self::nt_online(app, &self.nt_name('C')).is_some() {
+        if self.logged_in(app)
+            && Self::nt_online(app, &self.nt_name('A')).is_some()
+            && Self::nt_online(app, &self.nt_name('C')).is_some()
+        {
             return Ok(true);
         }
         if self.waited(timeout) {
@@ -169,7 +181,12 @@ impl Auto {
                         self.nt.done = n;
                         return None;
                     }
-                    7 => self.nt.pending = Some((Instant::now() + Duration::from_secs(REST_SECS + 1), self.nt_tag("nt7"))),
+                    7 => {
+                        self.nt.pending = Some((
+                            Instant::now() + Duration::from_secs(REST_SECS + 1),
+                            self.nt_tag("nt7"),
+                        ))
+                    }
                     8 => {
                         Self::say(app, &self.nt_tag("ntdone"));
                         self.nt.pending = None;
@@ -227,10 +244,19 @@ impl Auto {
                     if s.sounds.is_empty() || s.balloons == 0 {
                         return self.fail("the channel lines raised no sound or notification here");
                     }
-                    if !app.dms.convs.is_empty() || app.dms.total_unread() != 0 || !app.dms.logs.is_empty() || app.dms.dm_alerts != 0 {
+                    if !app.dms.convs.is_empty()
+                        || app.dms.total_unread() != 0
+                        || !app.dms.logs.is_empty()
+                        || app.dms.dm_alerts != 0
+                    {
                         return self.fail("the DM between A and B leaked to a bystander");
                     }
-                    if app.logs.values().flat_map(|l| &l.msgs).any(|m| m.content.contains("nt4")) {
+                    if app
+                        .logs
+                        .values()
+                        .flat_map(|l| &l.msgs)
+                        .any(|m| m.content.contains("nt4"))
+                    {
                         return self.fail("the DM text shows up in a channel log");
                     }
                     return self.pass();
@@ -269,8 +295,15 @@ impl Auto {
             2 => {
                 if Self::saw_message(app, &self.nt_tag("nt1")) {
                     let s = &app.notify.stats;
-                    if Self::nt_unread(app, self.nt.ch) != 0 || s.sounds.len() != self.nt.sounds || s.balloons != self.nt.balloons || s.flashes != self.nt.flashes {
-                        return self.fail(&format!("the open channel in front was not silent: unread {}, {s:?}", Self::nt_unread(app, self.nt.ch)));
+                    if Self::nt_unread(app, self.nt.ch) != 0
+                        || s.sounds.len() != self.nt.sounds
+                        || s.balloons != self.nt.balloons
+                        || s.flashes != self.nt.flashes
+                    {
+                        return self.fail(&format!(
+                            "the open channel in front was not silent: unread {}, {s:?}",
+                            Self::nt_unread(app, self.nt.ch)
+                        ));
                     }
                     log("phase 1 ok: the conversation I am reading is silent");
                     self.goto(3, "phase 1 done");
@@ -288,10 +321,17 @@ impl Auto {
                 if Self::saw_message(app, &self.nt_tag("nt2")) {
                     let s = app.notify.stats.clone();
                     let unread = Self::nt_unread(app, self.nt.ch);
-                    if unread != 1 || s.sounds.len() != self.nt.sounds + 1 || s.sounds.last() != Some(&"channel_message") {
-                        return self.fail(&format!("phase 2: unread {unread}, sounds {:?}", s.sounds));
+                    if unread != 1
+                        || s.sounds.len() != self.nt.sounds + 1
+                        || s.sounds.last() != Some(&"channel_message")
+                    {
+                        return self
+                            .fail(&format!("phase 2: unread {unread}, sounds {:?}", s.sounds));
                     }
-                    if s.balloons != self.nt.balloons || s.flashes != self.nt.flashes || s.badge != 0 {
+                    if s.balloons != self.nt.balloons
+                        || s.flashes != self.nt.flashes
+                        || s.badge != 0
+                    {
                         return self.fail(&format!("phase 2: the default setting must not notify Windows about a channel line: {s:?}"));
                     }
                     log("phase 2 ok: unread 1, channel sound, no Windows notification, no badge");
@@ -310,17 +350,34 @@ impl Auto {
                 if Self::saw_message(app, &self.nt_tag("nt3")) {
                     let s = app.notify.stats.clone();
                     let unread = Self::nt_unread(app, self.nt.ch);
-                    let want_title = format!("{a_name} em #{}", app.channels.iter().find(|c| c.id == self.nt.ch).map(|c| c.name.as_str()).unwrap_or("?"));
+                    let want_title = format!(
+                        "{a_name} em #{}",
+                        app.channels
+                            .iter()
+                            .find(|c| c.id == self.nt.ch)
+                            .map(|c| c.name.as_str())
+                            .unwrap_or("?")
+                    );
                     if unread != 2 || s.sounds.len() != self.nt.sounds + 1 {
-                        return self.fail(&format!("phase 3: unread {unread}, sounds {:?}", s.sounds));
+                        return self
+                            .fail(&format!("phase 3: unread {unread}, sounds {:?}", s.sounds));
                     }
-                    if s.balloons != self.nt.balloons + 1 || s.flashes <= self.nt.flashes || s.last_balloon.as_ref() != Some(&(want_title.clone(), self.nt_tag("nt3"))) {
-                        return self.fail(&format!("phase 3: notification wrong (wanted {want_title:?}): {s:?}"));
+                    if s.balloons != self.nt.balloons + 1
+                        || s.flashes <= self.nt.flashes
+                        || s.last_balloon.as_ref()
+                            != Some(&(want_title.clone(), self.nt_tag("nt3")))
+                    {
+                        return self.fail(&format!(
+                            "phase 3: notification wrong (wanted {want_title:?}): {s:?}"
+                        ));
                     }
                     if s.badge != 2 {
                         return self.fail(&format!("phase 3: badge {} instead of 2", s.badge));
                     }
-                    log(&format!("phase 3 ok: unread 2, notification {:?}, flashes {}, badge {}", s.last_balloon, s.flashes, s.badge));
+                    log(&format!(
+                        "phase 3 ok: unread 2, notification {:?}, flashes {}, badge {}",
+                        s.last_balloon, s.flashes, s.badge
+                    ));
                     self.goto(7, "phase 3 done");
                 } else if self.waited(30) {
                     return self.fail("A's phase-3 line never came");
@@ -335,19 +392,34 @@ impl Auto {
             8 => {
                 let a = Self::nt_online(app, &a_name)?;
                 let conv = app.dms.conv_with(a.id).cloned();
-                if conv.as_ref().and_then(|c| c.last_message.as_ref()).is_some_and(|m| m.content == self.nt_tag("nt4")) {
+                if conv
+                    .as_ref()
+                    .and_then(|c| c.last_message.as_ref())
+                    .is_some_and(|m| m.content == self.nt_tag("nt4"))
+                {
                     let c = conv?;
                     let s = app.notify.stats.clone();
                     if c.unread != 1 || app.dms.dm_alerts != self.nt.dm_alerts + 1 {
-                        return self.fail(&format!("phase 4: DM unread {}, DM sounds {} (was {})", c.unread, app.dms.dm_alerts, self.nt.dm_alerts));
+                        return self.fail(&format!(
+                            "phase 4: DM unread {}, DM sounds {} (was {})",
+                            c.unread, app.dms.dm_alerts, self.nt.dm_alerts
+                        ));
                     }
-                    if s.balloons != self.nt.balloons + 1 || s.last_balloon.as_ref() != Some(&(a_name.clone(), self.nt_tag("nt4"))) {
+                    if s.balloons != self.nt.balloons + 1
+                        || s.last_balloon.as_ref() != Some(&(a_name.clone(), self.nt_tag("nt4")))
+                    {
                         return self.fail(&format!("phase 4: notification wrong: {s:?}"));
                     }
                     if s.badge != 1 {
-                        return self.fail(&format!("phase 4: the badge counts only DMs here: {} instead of 1", s.badge));
+                        return self.fail(&format!(
+                            "phase 4: the badge counts only DMs here: {} instead of 1",
+                            s.badge
+                        ));
                     }
-                    log(&format!("phase 4 ok: DM unread 1, DM sound, notification {:?}, badge 1", s.last_balloon));
+                    log(&format!(
+                        "phase 4 ok: DM unread 1, DM sound, notification {:?}, badge 1",
+                        s.last_balloon
+                    ));
                     self.goto(9, "phase 4 done");
                 } else if self.waited(30) {
                     return self.fail("A's DM never came");
@@ -361,19 +433,27 @@ impl Auto {
             10 => {
                 let a = Self::nt_online(app, &a_name)?;
                 if Self::nt_unread(app, self.nt.ch) == 0 {
-                    if app.dms.conv_with(a.id).map(|c| c.unread) != Some(1) || app.notify.stats.badge != 1 {
+                    if app.dms.conv_with(a.id).map(|c| c.unread) != Some(1)
+                        || app.notify.stats.badge != 1
+                    {
                         return self.fail("phase 5: the DM must still be unread until opened");
                     }
                     let dm = app.dms.conv_with(a.id)?.id;
                     app.select_dm(dm);
-                    self.goto(11, "the open channel was read by coming to the front; opened the DM");
+                    self.goto(
+                        11,
+                        "the open channel was read by coming to the front; opened the DM",
+                    );
                 } else if self.waited(5) {
-                    return self.fail("phase 5: the open channel stayed unread after coming to the front");
+                    return self
+                        .fail("phase 5: the open channel stayed unread after coming to the front");
                 }
             }
             11 => {
                 let a = Self::nt_online(app, &a_name)?;
-                if app.dms.conv_with(a.id).map(|c| c.unread) == Some(0) && app.notify.stats.badge == 0 {
+                if app.dms.conv_with(a.id).map(|c| c.unread) == Some(0)
+                    && app.notify.stats.badge == 0
+                {
                     log("phase 5 ok: opening the DM read it, the badge is gone");
                     // Phase 6: back to the channel, behind another window, A blocked.
                     app.select_text(self.nt.ch);
@@ -385,7 +465,11 @@ impl Auto {
                     self.nt_ready(app, 6);
                     self.goto(12, "A is blocked; phase 6");
                 } else if self.waited(5) {
-                    return self.fail(&format!("phase 5: DM unread {:?}, badge {}", app.dms.conv_with(a.id).map(|c| c.unread), app.notify.stats.badge));
+                    return self.fail(&format!(
+                        "phase 5: DM unread {:?}, badge {}",
+                        app.dms.conv_with(a.id).map(|c| c.unread),
+                        app.notify.stats.badge
+                    ));
                 }
             }
             12 => {
@@ -396,7 +480,12 @@ impl Auto {
                     }
                     let s = app.notify.stats.clone();
                     let unread = Self::nt_unread(app, self.nt.ch);
-                    if unread != 0 || s.sounds.len() != self.nt.sounds || s.balloons != self.nt.balloons || s.flashes != self.nt.flashes || s.badge != 0 {
+                    if unread != 0
+                        || s.sounds.len() != self.nt.sounds
+                        || s.balloons != self.nt.balloons
+                        || s.flashes != self.nt.flashes
+                        || s.badge != 0
+                    {
                         return self.fail(&format!("phase 6: a blocked person's line must be silent: unread {unread}, {s:?}"));
                     }
                     let a = Self::nt_online(app, &a_name)?;
@@ -429,7 +518,8 @@ impl Auto {
                 if let Some(dm) = dm {
                     app.select_dm(dm); // so the clicked notification has somewhere to move us from
                 }
-                app.repaint_ctx().send_viewport_cmd(eframe::egui::ViewportCommand::Close);
+                app.repaint_ctx()
+                    .send_viewport_cmd(eframe::egui::ViewportCommand::Close);
                 self.goto(14, "pressed the window's close button; phase 7");
             }
             14 => {
@@ -441,7 +531,10 @@ impl Auto {
                     self.nt.cpu0 = Some((cpu_time(), Instant::now()));
                     self.goto(REST_STEP, "hidden; resting");
                 } else if self.waited(5) {
-                    return self.fail(&format!("the close button did not hide the window (hidden {}, visible {visible})", app.notify.hidden));
+                    return self.fail(&format!(
+                        "the close button did not hide the window (hidden {}, visible {visible})",
+                        app.notify.hidden
+                    ));
                 }
             }
             REST_STEP => {
@@ -452,11 +545,19 @@ impl Auto {
                     log(&format!("hidden for {secs:.1} s: {cpu:.3} s of CPU = {:.2} % of one core (the message that ended the rest included)", 100.0 * cpu / secs));
                     let s = app.notify.stats.clone();
                     let unread = Self::nt_unread(app, self.nt.ch);
-                    if s.balloons != self.nt.balloons + 1 || s.sounds.len() != self.nt.sounds + 1 || unread == 0 {
-                        return self.fail(&format!("phase 7: the hidden app did not notify: unread {unread}, {s:?}"));
+                    if s.balloons != self.nt.balloons + 1
+                        || s.sounds.len() != self.nt.sounds + 1
+                        || unread == 0
+                    {
+                        return self.fail(&format!(
+                            "phase 7: the hidden app did not notify: unread {unread}, {s:?}"
+                        ));
                     }
                     if 100.0 * cpu / secs > 3.0 {
-                        return self.fail(&format!("a hidden window used {:.1} % of a core", 100.0 * cpu / secs));
+                        return self.fail(&format!(
+                            "a hidden window used {:.1} % of a core",
+                            100.0 * cpu / secs
+                        ));
                     }
                     log("phase 7: the hidden app received the message, counted it, played the sound and raised the notification");
                     app.notify.simulate(TrayEvent::Open);
@@ -472,7 +573,8 @@ impl Auto {
                     // Hide again, with the DM open, then click the notification.
                     let dm = app.dms.convs.first().map(|c| c.id)?;
                     app.select_dm(dm);
-                    app.repaint_ctx().send_viewport_cmd(eframe::egui::ViewportCommand::Close);
+                    app.repaint_ctx()
+                        .send_viewport_cmd(eframe::egui::ViewportCommand::Close);
                     self.goto(18, "closed again");
                 } else if self.waited(8) {
                     return self.fail(&format!("the tray click did not restore the window (hidden {}, visible {visible}, minimized {iconic})", app.notify.hidden));
@@ -490,7 +592,10 @@ impl Auto {
                 let (visible, _) = window_state(app);
                 let opened = app.selected == Some(self.nt.ch) && app.dms.selected.is_none();
                 if visible && !app.notify.hidden && opened {
-                    log(&format!("phase 7: the clicked notification restored the window on {:?}", Target::Channel(self.nt.ch)));
+                    log(&format!(
+                        "phase 7: the clicked notification restored the window on {:?}",
+                        Target::Channel(self.nt.ch)
+                    ));
                     self.nt_ready(app, 8);
                     self.goto(21, "told A; then \"Sair\"");
                 } else if self.waited(8) {
@@ -498,7 +603,7 @@ impl Auto {
                 }
             }
             21 if self.waited(2) => {
-                // "Sair" ends the process, so the verdict is written first (exit code 0).
+                // "Quit" ends the process, so the verdict is written first (exit code 0).
                 crate::EXIT_CODE.store(0, std::sync::atomic::Ordering::Relaxed);
                 tracing::info!(target: "autotest", "AUTOTEST {:?} RESULT: PASS if \"Sair\" closes the app now (t+{:.1}s)", self.role, self.started.elapsed().as_secs_f32());
                 app.notify.simulate(TrayEvent::Quit);

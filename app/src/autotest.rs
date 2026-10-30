@@ -39,7 +39,7 @@ pub enum Role {
     /// watches both at once.
     MultiA,
     MultiB,
-    /// Audio-only Go Live ("Só áudio"): A shares just audio, B listens (see `AoState`).
+    /// Audio-only Go Live ("Audio only"): A shares just audio, B listens (see `AoState`).
     AudioA,
     AudioB,
     /// Audio-only Go Live seen from outside the voice room: logged in, never joins voice.
@@ -90,8 +90,8 @@ pub enum Role {
     HostA,
     HostB,
     HostC,
-    /// "Configurar câmera" (v0.8.1): the window with the synthetic camera, a control changed,
-    /// applied and saved, "Priorizar fluidez", "Restaurar padrão" (see `autotest_camwin.rs`).
+    /// "Configure camera" (v0.8.1): the window with the synthetic camera, a control changed,
+    /// applied and saved, "Prioritize smoothness", "Restore defaults" (see `autotest_camwin.rs`).
     CamWin,
     /// v0.8.2 fixes: deleting my own messages (with images, channel and DM), a new picture after
     /// the newest was deleted shows its own thumbnail, a deleted and recreated channel starts
@@ -104,7 +104,7 @@ pub enum Role {
     PrivA,
     PrivB,
     PrivC,
-    /// The saved server list (v0.9.1): migration, saving, one click, "Trocar de servidor", the
+    /// The saved server list (v0.9.1): migration, saving, one click, "Switch server", the
     /// form asking only for what is missing, removal (see `autotest_srvlist.rs`). Two runs of the
     /// same role (`--mode phase1` / `phase2`) share a `--settings-dir`.
     SrvList,
@@ -112,7 +112,7 @@ pub enum Role {
     /// other (`shots`), saved with `VOX_AUTOTEST_SHOT_DIR` (see `autotest_shots.rs`).
     Kit,
     Shots,
-    /// v1.0 phase 3a: the secondary windows (each settings section, Configurar câmera, the
+    /// v1.0 phase 3a: the secondary windows (each settings section, Configure camera, the
     /// soundboard and its trim editor, the voice changer, the Go Live picker), saved the same way.
     Shots3,
     /// v1.0 navigation and the center modes (see `autotest_nav.rs`): `nav-a` (the owner) checks the
@@ -131,8 +131,8 @@ pub enum Role {
     Shots3bHost,
     /// v1.0.1: the concord home screen and the Calladex easter egg (see `autotest_shots.rs`):
     /// "calladex" typed on the home screen opens the credits; in a channel, `/calladex` opens the
-    /// card and is not sent, while a message that only contains the word is; then Configurações →
-    /// Sobre. Partners: one or more `idle` clients (the members on the card).
+    /// card and is not sent, while a message that only contains the word is; then Settings →
+    /// About. Partners: one or more `idle` clients (the members on the card).
     Calladex,
     /// v1.1 macOS (M2): watch a stream drawn by the app itself, pinned, fullscreen, popped out and
     /// back (see `autotest_macview.rs`). Partner: anyone live (`vox-cli share h264file`).
@@ -179,20 +179,20 @@ mod hosttest;
 mod camwin;
 #[path = "autotest_fix.rs"]
 mod fixtest;
-#[path = "autotest_private.rs"]
-mod privtest;
-#[path = "autotest_srvlist.rs"]
-mod srvlist;
-#[path = "autotest_shots.rs"]
-pub mod shots;
-#[path = "autotest_nav.rs"]
-mod navtest;
-#[path = "autotest_stage.rs"]
-mod stagetest;
-#[path = "autotest_shots3b.rs"]
-mod shots3b;
 #[path = "autotest_macview.rs"]
 mod macview;
+#[path = "autotest_nav.rs"]
+mod navtest;
+#[path = "autotest_private.rs"]
+mod privtest;
+#[path = "autotest_shots.rs"]
+pub mod shots;
+#[path = "autotest_shots3b.rs"]
+mod shots3b;
+#[path = "autotest_srvlist.rs"]
+mod srvlist;
+#[path = "autotest_stage.rs"]
+mod stagetest;
 
 /// Command-line parameters of an autotest run.
 #[derive(Default)]
@@ -202,7 +202,7 @@ pub struct AutoArgs {
     pub password: String,
     /// Window to share (role `a`).
     pub hwnd: Option<isize>,
-    /// Role `a`: halfway through the hold, switch the live to this window ("Trocar tela").
+    /// Role `a`: halfway through the hold, switch the live to this window ("Switch screen").
     pub switch_hwnd: Option<isize>,
     /// Seconds role `a` keeps the Go Live running.
     pub hold_secs: u64,
@@ -211,7 +211,7 @@ pub struct AutoArgs {
     /// `golive` / `settings`: open that dialog once connected (for layout checks). Role `b`:
     /// `settings` opens the settings dialog over the inline stream (airspace check).
     pub show: Option<String>,
-    /// Role `b`: the "Abrir transmissões em janela separada" setting is on.
+    /// Role `b`: the "Open streams in a separate window" setting is on.
     pub popout: bool,
     /// Role `b`: seconds to keep watching after the checks (CPU / RAM measurements).
     pub watch_secs: u64,
@@ -226,7 +226,7 @@ pub struct AutoArgs {
     /// view shown).
     pub mode: Option<String>,
     /// Roles `audio-a` / `audio-b`: the process whose sound A shares (`--mode app`), the one it
-    /// switches to halfway ("Trocar app"), Alta (256 kbps) instead of Normal, and whether A
+    /// switches to halfway ("Switch app"), Alta (256 kbps) instead of Normal, and whether A
     /// also turns into a screen share and back (with `--switch-hwnd`).
     pub audio_pid: Option<u32>,
     pub switch_pid: Option<u32>,
@@ -254,7 +254,7 @@ pub struct Auto {
     opened: bool,
     last_line: Option<Instant>,
     change_checked: bool,
-    /// "Trocar tela" requested / confirmed by the app (role `a`).
+    /// "Switch screen" requested / confirmed by the app (role `a`).
     switch_sent: bool,
     switch_done: bool,
     /// Role `a`: B showed up in my viewer list / left it again (item 7).
@@ -390,7 +390,13 @@ impl Auto {
     fn resting(&self) -> bool {
         match self.role {
             // The picker scripts (item 8c) keep ticking until they are done (step 9).
-            Role::Idle => self.step >= 2 && !(matches!(self.args.show.as_deref(), Some("golive-cycle") | Some("golive-pick") | Some("previews")) && self.step < 9),
+            Role::Idle => {
+                self.step >= 2
+                    && !(matches!(
+                        self.args.show.as_deref(),
+                        Some("golive-cycle") | Some("golive-pick") | Some("previews")
+                    ) && self.step < 9)
+            }
             Role::Voice => self.step >= 8 && self.waited(3),
             // Hidden in the tray, idling: nothing ticks until the hub says something (CPU measurement).
             Role::NotifyB => self.step == nttest::REST_STEP,
@@ -415,7 +421,11 @@ impl Auto {
     fn quiet_done(&mut self, app: &App) -> Option<u64> {
         if self.quiet_until.is_some_and(|t| Instant::now() >= t) {
             self.quiet_until = None;
-            Some(app.repaint_ctx().cumulative_frame_nr().saturating_sub(self.quiet_frames))
+            Some(
+                app.repaint_ctx()
+                    .cumulative_frame_nr()
+                    .saturating_sub(self.quiet_frames),
+            )
         } else {
             None
         }
@@ -450,7 +460,7 @@ impl Auto {
     /// the first login from 127.0.0.1 is the owner) gets "Defina sua senha
     /// pessoal" right after logging in. It is a centred window, so it covers the middle of the
     /// call view and the native video tiles under it are hidden on purpose. Roles that are not
-    /// about item 12 answer it the way a user does, with "Agora não"; `mod-a` sets the password
+    /// about item 12 answer it the way a user does, with "Not now"; `mod-a` sets the password
     /// itself (and `--show prompt` keeps the prompt up for a look).
     fn answer_password_prompt(&mut self, app: &mut App) {
         if self.role == Role::ModA || app.roles.prompt_later || app.me.is_none() {
@@ -458,7 +468,7 @@ impl Auto {
         }
         if app.roles.supported && app.roles.account.is_some_and(|a| a.must_set_password) {
             app.roles.prompt_later = true;
-            tracing::info!(target: "autotest", "AUTOTEST {:?}: answered the owner's password prompt with \"Agora não\"", self.role);
+            tracing::info!(target: "autotest", "AUTOTEST {:?}: answered the owner's password prompt with \"Not now\"", self.role);
         }
     }
 
@@ -524,7 +534,10 @@ impl Auto {
         self.lvl_min = self.lvl_min.min(g.level_db());
         self.thr_last = g.threshold_db();
         self.opened |= g.is_open();
-        if self.last_line.is_none_or(|t| t.elapsed() >= Duration::from_millis(500)) {
+        if self
+            .last_line
+            .is_none_or(|t| t.elapsed() >= Duration::from_millis(500))
+        {
             self.last_line = Some(Instant::now());
             tracing::info!(target: "autotest", "AUTOTEST sample: level {:.1} dBFS, threshold {:.1}, open={}, ptt={}", g.level_db(), g.threshold_db(), g.is_open(), g.ptt());
         }
@@ -549,7 +562,10 @@ impl Auto {
                     app.start_mic_test();
                     self.goto(2, "mic test requested");
                 } else if self.waited(30) || app.form.error.is_some() {
-                    return self.fail(&format!("could not log in: {}", app.form.error.clone().unwrap_or_default()));
+                    return self.fail(&format!(
+                        "could not log in: {}",
+                        app.form.error.clone().unwrap_or_default()
+                    ));
                 }
             }
             2 => match app.settings_ui.mic_test.clone() {
@@ -559,15 +575,23 @@ impl Auto {
                     self.goto(3, "sampling the meter outside voice");
                 }
                 MicTestUi::Off => {
-                    return self.fail(&format!("mic test did not start: {:?}", app.settings_ui.mic_test_error));
+                    return self.fail(&format!(
+                        "mic test did not start: {:?}",
+                        app.settings_ui.mic_test_error
+                    ));
                 }
-                MicTestUi::Starting if self.waited(15) => return self.fail("mic test still opening after 15 s"),
+                MicTestUi::Starting if self.waited(15) => {
+                    return self.fail("mic test still opening after 15 s")
+                }
                 MicTestUi::Starting => {}
             },
             3 => {
                 let g = app.gate_test.clone();
                 self.sample(&g);
-                let secs = std::env::var("VOX_AUTOTEST_METER_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(6);
+                let secs = std::env::var("VOX_AUTOTEST_METER_SECS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(6);
                 if self.waited(secs) {
                     tracing::info!(target: "autotest", "AUTOTEST meter (test, no voice): level {:.1}..{:.1} dBFS, threshold {:.1}, gate opened={}", self.lvl_min, self.lvl_max, self.thr_last, self.opened);
                     if self.lvl_max <= -99.0 {
@@ -595,10 +619,17 @@ impl Auto {
                 self.sample(&gv);
                 if self.waited(3) && gv.config().mode == GateMode::Auto {
                     // Change the sensitivity mid-call: the very next chunks must use it.
-                    app.settings.input_gate = GateConfig { mode: GateMode::Manual, threshold_db: -33.0, hold_ms: 500 };
+                    app.settings.input_gate = GateConfig {
+                        mode: GateMode::Manual,
+                        threshold_db: -33.0,
+                        hold_ms: 500,
+                    };
                     app.apply_gate_config();
                 }
-                if !self.change_checked && gv.config().mode == GateMode::Manual && self.step_at.elapsed() > Duration::from_millis(3500) {
+                if !self.change_checked
+                    && gv.config().mode == GateMode::Manual
+                    && self.step_at.elapsed() > Duration::from_millis(3500)
+                {
                     self.change_checked = true;
                     let (t1, t2) = (gv.threshold_db(), gt.threshold_db());
                     tracing::info!(target: "autotest", "AUTOTEST mid-call change: voice threshold {t1:.1}, test threshold {t2:.1} (wanted -33)");
@@ -641,20 +672,32 @@ impl Auto {
 
     /// One line about the picker's memory: egui textures alive and whether it holds anything.
     fn log_picker(app: &App, what: &str) {
-        let tex = app.repaint.ctx().map(|c| c.tex_manager().read().num_allocated()).unwrap_or(0);
+        let tex = app
+            .repaint
+            .ctx()
+            .map(|c| c.tex_manager().read().num_allocated())
+            .unwrap_or(0);
         tracing::info!(target: "autotest", "AUTOTEST {what}: egui textures={tex} picker_idle={} dialog_open={}", app.golive.picker.is_idle(), app.golive.open);
     }
 
     fn first_text(app: &App) -> Option<i64> {
-        app.channels.iter().find(|c| c.kind == ChannelKind::Text).map(|c| c.id)
+        app.channels
+            .iter()
+            .find(|c| c.kind == ChannelKind::Text)
+            .map(|c| c.id)
     }
 
     fn first_voice(app: &App) -> Option<i64> {
-        app.channels.iter().find(|c| c.kind == ChannelKind::Voice).map(|c| c.id)
+        app.channels
+            .iter()
+            .find(|c| c.kind == ChannelKind::Voice)
+            .map(|c| c.id)
     }
 
     fn saw_message(app: &App, prefix: &str) -> bool {
-        app.logs.values().any(|l| l.msgs.iter().any(|m| m.content.starts_with(prefix)))
+        app.logs
+            .values()
+            .any(|l| l.msgs.iter().any(|m| m.content.starts_with(prefix)))
     }
 
     fn say(app: &mut App, text: &str) {
@@ -676,7 +719,7 @@ impl Auto {
                     }
                     match self.args.show.as_deref() {
                         Some("golive") | Some("golive-cycle") => app.open_golive(),
-                        // "Só áudio" picker: apps with their icons and "Todo o som do PC".
+                        // "Audio only" picker: apps with their icons and "All PC audio".
                         Some("golive-audio") => {
                             app.golive.mode = crate::app::ShareMode::AudioOnly;
                             app.open_golive();
@@ -689,10 +732,12 @@ impl Auto {
                             app.golive.pick = Some(Pick::Monitor(0));
                         }
                         Some("golive-pick") => app.open_golive(),
-                        // "Trocar tela" picker over a pretend live on screen 1 (the "transmitindo
+                        // "Switch screen" picker over a pretend live on screen 1 (the "transmitindo
                         // agora" mark); nothing is sent anywhere.
                         Some("golive-switch") => {
-                            app.voice.share = Share::Live { encoder: "test".into() };
+                            app.voice.share = Share::Live {
+                                encoder: "test".into(),
+                            };
                             app.voice.share_pick = Some(Pick::Monitor(0));
                             app.open_golive_switch();
                         }
@@ -705,17 +750,17 @@ impl Auto {
                             if let Some(ch) = Self::first_text(app) {
                                 app.select_text(ch);
                                 for text in [
-                                    "olha esse vídeo https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-                                    "wiki https://en.wikipedia.org/wiki/Rust_(programming_language) e o código https://github.com/rust-lang/rust",
+                                    "watch this video https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                                    "wiki https://en.wikipedia.org/wiki/Rust_(programming_language) and the code https://github.com/rust-lang/rust",
                                     "reel https://www.instagram.com/reel/DeRslJageXF/?dlrf=abc",
-                                    "interno http://192.168.1.1/admin e http://localhost:7890/api/health não geram cartão",
-                                    "só texto, sem link",
+                                    "internal http://192.168.1.1/admin and http://localhost:7890/api/health do not generate cards",
+                                    "text only, no link",
                                 ] {
                                     Self::say(app, text);
                                 }
                             }
                         }
-                        // "Configurar câmera" with its preview (layout / airspace check);
+                        // "Configure camera" with its preview (layout / airspace check);
                         // `camera-ctl` opens it from Settings (Settings waits behind it).
                         Some("camera") => app.open_camera_window(),
                         Some("camera-ctl") => {
@@ -725,7 +770,10 @@ impl Auto {
                         _ => {}
                     }
                 } else if self.waited(30) || app.form.error.is_some() {
-                    return self.fail(&format!("could not log in: {}", app.form.error.clone().unwrap_or_default()));
+                    return self.fail(&format!(
+                        "could not log in: {}",
+                        app.form.error.clone().unwrap_or_default()
+                    ));
                 }
             }
             2 if self.args.show.as_deref() == Some("previews") && self.waited(25) => {
@@ -742,7 +790,10 @@ impl Auto {
                 self.goto(9, "cards loaded; staying open for a look");
             }
             // Item 8c: the Go Live picker's thumbnails (and their textures) go away with the dialog.
-            2 if self.args.show.as_deref() == Some("golive-pick") && !app.golive.windows.is_empty() && self.waited(2) => {
+            2 if self.args.show.as_deref() == Some("golive-pick")
+                && !app.golive.windows.is_empty()
+                && self.waited(2) =>
+            {
                 app.golive.pick = app.golive.windows.first().map(|w| Pick::Window(w.hwnd));
                 self.goto(9, "picked the first window in the picker");
             }
@@ -814,7 +865,10 @@ impl Auto {
                     Self::say(app, &text);
                     self.goto(2, "logged in, message sent, waiting for B's message");
                 } else if self.waited(30) || app.form.error.is_some() {
-                    return self.fail(&format!("could not log in: {}", app.form.error.clone().unwrap_or_default()));
+                    return self.fail(&format!(
+                        "could not log in: {}",
+                        app.form.error.clone().unwrap_or_default()
+                    ));
                 }
             }
             2 => {
@@ -840,12 +894,19 @@ impl Auto {
             }
             4 => {
                 if app.members_here().len() >= 2 {
-                    let names: Vec<_> = app.members_here().iter().map(|m| m.user.username.clone()).collect();
+                    let names: Vec<_> = app
+                        .members_here()
+                        .iter()
+                        .map(|m| m.user.username.clone())
+                        .collect();
                     let Some(hwnd) = self.args.hwnd else {
                         return self.fail("no --hwnd given");
                     };
                     app.start_share(Pick::Window(hwnd), Preset::P1080p30, true);
-                    self.goto(5, &format!("voice members {names:?}; starting Go Live 1080p30"));
+                    self.goto(
+                        5,
+                        &format!("voice members {names:?}; starting Go Live 1080p30"),
+                    );
                 } else if self.waited(120) {
                     return self.fail("B never joined voice");
                 }
@@ -854,7 +915,10 @@ impl Auto {
                 if let Share::Live { encoder } = &app.voice.share {
                     let enc = encoder.clone();
                     let hold = self.args.hold_secs;
-                    self.goto(6, &format!("Go Live running, encoder={enc}; holding {hold}s"));
+                    self.goto(
+                        6,
+                        &format!("Go Live running, encoder={enc}; holding {hold}s"),
+                    );
                 } else if app.voice.share == Share::Off && self.waited(2) {
                     let msg = app.notice.clone().unwrap_or_default();
                     return self.fail(&format!("Go Live did not start: {msg}"));
@@ -897,7 +961,10 @@ impl Auto {
                         app.switch_share(Pick::Window(h2), true);
                         self.switch_sent = true;
                         tracing::info!(target: "autotest", "AUTOTEST A: Trocar tela -> window {h2}");
-                    } else if self.switch_sent && !self.switch_done && app.voice.switching_to.is_none() {
+                    } else if self.switch_sent
+                        && !self.switch_done
+                        && app.voice.switching_to.is_none()
+                    {
                         if !matches!(app.voice.share, Share::Live { .. }) {
                             return self.fail("the live ended during the switch");
                         }
@@ -913,12 +980,15 @@ impl Auto {
                 // stopping (viewer list cleared) is the signal; after a generous bound the
                 // checks below fail as before.
                 let b_watching = self.viewer_seen && !self.viewer_cleared;
-                if self.waited(self.args.hold_secs) && (!b_watching || self.waited(self.args.hold_secs + B_DONE_GRACE_SECS)) {
+                if self.waited(self.args.hold_secs)
+                    && (!b_watching || self.waited(self.args.hold_secs + B_DONE_GRACE_SECS))
+                {
                     if self.args.switch_hwnd.is_some() && !self.switch_done {
                         return self.fail("the switch never completed");
                     }
                     if app.viewers_supported && !self.viewer_seen {
-                        return self.fail("B watched my live but never showed up in the viewer list");
+                        return self
+                            .fail("B watched my live but never showed up in the viewer list");
                     }
                     if self.viewer_seen && !self.viewer_cleared {
                         return self.fail("B stopped watching but stayed in the viewer list");
@@ -950,7 +1020,10 @@ impl Auto {
                     app.select_text(ch);
                     self.goto(2, "logged in; waiting for A's message");
                 } else if self.waited(30) || app.form.error.is_some() {
-                    return self.fail(&format!("could not log in: {}", app.form.error.clone().unwrap_or_default()));
+                    return self.fail(&format!(
+                        "could not log in: {}",
+                        app.form.error.clone().unwrap_or_default()
+                    ));
                 }
             }
             2 => {
@@ -986,7 +1059,7 @@ impl Auto {
                 // Not within the first seconds after the hub snapshot: those alerts are muted on purpose,
                 // and A's "someone started watching" sound should be heard (logged) in this run.
                 if let Some((id, name)) = live.filter(|_| self.waited(5)) {
-                    // The sidebar's "Assistir": call view, focused on the stream.
+                    // The sidebar's "Watch": call view, focused on the stream.
                     app.watch_focused(&id.to_string());
                     self.goto(5, &format!("{name} is live; pressing Assistir (sidebar)"));
                 } else if self.waited(150) {
@@ -1042,14 +1115,19 @@ impl Auto {
                             let st = Self::view_state(app);
                             tracing::info!(target: "autotest", "AUTOTEST B popout mode: state {st:?}");
                             if !st.is_some_and(|s| s.popped_out && s.popout_hwnd != 0) {
-                                return self.fail("popout setting on, but the stream is not in its own window");
+                                return self.fail(
+                                    "popout setting on, but the stream is not in its own window",
+                                );
                             }
                             self.goto(29, "popout mode verified; holding");
                         } else {
                             self.goto(20, "frames verified; checking the inline view");
                         }
                     } else {
-                        return self.fail(&format!("viewer got no frames ({} -> {frames}, {w}x{h})", self.frames_first));
+                        return self.fail(&format!(
+                            "viewer got no frames ({} -> {frames}, {w}x{h})",
+                            self.frames_first
+                        ));
                     }
                 } else if self.waited(10) {
                     return self.fail("no stats reply");
@@ -1064,7 +1142,10 @@ impl Auto {
             }
             11 => {
                 let me = app.my_id();
-                let any_live = app.members_here().iter().any(|m| m.streaming && Some(m.user.id) != me);
+                let any_live = app
+                    .members_here()
+                    .iter()
+                    .any(|m| m.streaming && Some(m.user.id) != me);
                 if !any_live {
                     app.leave_voice();
                     self.goto(12, "A stopped Go Live; leaving voice");
@@ -1082,10 +1163,11 @@ impl Auto {
 
     /// The stream role `b` checks: the focused one if watched, else the first watched one.
     fn watched_key(app: &App) -> Option<String> {
-        app.focused_stream().or_else(|| app.voice.watching.first().cloned())
+        app.focused_stream()
+            .or_else(|| app.voice.watching.first().cloned())
     }
 
-    /// "Abrir em janela" / "Trazer de volta" on the checked stream.
+    /// "Open in a window" / "Bring back" on the checked stream.
     fn pop_out(app: &mut App, out: bool) {
         if let Some(k) = Self::watched_key(app) {
             app.pop_out_stream(&k, out);
@@ -1118,7 +1200,9 @@ impl Auto {
                 if placed.is_none() || !st.is_some_and(|s| !s.popped_out && s.presented > 0) {
                     return self.fail("the inline video is not placed / presenting");
                 }
-                let Some(ch) = Self::first_text(app) else { return self.fail("no text channel") };
+                let Some(ch) = Self::first_text(app) else {
+                    return self.fail("no text channel");
+                };
                 app.select_text(ch);
                 self.goto(21, "switched to the text channel (stream keeps running)");
             }
@@ -1138,7 +1222,13 @@ impl Auto {
                 if placed.is_none() {
                     return self.fail("no video in the grid tile");
                 }
-                app.pin_only(app.voice.watching.first().and_then(|k| k.parse().ok()).map(TileKey::Stream));
+                app.pin_only(
+                    app.voice
+                        .watching
+                        .first()
+                        .and_then(|k| k.parse().ok())
+                        .map(TileKey::Stream),
+                );
                 self.goto(23, "focused again");
             }
             23 if self.waited(2) => {
@@ -1185,11 +1275,14 @@ impl Auto {
                 if !st.is_some_and(|s| !s.popped_out) || placed.is_none() {
                     return self.fail("closing the pop-out did not bring the stream back inline");
                 }
-                // The focus toolbar's "Tela cheia" button.
+                // The focus toolbar's "Fullscreen" button.
                 self.win_rect = app.video.parent.and_then(win::window_rect);
                 let ctx = app.repaint_ctx();
                 app.set_fullscreen(&ctx, true);
-                self.goto(30, &format!("pressed Tela cheia (window was {:?})", self.win_rect));
+                self.goto(
+                    30,
+                    &format!("pressed Tela cheia (window was {:?})", self.win_rect),
+                );
             }
             29 if self.waited(self.args.watch_secs) => {
                 if let Some(st) = Self::view_state(app) {
@@ -1213,9 +1306,13 @@ impl Auto {
         let (wr, mr) = (win::window_rect(parent), win::monitor_rect(parent));
         let placed = Self::placed(app);
         tracing::info!(target: "autotest", "AUTOTEST B fullscreen ({how}): fullscreen={} window={wr:?} monitor={mr:?} placed={placed:?}", app.call.fullscreen);
-        let full = mr.is_some_and(|m| wr == Some(m) && placed.is_some_and(|p| p.2 == m.2 - m.0 && p.3 == m.3 - m.1));
+        let full = mr.is_some_and(|m| {
+            wr == Some(m) && placed.is_some_and(|p| p.2 == m.2 - m.0 && p.3 == m.3 - m.1)
+        });
         if !app.call.fullscreen || !full {
-            return Err(format!("{how} did not put the stream fullscreen over the monitor"));
+            return Err(format!(
+                "{how} did not put the stream fullscreen over the monitor"
+            ));
         }
         Ok(())
     }
@@ -1225,24 +1322,46 @@ impl Auto {
         let wr = app.video.parent.and_then(win::window_rect);
         let placed = Self::placed(app);
         tracing::info!(target: "autotest", "AUTOTEST B after leaving fullscreen ({how}): fullscreen={} window={wr:?} (was {:?}) placed={placed:?} focus={:?}", app.call.fullscreen, self.win_rect, app.focused_stream());
-        if app.call.fullscreen || wr != self.win_rect || placed.is_none() || app.focused_stream().as_ref() != app.voice.watching.first() {
-            return Err(format!("{how} did not bring back the focused view in the same window"));
+        if app.call.fullscreen
+            || wr != self.win_rect
+            || placed.is_none()
+            || app.focused_stream().as_ref() != app.voice.watching.first()
+        {
+            return Err(format!(
+                "{how} did not bring back the focused view in the same window"
+            ));
         }
         Ok(())
     }
 
     fn check_popout(&self, app: &App, fullscreen: bool, how: &str) -> Result<isize, String> {
-        let st = Self::view_state(app).filter(|s| s.popped_out && s.popout_hwnd != 0).ok_or("the stream is not in its own window")?;
-        let (wr, mr) = (win::window_rect(st.popout_hwnd), win::monitor_rect(st.popout_hwnd));
+        let st = Self::view_state(app)
+            .filter(|s| s.popped_out && s.popout_hwnd != 0)
+            .ok_or("the stream is not in its own window")?;
+        let (wr, mr) = (
+            win::window_rect(st.popout_hwnd),
+            win::monitor_rect(st.popout_hwnd),
+        );
         tracing::info!(target: "autotest", "AUTOTEST B pop-out ({how}): fullscreen={} window={wr:?} monitor={mr:?} (was {:?})", st.fullscreen, self.win_rect);
-        let ok = if fullscreen { st.fullscreen && wr.is_some() && wr == mr } else { !st.fullscreen && wr == self.win_rect };
+        let ok = if fullscreen {
+            st.fullscreen && wr.is_some() && wr == mr
+        } else {
+            !st.fullscreen && wr == self.win_rect
+        };
         if !ok {
-            return Err(format!("pop-out: {how} {}", if fullscreen { "did not cover the monitor" } else { "did not restore the window" }));
+            return Err(format!(
+                "pop-out: {how} {}",
+                if fullscreen {
+                    "did not cover the monitor"
+                } else {
+                    "did not restore the window"
+                }
+            ));
         }
         Ok(st.popout_hwnd)
     }
 
-    /// Fullscreen checks (role `b`, steps 30..41): the "Tela cheia" button, a double-click on
+    /// Fullscreen checks (role `b`, steps 30..41): the "Fullscreen" button, a double-click on
     /// the video and F11 enter it, Esc leaves it; then the same in the pop-out window
     /// (double-click / F11 toggle, Esc leaves). Every time the window must cover its monitor,
     /// and come back exactly where it was.
@@ -1252,10 +1371,12 @@ impl Auto {
         }
         let parent = app.video.parent.unwrap_or_default();
         let res: Result<(), String> = match self.step {
-            30 if self.waited(2) => self.check_app_fullscreen(app, "Tela cheia button").map(|_| {
-                win::key(parent, win::VK_ESCAPE);
-                self.goto(31, "pressed Esc");
-            }),
+            30 if self.waited(2) => self
+                .check_app_fullscreen(app, "Tela cheia button")
+                .map(|_| {
+                    win::key(parent, win::VK_ESCAPE);
+                    self.goto(31, "pressed Esc");
+                }),
             31 if self.waited(2) => self.check_app_restored(app, "Esc").and_then(|_| {
                 let (x, y, w, h) = Self::placed(app).ok_or("no video")?;
                 win::double_click(parent, x + w / 2, y + h / 2);
@@ -1284,7 +1405,10 @@ impl Auto {
                     Some(st) => {
                         self.win_rect = win::window_rect(st.popout_hwnd);
                         win::native_double_click(st.popout_hwnd);
-                        self.goto(37, &format!("double-clicked the pop-out (window {:?})", self.win_rect));
+                        self.goto(
+                            37,
+                            &format!("double-clicked the pop-out (window {:?})", self.win_rect),
+                        );
                         Ok(())
                     }
                     None => Err("Abrir em janela did not open the window".into()),
@@ -1310,7 +1434,10 @@ impl Auto {
                 let st = Self::view_state(app);
                 if st.is_some_and(|s| !s.popped_out) && Self::placed(app).is_some() {
                     let secs = self.args.watch_secs;
-                    self.goto(29, &format!("fullscreen checks done; watching {secs}s more"));
+                    self.goto(
+                        29,
+                        &format!("fullscreen checks done; watching {secs}s more"),
+                    );
                     Ok(())
                 } else {
                     Err(format!("the stream did not come back inline: {st:?}"))
@@ -1334,11 +1461,18 @@ fn close_window(hwnd: isize) {
 #[cfg(windows)]
 mod win {
     use windows_sys::Win32::Foundation::RECT;
-    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        MapVirtualKeyW, MAPVK_VK_TO_VSC, VIRTUAL_KEY,
+    };
     pub use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_F11};
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{MapVirtualKeyW, VIRTUAL_KEY, MAPVK_VK_TO_VSC};
     pub use windows_sys::Win32::UI::WindowsAndMessaging::WM_CLOSE;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowRect, PostMessageW, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowRect, PostMessageW, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
+        WM_LBUTTONUP, WM_MOUSEMOVE,
+    };
 
     const MK_LBUTTON: usize = 0x0001;
 
@@ -1351,9 +1485,15 @@ mod win {
     }
 
     pub fn window_rect(hwnd: isize) -> Option<Rect> {
-        let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        let mut r = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
         // SAFETY: valid out-pointer.
-        (unsafe { GetWindowRect(hwnd as _, &mut r) } != 0).then_some((r.left, r.top, r.right, r.bottom))
+        (unsafe { GetWindowRect(hwnd as _, &mut r) } != 0)
+            .then_some((r.left, r.top, r.right, r.bottom))
     }
 
     /// The monitor the window is (mostly) on.
@@ -1362,7 +1502,11 @@ mod win {
         unsafe {
             let mut mi: MONITORINFO = std::mem::zeroed();
             mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-            let r = (GetMonitorInfoW(MonitorFromWindow(hwnd as _, MONITOR_DEFAULTTONEAREST), &mut mi) != 0).then_some(mi.rcMonitor)?;
+            let r = (GetMonitorInfoW(
+                MonitorFromWindow(hwnd as _, MONITOR_DEFAULTTONEAREST),
+                &mut mi,
+            ) != 0)
+                .then_some(mi.rcMonitor)?;
             Some((r.left, r.top, r.right, r.bottom))
         }
     }
@@ -1422,10 +1566,14 @@ mod win {
 
 impl App {
     pub fn auto_tick(&mut self, ctx: &egui::Context) {
-        let Some(mut auto) = self.auto.take() else { return };
+        let Some(mut auto) = self.auto.take() else {
+            return;
+        };
         let done = auto.run(self);
         let auto_done_ticking = auto.resting();
-        let quiet = auto.quiet_until.map(|t| t.saturating_duration_since(Instant::now()));
+        let quiet = auto
+            .quiet_until
+            .map(|t| t.saturating_duration_since(Instant::now()));
         self.auto = Some(auto);
         match done {
             Some(code) => {
@@ -1466,13 +1614,21 @@ impl Auto {
             return None;
         }
         self.stats_req = false;
-        Some(app.stream_info.iter().find(|s| s.0.starts_with(prefix)).map(|s| s.1).unwrap_or(0))
+        Some(
+            app.stream_info
+                .iter()
+                .find(|s| s.0.starts_with(prefix))
+                .map(|s| s.1)
+                .unwrap_or(0),
+        )
     }
 
     /// The hub's `camera` flag of voice member `id` and what the sidebar / tile icon rule makes of
     /// it (`None`: not in a voice channel we can see).
     fn hub_camera(app: &App, id: i64) -> Option<(bool, bool)> {
-        app.voice_members.get(&id).map(|m| (m.camera, app.camera_flag_of(m)))
+        app.voice_members
+            .get(&id)
+            .map(|m| (m.camera, app.camera_flag_of(m)))
     }
 
     fn tile_state(key: &str) -> Option<vox_client_core::golive::StreamState> {
@@ -1489,11 +1645,16 @@ impl Auto {
             0 => self.connect(app),
             1 => {
                 if self.logged_in(app) {
-                    let Some(vc) = Self::first_voice(app) else { return self.fail("no voice channel") };
+                    let Some(vc) = Self::first_voice(app) else {
+                        return self.fail("no voice channel");
+                    };
                     app.join_voice(vc);
                     self.goto(2, "joining voice");
                 } else if self.waited(30) || app.form.error.is_some() {
-                    return self.fail(&format!("could not log in: {}", app.form.error.clone().unwrap_or_default()));
+                    return self.fail(&format!(
+                        "could not log in: {}",
+                        app.form.error.clone().unwrap_or_default()
+                    ));
                 }
             }
             2 => {
@@ -1506,7 +1667,7 @@ impl Auto {
             3 => {
                 if app.members_here().len() >= 2 && self.waited(2) {
                     app.toggle_camera();
-                    self.goto(4, "pressed Câmera");
+                    self.goto(4, "pressed Camera");
                 } else if self.waited(120) {
                     return self.fail("B never joined voice");
                 }
@@ -1521,8 +1682,12 @@ impl Auto {
                         self.goto(6, "camera on; holding");
                     }
                 }
-                CameraUi::Off => return self.fail(&format!("camera did not start: {:?}", app.notice)),
-                CameraUi::Starting if self.waited(20) => return self.fail("camera still starting after 20 s"),
+                CameraUi::Off => {
+                    return self.fail(&format!("camera did not start: {:?}", app.notice))
+                }
+                CameraUi::Starting if self.waited(20) => {
+                    return self.fail("camera still starting after 20 s")
+                }
                 CameraUi::Starting => {}
             },
             5 => {
@@ -1530,7 +1695,10 @@ impl Auto {
                     tracing::info!(target: "autotest", "AUTOTEST A camera and Go Live running together (camera={:?})", app.voice.camera);
                     self.goto(6, "camera + Go Live; holding");
                 } else if app.voice.share == Share::Off && self.waited(2) {
-                    return self.fail(&format!("Go Live did not start next to the camera: {:?}", app.notice));
+                    return self.fail(&format!(
+                        "Go Live did not start next to the camera: {:?}",
+                        app.notice
+                    ));
                 } else if self.waited(30) {
                     return self.fail("Go Live start timed out");
                 }
@@ -1548,14 +1716,23 @@ impl Auto {
                     let mine = app.my_id().and_then(|me| Self::hub_camera(app, me));
                     tracing::info!(target: "autotest", "AUTOTEST A own camera flag from the hub (flag, icon): {mine:?}");
                     if mine != Some((true, true)) {
-                        return self.fail(&format!("the hub did not report my camera as on: {mine:?}"));
+                        return self
+                            .fail(&format!("the hub did not report my camera as on: {mine:?}"));
                     }
                     self.self_view_checked = true;
                     self.stats_req = false;
                 }
-                if self.self_view_checked && !self.cam_stats_logged && self.waited(self.args.hold_secs / 2) {
+                if self.self_view_checked
+                    && !self.cam_stats_logged
+                    && self.waited(self.args.hold_secs / 2)
+                {
                     if let Some(f) = self.stats_frames(app, "camera") {
-                        let preview = app.stream_info.iter().find(|s| s.0 == "camera-preview").map(|s| s.1).unwrap_or(0);
+                        let preview = app
+                            .stream_info
+                            .iter()
+                            .find(|s| s.0 == "camera-preview")
+                            .map(|s| s.1)
+                            .unwrap_or(0);
                         tracing::info!(target: "autotest", "AUTOTEST A camera frames sent so far: {f}, self-view frames: {preview}");
                         self.cam_stats_logged = true;
                     }
@@ -1567,13 +1744,18 @@ impl Auto {
                 // Hold at least `hold_secs`, then until B signals that its checks are done (it
                 // deafens itself): B's checks take ~50 s and must not race the hold.
                 let me = app.my_id();
-                let b_done = app.members_here().iter().any(|m| Some(m.user.id) != me && m.deafened);
-                if self.waited(self.args.hold_secs) && (b_done || self.waited(self.args.hold_secs + B_DONE_GRACE_SECS)) {
+                let b_done = app
+                    .members_here()
+                    .iter()
+                    .any(|m| Some(m.user.id) != me && m.deafened);
+                if self.waited(self.args.hold_secs)
+                    && (b_done || self.waited(self.args.hold_secs + B_DONE_GRACE_SECS))
+                {
                     if !b_done {
                         tracing::warn!(target: "autotest", "AUTOTEST A: B never signalled the end of its checks; turning the camera off anyway");
                     }
                     app.toggle_camera();
-                    self.goto(7, "pressed Câmera again (off)");
+                    self.goto(7, "pressed Camera again (off)");
                 }
             }
             7 if self.waited(2) => {
@@ -1617,11 +1799,16 @@ impl Auto {
             0 => self.connect(app),
             1 => {
                 if self.logged_in(app) {
-                    let Some(vc) = Self::first_voice(app) else { return self.fail("no voice channel") };
+                    let Some(vc) = Self::first_voice(app) else {
+                        return self.fail("no voice channel");
+                    };
                     app.join_voice(vc);
                     self.goto(2, "joining voice");
                 } else if self.waited(30) || app.form.error.is_some() {
-                    return self.fail(&format!("could not log in: {}", app.form.error.clone().unwrap_or_default()));
+                    return self.fail(&format!(
+                        "could not log in: {}",
+                        app.form.error.clone().unwrap_or_default()
+                    ));
                 }
             }
             2 => {
@@ -1662,20 +1849,32 @@ impl Auto {
                         return self.fail(&format!("camera frames not flowing (+{d})"));
                     }
                     // The hub reports A's camera (flag) and the icon shows (sidebar / tile rule).
-                    let a = self.cam_of.as_deref().and_then(|i| i.parse::<i64>().ok()).unwrap_or(-1);
+                    let a = self
+                        .cam_of
+                        .as_deref()
+                        .and_then(|i| i.parse::<i64>().ok())
+                        .unwrap_or(-1);
                     let flag = Self::hub_camera(app, a);
                     tracing::info!(target: "autotest", "AUTOTEST B A's camera flag from the hub (flag, icon): {flag:?}");
                     if flag != Some((true, true)) {
-                        return self.fail(&format!("the hub did not report A's camera as on: {flag:?}"));
+                        return self.fail(&format!(
+                            "the hub did not report A's camera as on: {flag:?}"
+                        ));
                     }
-                    let Some(ch) = Self::first_text(app) else { return self.fail("no text channel") };
+                    let Some(ch) = Self::first_text(app) else {
+                        return self.fail("no text channel");
+                    };
                     app.select_text(ch);
                     self.goto(6, "switched to the chat (tiles hidden)");
                 }
             }
             6 if self.waited(2) => {
                 if let Some(f) = self.stats_frames(app, "cam-video") {
-                    let placed = app.video.placed.get(key.as_deref().unwrap_or_default()).copied();
+                    let placed = app
+                        .video
+                        .placed
+                        .get(key.as_deref().unwrap_or_default())
+                        .copied();
                     if placed.is_some() {
                         return self.fail("the camera tile stayed visible over the chat");
                     }
@@ -1703,17 +1902,32 @@ impl Auto {
             9 if self.waited(3) => {
                 if let Some(f) = self.stats_frames(app, "cam-video") {
                     let d = f - self.cam_frames[0];
-                    let placed = app.video.placed.get(key.as_deref().unwrap_or_default()).copied();
+                    let placed = app
+                        .video
+                        .placed
+                        .get(key.as_deref().unwrap_or_default())
+                        .copied();
                     tracing::info!(target: "autotest", "AUTOTEST B camera resumed: +{d} in ~3 s, placed={placed:?}");
                     if d < 20 || placed.is_none() {
-                        return self.fail(&format!("the camera did not resume (+{d}, placed={placed:?})"));
+                        return self.fail(&format!(
+                            "the camera did not resume (+{d}, placed={placed:?})"
+                        ));
                     }
-                    app.pin_only(self.cam_of.as_deref().and_then(|i| i.parse().ok()).map(TileKey::Member));
+                    app.pin_only(
+                        self.cam_of
+                            .as_deref()
+                            .and_then(|i| i.parse().ok())
+                            .map(TileKey::Member),
+                    );
                     self.goto(10, "focused the camera tile");
                 }
             }
             10 if self.waited(5) => {
-                let placed = app.video.placed.get(key.as_deref().unwrap_or_default()).copied();
+                let placed = app
+                    .video
+                    .placed
+                    .get(key.as_deref().unwrap_or_default())
+                    .copied();
                 tracing::info!(target: "autotest", "AUTOTEST B camera focused: placed={placed:?} (grid was {:?})", self.grid_rect);
                 let big = |r: Option<(i32, i32, i32, i32)>| r.map(|r| r.2 * r.3).unwrap_or(0);
                 if big(placed) <= big(self.grid_rect) {
@@ -1740,7 +1954,8 @@ impl Auto {
                     let d = f - self.cam_frames[0];
                     tracing::info!(target: "autotest", "AUTOTEST B camera frames while minimized: +{d} in ~4 s");
                     if d > 15 {
-                        return self.fail(&format!("the camera kept streaming while minimized (+{d})"));
+                        return self
+                            .fail(&format!("the camera kept streaming while minimized (+{d})"));
                     }
                     crate::app::simulate_minimized(false);
                     self.goto(13, "restored the window");
@@ -1757,35 +1972,53 @@ impl Auto {
                     let d = f - self.cam_frames[0];
                     tracing::info!(target: "autotest", "AUTOTEST B camera after restore: +{d} in ~3 s");
                     if d < 20 {
-                        return self.fail(&format!("the camera did not resume after restore (+{d})"));
+                        return self
+                            .fail(&format!("the camera did not resume after restore (+{d})"));
                     }
                     let secs = self.args.watch_secs;
-                    self.goto(15, &format!("watching the camera {secs}s more (measurements)"));
+                    self.goto(
+                        15,
+                        &format!("watching the camera {secs}s more (measurements)"),
+                    );
                 }
             }
             15 if self.waited(self.args.watch_secs) => {
                 if vox_client_core::golive::camera::probe_enabled() {
                     // Webcam configuration run: muting is A's cue to start changing its settings.
                     app.toggle_mute();
-                    self.goto(30, "asked A to mirror / rotate / zoom (muted: A's cue); watching its picture");
+                    self.goto(
+                        30,
+                        "asked A to mirror / rotate / zoom (muted: A's cue); watching its picture",
+                    );
                 } else {
                     // Tell A the checks are done (A turns the camera off once it sees it).
                     app.toggle_deafen();
-                    self.goto(16, "checks done (deafened: A's signal); waiting for A to turn the camera off");
+                    self.goto(
+                        16,
+                        "checks done (deafened: A's signal); waiting for A to turn the camera off",
+                    );
                 }
             }
-            30 => match self.camcfg_b(app) {
-                Some(Ok(())) => {
-                    tracing::info!(target: "autotest", "AUTOTEST B camera configuration verified");
-                    app.toggle_deafen();
-                    self.goto(16, "checks done (deafened: A's signal); waiting for A to turn the camera off");
+            30 => {
+                match self.camcfg_b(app) {
+                    Some(Ok(())) => {
+                        tracing::info!(target: "autotest", "AUTOTEST B camera configuration verified");
+                        app.toggle_deafen();
+                        self.goto(16, "checks done (deafened: A's signal); waiting for A to turn the camera off");
+                    }
+                    Some(Err(e)) => return self.fail(&e),
+                    None => {}
                 }
-                Some(Err(e)) => return self.fail(&e),
-                None => {}
-            },
+            }
             16 => {
-                let a = self.cam_of.as_deref().and_then(|i| i.parse::<i64>().ok()).unwrap_or(-1);
-                if app.voice.cameras.is_empty() && Self::hub_camera(app, a).is_some_and(|(flag, _)| !flag) {
+                let a = self
+                    .cam_of
+                    .as_deref()
+                    .and_then(|i| i.parse::<i64>().ok())
+                    .unwrap_or(-1);
+                if app.voice.cameras.is_empty()
+                    && Self::hub_camera(app, a).is_some_and(|(flag, _)| !flag)
+                {
                     self.goto(17, "A's camera is off (room and hub agree)");
                 } else if self.waited(90) {
                     return self.fail("A never turned the camera off");
@@ -1796,10 +2029,21 @@ impl Auto {
                 let placed = app.video.placed.get(&k).copied();
                 let st = Self::tile_state(&k);
                 tracing::info!(target: "autotest", "AUTOTEST B after camera off: placed={placed:?} state={st:?} pins={:?}", app.call.pins);
-                if placed.is_some() || st.is_some() || app.call.pins.iter().any(|p| matches!(p, TileKey::Member(_))) {
+                if placed.is_some()
+                    || st.is_some()
+                    || app
+                        .call
+                        .pins
+                        .iter()
+                        .any(|p| matches!(p, TileKey::Member(_)))
+                {
                     return self.fail("the camera tile was not cleared");
                 }
-                let a = self.cam_of.as_deref().and_then(|i| i.parse::<i64>().ok()).unwrap_or(-1);
+                let a = self
+                    .cam_of
+                    .as_deref()
+                    .and_then(|i| i.parse::<i64>().ok())
+                    .unwrap_or(-1);
                 let flag = Self::hub_camera(app, a);
                 tracing::info!(target: "autotest", "AUTOTEST B A's camera flag after off (flag, icon): {flag:?}");
                 if flag != Some((false, false)) {
@@ -1840,7 +2084,10 @@ impl Auto {
     }
 
     fn pv_placed(app: &App) -> Option<(i32, i32, i32, i32)> {
-        app.video.placed.get(vox_client_core::golive::SELF_SHARE_KEY).copied()
+        app.video
+            .placed
+            .get(vox_client_core::golive::SELF_SHARE_KEY)
+            .copied()
     }
 
     fn note_video(&mut self) {
@@ -1868,7 +2115,10 @@ impl Auto {
                 let st = Self::pv_state();
                 let placed = Self::pv_placed(app);
                 let viewers = app.my_id().map(|me| app.viewers_of(me)).unwrap_or_default();
-                log(&format!("tile placed={placed:?} state={st:?} viewers={viewers:?} center={:?}", app.center));
+                log(&format!(
+                    "tile placed={placed:?} state={st:?} viewers={viewers:?} center={:?}",
+                    app.center
+                ));
                 if placed.is_none() || !st.is_some_and(|s| s.presented > 0 && s.video.0 > 0) {
                     return self.fail("my stream tile is not placed / presenting the preview");
                 }
@@ -1879,9 +2129,14 @@ impl Auto {
                 let (d, dt) = self.pv_take(app)?;
                 let rate = d as f64 / dt;
                 let st = Self::pv_state();
-                log(&format!("grid: {d} frames in {dt:.1}s = {rate:.1} fps, video {:?}", st.map(|s| s.video)));
+                log(&format!(
+                    "grid: {d} frames in {dt:.1}s = {rate:.1} fps, video {:?}",
+                    st.map(|s| s.video)
+                ));
                 if !(2.5..=8.0).contains(&rate) {
-                    return self.fail(&format!("grid preview rate {rate:.1} fps, expected about 5"));
+                    return self.fail(&format!(
+                        "grid preview rate {rate:.1} fps, expected about 5"
+                    ));
                 }
                 self.pv_video = st.map(|s| s.video).unwrap_or_default();
                 app.pin_only(app.my_id().map(TileKey::Stream));
@@ -1900,9 +2155,13 @@ impl Auto {
                 let area = |r: Option<(i32, i32, i32, i32)>| r.map(|r| r.2 * r.3).unwrap_or(0);
                 log(&format!("focused: {d} frames in {dt:.1}s = {rate:.1} fps, video {:?} (grid {:?}), tile {placed:?} (grid {:?})", st.map(|s| s.video), self.pv_video, self.grid_rect));
                 if rate < 10.5 {
-                    return self.fail(&format!("focused preview rate {rate:.1} fps, expected about 15"));
+                    return self.fail(&format!(
+                        "focused preview rate {rate:.1} fps, expected about 15"
+                    ));
                 }
-                if area(placed) <= area(self.grid_rect) || !st.is_some_and(|s| s.video.0 > self.pv_video.0) {
+                if area(placed) <= area(self.grid_rect)
+                    || !st.is_some_and(|s| s.video.0 > self.pv_video.0)
+                {
                     return self.fail("the focused preview is not bigger than in the grid");
                 }
                 app.pin_only(None);
@@ -1918,9 +2177,13 @@ impl Auto {
                 let rate = d as f64 / dt;
                 log(&format!("unfocused again: {rate:.1} fps"));
                 if rate > 8.0 {
-                    return self.fail(&format!("the preview stayed fast after unfocusing ({rate:.1} fps)"));
+                    return self.fail(&format!(
+                        "the preview stayed fast after unfocusing ({rate:.1} fps)"
+                    ));
                 }
-                let Some(ch) = Self::first_text(app) else { return self.fail("no text channel") };
+                let Some(ch) = Self::first_text(app) else {
+                    return self.fail("no text channel");
+                };
                 app.select_text(ch);
                 self.goto(36, "switched to the chat (tile hidden)");
             }
@@ -1966,7 +2229,9 @@ impl Auto {
                 let (d, dt) = self.pv_take(app)?;
                 log(&format!("minimized: +{d} frames in {dt:.1}s"));
                 if d > 1 {
-                    return self.fail(&format!("the preview kept producing frames while minimized (+{d})"));
+                    return self.fail(&format!(
+                        "the preview kept producing frames while minimized (+{d})"
+                    ));
                 }
                 crate::app::simulate_minimized(false);
                 self.goto(42, "restored the window");
@@ -1994,9 +2259,16 @@ impl Auto {
             }
             45 if self.waited(4) => {
                 let (d, dt) = self.pv_take(app)?;
-                let clip = app.video.clips.get(vox_client_core::golive::SELF_SHARE_KEY).cloned();
-                let covered = clip == Some(crate::call::clip::Clip::Hidden) && Self::pv_placed(app).is_none();
-                log(&format!("settings open: covered={covered} clip={clip:?} +{d} frames in {dt:.1}s"));
+                let clip = app
+                    .video
+                    .clips
+                    .get(vox_client_core::golive::SELF_SHARE_KEY)
+                    .cloned();
+                let covered =
+                    clip == Some(crate::call::clip::Clip::Hidden) && Self::pv_placed(app).is_none();
+                log(&format!(
+                    "settings open: covered={covered} clip={clip:?} +{d} frames in {dt:.1}s"
+                ));
                 if covered && d > 1 {
                     return self.fail(&format!("the covered preview kept producing frames (+{d})"));
                 }
@@ -2018,18 +2290,26 @@ impl Auto {
                 let (d, dt) = self.pv_take(app)?;
                 log(&format!("after the dialog: +{d} frames in {dt:.1}s"));
                 if d < 6 || Self::pv_placed(app).is_none() {
-                    return self.fail(&format!("the preview did not come back after the dialog (+{d})"));
+                    return self.fail(&format!(
+                        "the preview did not come back after the dialog (+{d})"
+                    ));
                 }
                 match self.args.switch_hwnd {
                     Some(h2) => {
                         self.pv_video = Self::pv_state().map(|s| s.video).unwrap_or_default();
                         app.switch_share(Pick::Window(h2), true);
-                        self.goto(48, &format!("Trocar tela -> window {h2} (preview was {:?})", self.pv_video));
+                        self.goto(
+                            48,
+                            &format!(
+                                "Trocar tela -> window {h2} (preview was {:?})",
+                                self.pv_video
+                            ),
+                        );
                     }
                     None => self.goto(52, "no --switch-hwnd: skipping the switch part"),
                 }
             }
-            // Trocar tela: the preview follows the new source.
+            // Switch screen: the preview follows the new source.
             48 => {
                 if app.voice.switching_to.is_none() {
                     if let Some(n) = app.notice.clone() {
@@ -2050,10 +2330,13 @@ impl Auto {
                 let video = Self::pv_state().map(|s| s.video).unwrap_or_default();
                 log(&format!("after the switch: +{d} frames in {dt:.1}s, video {video:?} (before {:?}), sizes seen {:?}", self.pv_video, self.pv_sizes));
                 if d < 8 {
-                    return self.fail(&format!("the preview stopped after the source switch (+{d})"));
+                    return self.fail(&format!(
+                        "the preview stopped after the source switch (+{d})"
+                    ));
                 }
                 if video == self.pv_video {
-                    return self.fail("the preview picture did not change size with the new source");
+                    return self
+                        .fail("the preview picture did not change size with the new source");
                 }
                 self.goto(51, "the preview follows the switch");
             }
@@ -2069,14 +2352,22 @@ impl Auto {
                 let me = app.my_id().map(|i| i.to_string()).unwrap_or_default();
                 let labels: Vec<&str> = app.stream_info.iter().map(|s| s.0.as_str()).collect();
                 log(&format!("streams: {labels:?}"));
-                let own_recv = labels.iter().any(|l| (l.starts_with("watch-audio:") || l.starts_with("voice:") || l.starts_with("watch-video:")) && l.ends_with(&format!(":{me}")));
+                let own_recv = labels.iter().any(|l| {
+                    (l.starts_with("watch-audio:")
+                        || l.starts_with("voice:")
+                        || l.starts_with("watch-video:"))
+                        && l.ends_with(&format!(":{me}"))
+                });
                 if own_recv || app.is_watching(&me) {
                     return self.fail("my own share is subscribed (audio or video)");
                 }
                 if !labels.contains(&"share-video") || !labels.contains(&"share-preview") {
                     return self.fail("the stats lack share-video / share-preview");
                 }
-                log(&format!("no subscription to my own share; tile sizes seen {:?}; PASS", self.pv_sizes));
+                log(&format!(
+                    "no subscription to my own share; tile sizes seen {:?}; PASS",
+                    self.pv_sizes
+                ));
                 let _ = SELF_SHARE_KEY;
                 app.stop_share();
                 self.goto(7, "stopping Go Live");
@@ -2115,23 +2406,38 @@ impl Auto {
     /// Video frames received per watched streamer (`mb_ids` order); `None` when one has no
     /// subscribed video in the stats.
     fn mb_video(&self, app: &App) -> Vec<Option<u64>> {
-        self.mb_ids.iter().map(|id| Self::stat_count(app, &format!("watch-video:{id}"))).collect()
+        self.mb_ids
+            .iter()
+            .map(|id| Self::stat_count(app, &format!("watch-video:{id}")))
+            .collect()
     }
 
     fn mb_audio_now(&self, app: &App) -> Vec<Option<u64>> {
-        self.mb_ids.iter().map(|id| Self::stat_count(app, &format!("watch-audio:{id}"))).collect()
+        self.mb_ids
+            .iter()
+            .map(|id| Self::stat_count(app, &format!("watch-audio:{id}")))
+            .collect()
     }
 
     fn mb_presented_now(&self) -> Vec<u64> {
-        self.mb_ids.iter().map(|id| Self::tile_state(id).map(|s| s.presented).unwrap_or(0)).collect()
+        self.mb_ids
+            .iter()
+            .map(|id| Self::tile_state(id).map(|s| s.presented).unwrap_or(0))
+            .collect()
     }
 
     fn mb_placed(&self, app: &App) -> Vec<Option<(i32, i32, i32, i32)>> {
-        self.mb_ids.iter().map(|id| app.video.placed.get(id).copied()).collect()
+        self.mb_ids
+            .iter()
+            .map(|id| app.video.placed.get(id).copied())
+            .collect()
     }
 
     fn deltas(now: &[Option<u64>], before: &[u64]) -> Vec<u64> {
-        now.iter().zip(before).map(|(n, b)| n.unwrap_or(0).saturating_sub(*b)).collect()
+        now.iter()
+            .zip(before)
+            .map(|(n, b)| n.unwrap_or(0).saturating_sub(*b))
+            .collect()
     }
 
     fn area(r: Option<(i32, i32, i32, i32)>) -> i64 {
@@ -2146,11 +2452,16 @@ impl Auto {
             0 => self.connect(app),
             1 => {
                 if self.logged_in(app) {
-                    let Some(vc) = Self::first_voice(app) else { return self.fail("no voice channel") };
+                    let Some(vc) = Self::first_voice(app) else {
+                        return self.fail("no voice channel");
+                    };
                     app.join_voice(vc);
                     self.goto(2, "joining voice");
                 } else if self.waited(30) || app.form.error.is_some() {
-                    return self.fail(&format!("could not log in: {}", app.form.error.clone().unwrap_or_default()));
+                    return self.fail(&format!(
+                        "could not log in: {}",
+                        app.form.error.clone().unwrap_or_default()
+                    ));
                 }
             }
             2 => {
@@ -2164,10 +2475,19 @@ impl Auto {
             }
             3 => {
                 if app.members_here().len() >= 3 {
-                    let Some(hwnd) = self.args.hwnd else { return self.fail("no --hwnd given") };
-                    let names: Vec<_> = app.members_here().iter().map(|m| m.user.username.clone()).collect();
+                    let Some(hwnd) = self.args.hwnd else {
+                        return self.fail("no --hwnd given");
+                    };
+                    let names: Vec<_> = app
+                        .members_here()
+                        .iter()
+                        .map(|m| m.user.username.clone())
+                        .collect();
                     app.start_share(Pick::Window(hwnd), Preset::P1080p30, true);
-                    self.goto(4, &format!("voice members {names:?}; starting Go Live 1080p30"));
+                    self.goto(
+                        4,
+                        &format!("voice members {names:?}; starting Go Live 1080p30"),
+                    );
                 } else if self.waited(120) {
                     return self.fail("the others never joined voice");
                 }
@@ -2192,8 +2512,14 @@ impl Auto {
                     tracing::info!(target: "autotest", "AUTOTEST multi-A: B left my viewer list ({})", App::viewers_text(&viewers));
                 }
                 let me = app.my_id();
-                let b_done = app.members_here().iter().any(|m| Some(m.user.id) != me && m.deafened);
-                if (self.viewer_seen && (self.viewer_cleared || b_done)) || (b_done && self.waited(10)) || self.waited(MULTI_A_LIMIT_SECS) {
+                let b_done = app
+                    .members_here()
+                    .iter()
+                    .any(|m| Some(m.user.id) != me && m.deafened);
+                if (self.viewer_seen && (self.viewer_cleared || b_done))
+                    || (b_done && self.waited(10))
+                    || self.waited(MULTI_A_LIMIT_SECS)
+                {
                     tracing::info!(target: "autotest", "AUTOTEST multi-A: done (viewer seen={} cleared={} B done={b_done})", self.viewer_seen, self.viewer_cleared);
                     if app.viewers_supported && !self.viewer_seen {
                         return self.fail("B never showed up in my viewer list");
@@ -2228,11 +2554,16 @@ impl Auto {
             0 => self.connect(app),
             1 => {
                 if self.logged_in(app) {
-                    let Some(vc) = Self::first_voice(app) else { return self.fail("no voice channel") };
+                    let Some(vc) = Self::first_voice(app) else {
+                        return self.fail("no voice channel");
+                    };
                     app.join_voice(vc);
                     self.goto(2, "joining voice");
                 } else if self.waited(30) || app.form.error.is_some() {
-                    return self.fail(&format!("could not log in: {}", app.form.error.clone().unwrap_or_default()));
+                    return self.fail(&format!(
+                        "could not log in: {}",
+                        app.form.error.clone().unwrap_or_default()
+                    ));
                 }
             }
             2 => {
@@ -2244,15 +2575,19 @@ impl Auto {
             }
             3 => {
                 let me = app.my_id();
-                let mut live: Vec<(String, String)> =
-                    app.members_here().iter().filter(|m| m.streaming && Some(m.user.id) != me).map(|m| (m.user.username.clone(), m.user.id.to_string())).collect();
+                let mut live: Vec<(String, String)> = app
+                    .members_here()
+                    .iter()
+                    .filter(|m| m.streaming && Some(m.user.id) != me)
+                    .map(|m| (m.user.username.clone(), m.user.id.to_string()))
+                    .collect();
                 live.sort();
                 if live.len() >= 2 && self.waited(5) {
                     self.mb_ids = live.iter().take(2).map(|(_, id)| id.clone()).collect();
                     app.show_call();
                     let n = if mode == "one" { 1 } else { 2 };
                     for id in self.mb_ids.clone().iter().take(n) {
-                        // The tile's "Assistir transmissão".
+                        // The tile's "Watch stream".
                         if !app.watch(id) {
                             return self.fail("watch refused");
                         }
@@ -2260,19 +2595,32 @@ impl Auto {
                     if n == 1 {
                         self.mb_ids.truncate(1);
                     }
-                    self.goto(4, &format!("{live:?} are live; pressed Assistir transmissão on {n}"));
+                    self.goto(
+                        4,
+                        &format!("{live:?} are live; pressed Watch stream on {n}"),
+                    );
                 } else if self.waited(150) {
                     return self.fail("the two lives never started");
                 }
             }
             4 => {
                 if self.mb_ids.iter().all(|id| app.is_watching(id)) {
-                    log(&format!("watching {:?} (focus={:?}, center={:?})", app.voice.watching, app.focused_stream(), app.center));
+                    log(&format!(
+                        "watching {:?} (focus={:?}, center={:?})",
+                        app.voice.watching,
+                        app.focused_stream(),
+                        app.center
+                    ));
                     if mode == "checks" {
                         self.goto(5, "both watched; letting frames flow");
                     } else {
                         match mode.as_str() {
-                            "strip" => app.pin_only(self.mb_ids.first().and_then(|k| k.parse().ok()).map(TileKey::Stream)),
+                            "strip" => app.pin_only(
+                                self.mb_ids
+                                    .first()
+                                    .and_then(|k| k.parse().ok())
+                                    .map(TileKey::Stream),
+                            ),
                             "chat" => {
                                 if let Some(ch) = Self::first_text(app) {
                                     app.select_text(ch);
@@ -2284,7 +2632,10 @@ impl Auto {
                         self.goto(90, &format!("measurement mode {mode}: holding {secs}s"));
                     }
                 } else if self.waited(30) {
-                    return self.fail(&format!("watch did not start for both: {:?}", app.voice.watching));
+                    return self.fail(&format!(
+                        "watch did not start for both: {:?}",
+                        app.voice.watching
+                    ));
                 }
             }
             5 if self.waited(4) => {
@@ -2309,22 +2660,38 @@ impl Auto {
                 if audio.iter().any(|a| a.is_none()) {
                     return self.fail("a watched stream's audio is not subscribed");
                 }
-                if placed.iter().any(|p| p.is_none()) || !states.iter().all(|s| s.is_some_and(|s| !s.popped_out && s.presented > 0 && s.video.0 > 0)) {
+                if placed.iter().any(|p| p.is_none())
+                    || !states.iter().all(|s| {
+                        s.is_some_and(|s| !s.popped_out && s.presented > 0 && s.video.0 > 0)
+                    })
+                {
                     return self.fail("both tiles must be placed and presenting");
                 }
                 let (s0, s1) = (Self::area(placed[0]), Self::area(placed[1]));
                 if (s0 - s1).abs() * 50 > s0.max(s1) {
                     return self.fail("the two stream tiles of the grid differ in size");
                 }
-                let my_name = app.me.as_ref().map(|u| u.username.clone()).unwrap_or_default();
+                let my_name = app
+                    .me
+                    .as_ref()
+                    .map(|u| u.username.clone())
+                    .unwrap_or_default();
                 for id in &self.mb_ids {
-                    let viewers = id.parse::<i64>().map(|i| app.viewers_of(i)).unwrap_or_default();
+                    let viewers = id
+                        .parse::<i64>()
+                        .map(|i| app.viewers_of(i))
+                        .unwrap_or_default();
                     log(&format!("viewers of {id} as the hub says: {viewers:?}"));
                     if app.viewers_supported && !viewers.contains(&my_name) {
                         return self.fail(&format!("I am not in {id}'s viewer list"));
                     }
                 }
-                app.pin_only(self.mb_ids.first().and_then(|k| k.parse().ok()).map(TileKey::Stream));
+                app.pin_only(
+                    self.mb_ids
+                        .first()
+                        .and_then(|k| k.parse().ok())
+                        .map(TileKey::Stream),
+                );
                 self.goto(7, "focused A1 (A2 goes to the strip)");
             }
             7 if self.waited(3) => {
@@ -2334,9 +2701,15 @@ impl Auto {
                 if Self::area(placed[0]) <= 2 * Self::area(placed[1]) || placed[1].is_none() {
                     return self.fail("the focused stream is not big with the other in the strip");
                 }
-                let caps: Vec<u32> = states.iter().map(|s| s.map(|s| s.max_fps).unwrap_or(99)).collect();
+                let caps: Vec<u32> = states
+                    .iter()
+                    .map(|s| s.map(|s| s.max_fps).unwrap_or(99))
+                    .collect();
                 if caps != vec![0, crate::call::STRIP_FPS] {
-                    return self.fail(&format!("drawing caps {caps:?}, expected [0, {}]", crate::call::STRIP_FPS));
+                    return self.fail(&format!(
+                        "drawing caps {caps:?}, expected [0, {}]",
+                        crate::call::STRIP_FPS
+                    ));
                 }
                 self.mb_presented = self.mb_presented_now();
                 self.mb_at = Instant::now();
@@ -2348,16 +2721,33 @@ impl Auto {
                     return None;
                 }
                 let dt = self.mb_at.elapsed().as_secs_f64();
-                let pres: Vec<f64> = self.mb_presented_now().iter().zip(&self.mb_presented).map(|(n, b)| n.saturating_sub(*b) as f64 / dt).collect();
+                let pres: Vec<f64> = self
+                    .mb_presented_now()
+                    .iter()
+                    .zip(&self.mb_presented)
+                    .map(|(n, b)| n.saturating_sub(*b) as f64 / dt)
+                    .collect();
                 let frames = self.mb_video(app);
-                log(&format!("drawn fps focused={:.1} strip={:.1} over {dt:.1}s; frames received {frames:?}", pres[0], pres[1]));
+                log(&format!(
+                    "drawn fps focused={:.1} strip={:.1} over {dt:.1}s; frames received {frames:?}",
+                    pres[0], pres[1]
+                ));
                 if pres[1] < 2.0 || pres[1] > crate::call::STRIP_FPS as f64 + 3.0 {
-                    return self.fail(&format!("the strip stream is drawn at {:.1} fps, expected about {}", pres[1], crate::call::STRIP_FPS));
+                    return self.fail(&format!(
+                        "the strip stream is drawn at {:.1} fps, expected about {}",
+                        pres[1],
+                        crate::call::STRIP_FPS
+                    ));
                 }
                 if pres[0] < pres[1] + 5.0 {
-                    return self.fail(&format!("the focused stream is drawn at {:.1} fps, not faster than the strip", pres[0]));
+                    return self.fail(&format!(
+                        "the focused stream is drawn at {:.1} fps, not faster than the strip",
+                        pres[0]
+                    ));
                 }
-                let Some(ch) = Self::first_text(app) else { return self.fail("no text channel") };
+                let Some(ch) = Self::first_text(app) else {
+                    return self.fail("no text channel");
+                };
                 app.select_text(ch);
                 self.goto(9, "chat shown (both tiles hidden)");
             }
@@ -2368,7 +2758,11 @@ impl Auto {
                         return self.fail("a stream stayed visible over the chat");
                     }
                     self.mb_frames = self.mb_video(app).iter().map(|f| f.unwrap_or(0)).collect();
-                    self.mb_audio = self.mb_audio_now(app).iter().map(|f| f.unwrap_or(0)).collect();
+                    self.mb_audio = self
+                        .mb_audio_now(app)
+                        .iter()
+                        .map(|f| f.unwrap_or(0))
+                        .collect();
                     self.goto(10, "chat; measuring the paused streams");
                 }
             }
@@ -2378,7 +2772,9 @@ impl Auto {
                 }
                 let d = Self::deltas(&self.mb_video(app), &self.mb_frames);
                 let a = Self::deltas(&self.mb_audio_now(app), &self.mb_audio);
-                log(&format!("chat view: video frames +{d:?}, audio chunks +{a:?} in ~4 s"));
+                log(&format!(
+                    "chat view: video frames +{d:?}, audio chunks +{a:?} in ~4 s"
+                ));
                 if d.iter().any(|&x| x > 10) {
                     return self.fail(&format!("a hidden stream kept receiving video (+{d:?})"));
                 }
@@ -2400,7 +2796,10 @@ impl Auto {
                 }
                 let d = Self::deltas(&self.mb_video(app), &self.mb_frames);
                 let placed = self.mb_placed(app);
-                log(&format!("resumed: frames +{d:?} in ~4 s, placed {placed:?}, focus {:?}", app.focused_stream()));
+                log(&format!(
+                    "resumed: frames +{d:?} in ~4 s, placed {placed:?}, focus {:?}",
+                    app.focused_stream()
+                ));
                 if d.iter().any(|&x| x <= 10) || placed.iter().any(|p| p.is_none()) {
                     return self.fail(&format!("the streams did not resume (+{d:?})"));
                 }
@@ -2421,7 +2820,9 @@ impl Auto {
                 let d = Self::deltas(&self.mb_video(app), &self.mb_frames);
                 log(&format!("minimized: frames +{d:?} in ~4 s"));
                 if d.iter().any(|&x| x > 10) {
-                    return self.fail(&format!("a stream kept receiving video while minimized (+{d:?})"));
+                    return self.fail(&format!(
+                        "a stream kept receiving video while minimized (+{d:?})"
+                    ));
                 }
                 crate::app::simulate_minimized(false);
                 self.goto(32, "restored the window");
@@ -2438,9 +2839,13 @@ impl Auto {
                 }
                 let d = Self::deltas(&self.mb_video(app), &self.mb_frames);
                 let placed = self.mb_placed(app);
-                log(&format!("restored: frames +{d:?} in ~4 s, placed {placed:?}"));
+                log(&format!(
+                    "restored: frames +{d:?} in ~4 s, placed {placed:?}"
+                ));
                 if d.iter().any(|&x| x <= 10) || placed.iter().any(|p| p.is_none()) {
-                    return self.fail(&format!("the streams did not resume after the restore (+{d:?})"));
+                    return self.fail(&format!(
+                        "the streams did not resume after the restore (+{d:?})"
+                    ));
                 }
                 // Double-click on the strip tile: fullscreen of that one.
                 let parent = app.video.parent.unwrap_or_default();
@@ -2453,10 +2858,20 @@ impl Auto {
                 let parent = app.video.parent.unwrap_or_default();
                 let (wr, mr) = (win::window_rect(parent), win::monitor_rect(parent));
                 let placed = self.mb_placed(app);
-                log(&format!("fullscreen: on={} key={:?} window={wr:?} monitor={mr:?} placed={placed:?}", app.call.fullscreen, app.call.fullscreen_key));
-                let covers = mr.is_some_and(|m| wr == Some(m) && placed[1].is_some_and(|p| p.2 == m.2 - m.0 && p.3 == m.3 - m.1));
-                if !app.call.fullscreen || app.call.fullscreen_key.as_ref() != self.mb_ids.get(1) || !covers || placed[0].is_some() {
-                    return self.fail("the double-clicked strip stream did not go fullscreen alone");
+                log(&format!(
+                    "fullscreen: on={} key={:?} window={wr:?} monitor={mr:?} placed={placed:?}",
+                    app.call.fullscreen, app.call.fullscreen_key
+                ));
+                let covers = mr.is_some_and(|m| {
+                    wr == Some(m) && placed[1].is_some_and(|p| p.2 == m.2 - m.0 && p.3 == m.3 - m.1)
+                });
+                if !app.call.fullscreen
+                    || app.call.fullscreen_key.as_ref() != self.mb_ids.get(1)
+                    || !covers
+                    || placed[0].is_some()
+                {
+                    return self
+                        .fail("the double-clicked strip stream did not go fullscreen alone");
                 }
                 win::key(parent, win::VK_ESCAPE);
                 self.goto(14, "pressed Esc");
@@ -2464,8 +2879,17 @@ impl Auto {
             14 if self.waited(2) => {
                 let placed = self.mb_placed(app);
                 let wr = app.video.parent.and_then(win::window_rect);
-                log(&format!("after fullscreen: on={} focus={:?} window={wr:?} (was {:?}) placed={placed:?}", app.call.fullscreen, app.focused_stream(), self.win_rect));
-                if app.call.fullscreen || app.focused_stream().as_ref() != self.mb_ids.first() || placed.iter().any(|p| p.is_none()) || wr != self.win_rect {
+                log(&format!(
+                    "after fullscreen: on={} focus={:?} window={wr:?} (was {:?}) placed={placed:?}",
+                    app.call.fullscreen,
+                    app.focused_stream(),
+                    self.win_rect
+                ));
+                if app.call.fullscreen
+                    || app.focused_stream().as_ref() != self.mb_ids.first()
+                    || placed.iter().any(|p| p.is_none())
+                    || wr != self.win_rect
+                {
                     return self.fail("leaving fullscreen did not bring back the focused view");
                 }
                 let a2 = self.mb_ids[1].clone();
@@ -2476,7 +2900,10 @@ impl Auto {
                 let a2 = Self::tile_state(&self.mb_ids[1]);
                 let placed = self.mb_placed(app);
                 log(&format!("A2 popped out: state {a2:?}, placed {placed:?}"));
-                if !a2.is_some_and(|s| s.popped_out && s.popout_hwnd != 0 && s.max_fps == 0) || placed[1].is_some() || placed[0].is_none() {
+                if !a2.is_some_and(|s| s.popped_out && s.popout_hwnd != 0 && s.max_fps == 0)
+                    || placed[1].is_some()
+                    || placed[0].is_none()
+                {
                     return self.fail("A2 did not move to its own window (with A1 still inside)");
                 }
                 let a1 = self.mb_ids[0].clone();
@@ -2486,11 +2913,20 @@ impl Auto {
             16 if self.waited(2) => {
                 let states: Vec<_> = self.mb_ids.iter().map(|id| Self::tile_state(id)).collect();
                 log(&format!("both popped out: {states:?}"));
-                let hwnds: Vec<isize> = states.iter().map(|s| s.filter(|s| s.popped_out).map(|s| s.popout_hwnd).unwrap_or(0)).collect();
+                let hwnds: Vec<isize> = states
+                    .iter()
+                    .map(|s| {
+                        s.filter(|s| s.popped_out)
+                            .map(|s| s.popout_hwnd)
+                            .unwrap_or(0)
+                    })
+                    .collect();
                 if hwnds.contains(&0) || hwnds[0] == hwnds[1] {
                     return self.fail("each stream needs its own window");
                 }
-                let Some(ch) = Self::first_text(app) else { return self.fail("no text channel") };
+                let Some(ch) = Self::first_text(app) else {
+                    return self.fail("no text channel");
+                };
                 app.select_text(ch);
                 self.goto(17, "chat shown with both in their own windows");
             }
@@ -2518,8 +2954,12 @@ impl Auto {
             19 if self.waited(3) => {
                 let states: Vec<_> = self.mb_ids.iter().map(|id| Self::tile_state(id)).collect();
                 let placed = self.mb_placed(app);
-                log(&format!("back inline: placed {placed:?}, states {states:?}"));
-                if placed.iter().any(|p| p.is_none()) || states.iter().any(|s| !s.is_some_and(|s| !s.popped_out)) {
+                log(&format!(
+                    "back inline: placed {placed:?}, states {states:?}"
+                ));
+                if placed.iter().any(|p| p.is_none())
+                    || states.iter().any(|s| !s.is_some_and(|s| !s.popped_out))
+                {
                     return self.fail("the streams did not come back inline");
                 }
                 let a1 = self.mb_ids[0].clone();
@@ -2533,13 +2973,24 @@ impl Auto {
                 let (a1, a2) = (self.mb_ids[0].clone(), self.mb_ids[1].clone());
                 let labels: Vec<&str> = app.stream_info.iter().map(|s| s.0.as_str()).collect();
                 log(&format!("after unwatching A1: watching {:?}, focus {:?}, A1 state {:?}, placed {:?}, streams {labels:?}", app.voice.watching, app.focused_stream(), Self::tile_state(&a1), self.mb_placed(app)));
-                if app.voice.watching != vec![a2.clone()] || app.focused_stream().is_some() || app.is_pinned(TileKey::Stream(a1.parse().unwrap_or(-1))) {
-                    return self.fail("unwatching A1 did not leave exactly A2 (and the focus on A1 should go)");
+                if app.voice.watching != vec![a2.clone()]
+                    || app.focused_stream().is_some()
+                    || app.is_pinned(TileKey::Stream(a1.parse().unwrap_or(-1)))
+                {
+                    return self.fail(
+                        "unwatching A1 did not leave exactly A2 (and the focus on A1 should go)",
+                    );
                 }
-                if Self::tile_state(&a1).is_some() || app.video.placed.contains_key(&a1) || labels.iter().any(|l| l.ends_with(&format!(":{a1}")) && l.starts_with("watch-")) {
+                if Self::tile_state(&a1).is_some()
+                    || app.video.placed.contains_key(&a1)
+                    || labels
+                        .iter()
+                        .any(|l| l.ends_with(&format!(":{a1}")) && l.starts_with("watch-"))
+                {
                     return self.fail("A1's viewer / subscriptions are still there");
                 }
-                self.mb_frames = vec![Self::stat_count(app, &format!("watch-video:{a2}")).unwrap_or(0)];
+                self.mb_frames =
+                    vec![Self::stat_count(app, &format!("watch-video:{a2}")).unwrap_or(0)];
                 self.goto(21, "A2 alone; measuring");
             }
             21 if self.waited(4) => {
@@ -2549,16 +3000,26 @@ impl Auto {
                 let a2 = self.mb_ids[1].clone();
                 let f = Self::stat_count(app, &format!("watch-video:{a2}")).unwrap_or(0);
                 let d = f.saturating_sub(self.mb_frames[0]);
-                log(&format!("A2 still playing: +{d} frames in ~4 s, placed {:?}", app.video.placed.get(&a2)));
+                log(&format!(
+                    "A2 still playing: +{d} frames in ~4 s, placed {:?}",
+                    app.video.placed.get(&a2)
+                ));
                 if d <= 10 || !app.video.placed.contains_key(&a2) {
                     return self.fail(&format!("A2 stopped when A1 was unwatched (+{d})"));
                 }
-                self.goto(22, "waiting for A1 to end its live (it saw me leave its viewer list)");
+                self.goto(
+                    22,
+                    "waiting for A1 to end its live (it saw me leave its viewer list)",
+                );
             }
             22 => {
                 let a1 = self.mb_ids[0].parse::<i64>().unwrap_or(-1);
                 if !app.voice_members.get(&a1).is_some_and(|m| m.streaming) {
-                    log(&format!("A1 ended its live; watching {:?}, toast {:?}", app.voice.watching, app.call.toast.as_ref().map(|t| &t.0)));
+                    log(&format!(
+                        "A1 ended its live; watching {:?}, toast {:?}",
+                        app.voice.watching,
+                        app.call.toast.as_ref().map(|t| &t.0)
+                    ));
                     if app.voice.watching != vec![self.mb_ids[1].clone()] {
                         return self.fail("A1's end changed the other stream");
                     }
@@ -2570,11 +3031,19 @@ impl Auto {
             }
             23 => {
                 if app.voice.watching.is_empty() {
-                    let toast = app.call.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
-                    let a2 = self.mb_ids[1].parse::<i64>().map(|i| app.name_of(i)).unwrap_or_default();
+                    let toast = app
+                        .call
+                        .toast
+                        .as_ref()
+                        .map(|t| t.0.clone())
+                        .unwrap_or_default();
+                    let a2 = self.mb_ids[1]
+                        .parse::<i64>()
+                        .map(|i| app.name_of(i))
+                        .unwrap_or_default();
                     log(&format!("A2 ended its live: toast {toast:?}"));
-                    if !toast.contains("foi encerrada") || !toast.contains(&a2) {
-                        return self.fail("no 'transmissão encerrada' message for A2");
+                    if !toast.contains("ended") || !toast.contains(&a2) {
+                        return self.fail("no 'stream ended' message for A2");
                     }
                     self.goto(24, "the watched live ended with the message");
                 } else if self.waited(90) {
@@ -2592,14 +3061,21 @@ impl Auto {
                     if !self.fresh_stats(app) {
                         return None;
                     }
-                    log(&format!("measurement {mode} done: frames {:?}, watching {:?}", self.mb_video(app), app.voice.watching));
+                    log(&format!(
+                        "measurement {mode} done: frames {:?}, watching {:?}",
+                        self.mb_video(app),
+                        app.voice.watching
+                    ));
                     app.toggle_deafen();
                     self.goto(91, "deafened (the streamers' signal to end)");
                 }
             }
             91 => {
                 let me = app.my_id();
-                let any_live = app.members_here().iter().any(|m| m.streaming && Some(m.user.id) != me);
+                let any_live = app
+                    .members_here()
+                    .iter()
+                    .any(|m| m.streaming && Some(m.user.id) != me);
                 if !any_live || self.waited(60) {
                     app.leave_voice();
                     self.goto(25, "leaving voice");
@@ -2644,9 +3120,9 @@ impl Auto {
         app.stream_info.iter().map(|s| s.0.as_str()).collect()
     }
 
-    /// A: "Só áudio" streamer. Goes live with nothing but audio (a stereo test tone, or the
+    /// A: "Audio only" streamer. Goes live with nothing but audio (a stereo test tone, or the
     /// sound of the process `--audio-pid`), checks there is no video anywhere, holds while B
-    /// listens, optionally switches to another app (`--switch-pid`, "Trocar app") and becomes a
+    /// listens, optionally switches to another app (`--switch-pid`, "Switch app") and becomes a
     /// screen share and back (`--kinds` with `--switch-hwnd`), then stops when B is done.
     pub(crate) fn run_audio_a(&mut self, app: &mut App) -> Option<i32> {
         use vox_client_core::golive::SELF_SHARE_KEY;
@@ -2655,11 +3131,16 @@ impl Auto {
             0 => self.connect(app),
             1 => {
                 if self.logged_in(app) {
-                    let Some(vc) = Self::first_voice(app) else { return self.fail("no voice channel") };
+                    let Some(vc) = Self::first_voice(app) else {
+                        return self.fail("no voice channel");
+                    };
                     app.join_voice(vc);
                     self.goto(2, "joining voice");
                 } else if self.waited(30) || app.form.error.is_some() {
-                    return self.fail(&format!("could not log in: {}", app.form.error.clone().unwrap_or_default()));
+                    return self.fail(&format!(
+                        "could not log in: {}",
+                        app.form.error.clone().unwrap_or_default()
+                    ));
                 }
             }
             2 => {
@@ -2674,15 +3155,31 @@ impl Auto {
             3 => {
                 if app.members_here().len() >= 2 && self.waited(2) {
                     let high = self.args.audio_high;
-                    // Go Live > "Só áudio" > the app (or, in the autotest, a synthetic tone).
+                    // Go Live > "Audio only" > the app (or, in the autotest, a synthetic tone).
                     match mode.as_str() {
                         "app" => {
-                            let Some(pid) = self.args.audio_pid else { return self.fail("no --audio-pid given") };
+                            let Some(pid) = self.args.audio_pid else {
+                                return self.fail("no --audio-pid given");
+                            };
                             app.start_audio_share(Pick::App(pid), high);
                         }
-                        _ => app.start_audio_share_source(vox_client_core::golive::ShareSource::AudioTone, None, high),
+                        _ => app.start_audio_share_source(
+                            vox_client_core::golive::ShareSource::AudioTone,
+                            None,
+                            high,
+                        ),
                     }
-                    self.goto(4, &format!("starting an audio-only Go Live ({mode}, {})", if high { "Alta 256 kbps" } else { "Normal 128 kbps" }));
+                    self.goto(
+                        4,
+                        &format!(
+                            "starting an audio-only Go Live ({mode}, {})",
+                            if high {
+                                "Alta 256 kbps"
+                            } else {
+                                "Normal 128 kbps"
+                            }
+                        ),
+                    );
                 } else if self.waited(120) {
                     return self.fail("B never joined voice");
                 }
@@ -2704,25 +3201,37 @@ impl Auto {
                 if !self.fresh_stats(app) {
                     return None;
                 }
-                let labels: Vec<String> = Self::ao_labels(app).iter().map(|s| s.to_string()).collect();
+                let labels: Vec<String> =
+                    Self::ao_labels(app).iter().map(|s| s.to_string()).collect();
                 let audio = Self::ao_audio(app, "share-audio").cloned();
                 self.ao_log(&format!("my streams {labels:?}; share-audio {audio:?}"));
-                if labels.iter().any(|l| l == "share-video" || l == "share-preview") {
+                if labels
+                    .iter()
+                    .any(|l| l == "share-video" || l == "share-preview")
+                {
                     return self.fail("an audio-only live must have no video stream or preview");
                 }
-                let Some(audio) = audio else { return self.fail("no share-audio stream") };
+                let Some(audio) = audio else {
+                    return self.fail("no share-audio stream");
+                };
                 if audio.chunks < 200 {
                     return self.fail(&format!("only {} audio chunks sent", audio.chunks));
                 }
                 if Self::tile_state(SELF_SHARE_KEY).is_some() {
                     return self.fail("an audio-only live opened a preview tile");
                 }
-                let mine = app.my_id().and_then(|me| app.voice_members.get(&me)).map(|m| m.streaming);
+                let mine = app
+                    .my_id()
+                    .and_then(|me| app.voice_members.get(&me))
+                    .map(|m| m.streaming);
                 self.ao_log(&format!("hub says my streaming flag is {mine:?}"));
                 if mine != Some(true) {
                     return self.fail("the hub does not show me as streaming");
                 }
-                let hub_flag = app.my_id().and_then(|me| app.voice_members.get(&me)).map(|m| m.audio_only);
+                let hub_flag = app
+                    .my_id()
+                    .and_then(|me| app.voice_members.get(&me))
+                    .map(|m| m.audio_only);
                 self.ao_log(&format!("hub says my audio_only flag is {hub_flag:?}"));
                 if hub_flag != Some(true) {
                     return self.fail("the hub does not show my live as audio-only");
@@ -2733,19 +3242,27 @@ impl Auto {
                 let viewers = app.my_id().map(|me| app.viewers_of(me)).unwrap_or_default();
                 if !self.viewer_seen && !viewers.is_empty() {
                     self.viewer_seen = true;
-                    self.ao_log(&format!("viewers of my live = {viewers:?} ({})", App::viewers_text(&viewers)));
+                    self.ao_log(&format!(
+                        "viewers of my live = {viewers:?} ({})",
+                        App::viewers_text(&viewers)
+                    ));
                 }
                 if self.viewer_seen && self.waited(6) {
-                    self.goto(if self.args.switch_pid.is_some() { 7 } else { 9 }, "B is listening");
+                    self.goto(
+                        if self.args.switch_pid.is_some() { 7 } else { 9 },
+                        "B is listening",
+                    );
                 } else if !app.viewers_supported && self.waited(30) {
                     self.goto(9, "viewer lists unsupported; carrying on");
                 } else if self.waited(AO_A_LIMIT_SECS) {
                     return self.fail("B never showed up in my viewer list");
                 }
             }
-            // "Trocar app": the live goes on with another app's sound.
+            // "Switch app": the live goes on with another app's sound.
             7 => {
-                let Some(pid2) = self.args.switch_pid else { return self.fail("no --switch-pid") };
+                let Some(pid2) = self.args.switch_pid else {
+                    return self.fail("no --switch-pid");
+                };
                 app.switch_share(Pick::App(pid2), true);
                 self.goto(8, &format!("Trocar app -> pid {pid2}"));
             }
@@ -2754,7 +3271,8 @@ impl Auto {
                     if let Some(n) = app.notice.clone() {
                         return self.fail(&format!("the switch reported: {n}"));
                     }
-                    if !matches!(app.voice.share, Share::Live { .. }) || !app.voice.share_audio_only {
+                    if !matches!(app.voice.share, Share::Live { .. }) || !app.voice.share_audio_only
+                    {
                         return self.fail("the live did not survive the switch as audio-only");
                     }
                     self.ao_log(&format!("switched; share_pick={:?}", app.voice.share_pick));
@@ -2765,17 +3283,24 @@ impl Auto {
             }
             // The live becomes a screen share and back (viewers stay in the room and follow).
             9 if self.args.kinds && self.args.switch_hwnd.is_some() => {
-                let Some(hwnd) = self.args.switch_hwnd else { return self.fail("no --switch-hwnd") };
+                let Some(hwnd) = self.args.switch_hwnd else {
+                    return self.fail("no --switch-hwnd");
+                };
                 if self.waited(4) {
                     app.start_share(Pick::Window(hwnd), Preset::P720p30, false);
                     self.ao.kind_leg = 1;
-                    self.goto(10, "restarting as a screen share (Tela + áudio)");
+                    self.goto(10, "restarting as a screen share (Screen + audio)");
                 }
             }
             10 => {
-                let is_screen = matches!(app.voice.share, Share::Live { .. }) && !app.voice.share_audio_only;
+                let is_screen =
+                    matches!(app.voice.share, Share::Live { .. }) && !app.voice.share_audio_only;
                 if is_screen && self.waited(14) {
-                    app.start_audio_share_source(vox_client_core::golive::ShareSource::AudioTone, None, self.args.audio_high);
+                    app.start_audio_share_source(
+                        vox_client_core::golive::ShareSource::AudioTone,
+                        None,
+                        self.args.audio_high,
+                    );
                     self.ao.kind_leg = 2;
                     self.goto(11, "restarting as audio-only again");
                 } else if app.voice.share == Share::Off && self.waited(3) {
@@ -2785,7 +3310,8 @@ impl Auto {
                 }
             }
             11 => {
-                let back = matches!(app.voice.share, Share::Live { .. }) && app.voice.share_audio_only;
+                let back =
+                    matches!(app.voice.share, Share::Live { .. }) && app.voice.share_audio_only;
                 if back && self.waited(12) {
                     self.goto(12, "audio-only again; waiting for B");
                 } else if app.voice.share == Share::Off && self.waited(3) {
@@ -2798,14 +3324,22 @@ impl Auto {
             9 | 12 => {
                 let viewers = app.my_id().map(|me| app.viewers_of(me)).unwrap_or_default();
                 let me = app.my_id();
-                let b_done = app.members_here().iter().any(|m| Some(m.user.id) != me && m.deafened);
+                let b_done = app
+                    .members_here()
+                    .iter()
+                    .any(|m| Some(m.user.id) != me && m.deafened);
                 if self.viewer_seen && viewers.is_empty() {
                     self.viewer_cleared = true;
                 }
                 // (B leaves my viewer list and comes back in its own checks, so only its deafen
                 // ends my live.)
-                if (b_done || self.waited(AO_A_LIMIT_SECS)) && self.waited(self.args.hold_secs.min(30)) {
-                    self.ao_log(&format!("done (B done={b_done}, viewer cleared={})", self.viewer_cleared));
+                if (b_done || self.waited(AO_A_LIMIT_SECS))
+                    && self.waited(self.args.hold_secs.min(30))
+                {
+                    self.ao_log(&format!(
+                        "done (B done={b_done}, viewer cleared={})",
+                        self.viewer_cleared
+                    ));
                     if app.viewers_supported && !self.viewer_seen {
                         return self.fail("B never showed up in my viewer list");
                     }
@@ -2823,7 +3357,7 @@ impl Auto {
         None
     }
 
-    /// B: listener. Sees the audio-only tile (not "Assistir"), presses "Ouvir", checks that no
+    /// B: listener. Sees the audio-only tile (not "Watch"), presses "Listen", checks that no
     /// video is subscribed or drawn, that stereo audio arrives with sound in it (a tone), that it
     /// is in A's viewer list, that the sound survives A's source switch and (with `--kinds`) A
     /// turning into a screen share and back.
@@ -2833,11 +3367,16 @@ impl Auto {
             0 => self.connect(app),
             1 => {
                 if self.logged_in(app) {
-                    let Some(vc) = Self::first_voice(app) else { return self.fail("no voice channel") };
+                    let Some(vc) = Self::first_voice(app) else {
+                        return self.fail("no voice channel");
+                    };
                     app.join_voice(vc);
                     self.goto(2, "joining voice");
                 } else if self.waited(30) || app.form.error.is_some() {
-                    return self.fail(&format!("could not log in: {}", app.form.error.clone().unwrap_or_default()));
+                    return self.fail(&format!(
+                        "could not log in: {}",
+                        app.form.error.clone().unwrap_or_default()
+                    ));
                 }
             }
             2 => {
@@ -2851,12 +3390,17 @@ impl Auto {
             }
             3 => {
                 let me = app.my_id();
-                let live = app.members_here().iter().find(|m| m.streaming && Some(m.user.id) != me).map(|m| (m.user.id, m.user.username.clone()));
+                let live = app
+                    .members_here()
+                    .iter()
+                    .find(|m| m.streaming && Some(m.user.id) != me)
+                    .map(|m| (m.user.id, m.user.username.clone()));
                 if let Some((id, name)) = live {
                     let key = id.to_string();
                     if app.voice.audio_only.contains(&key) && self.waited(3) {
                         let member = app.voice_members.get(&id).cloned();
-                        let tile_audio_only = member.as_ref().is_some_and(|m| app.stream_is_audio_only(m));
+                        let tile_audio_only =
+                            member.as_ref().is_some_and(|m| app.stream_is_audio_only(m));
                         self.ao_log(&format!("{name} is live, audio-only={tile_audio_only}, hub flag {:?}; pressing Ouvir", member.as_ref().map(|m| m.audio_only)));
                         if !member.as_ref().is_some_and(|m| m.audio_only) {
                             return self.fail("the hub does not flag the live as audio-only");
@@ -2866,13 +3410,14 @@ impl Auto {
                         }
                         self.ao.streamer = key.clone();
                         app.show_call();
-                        // The tile's "Ouvir" button.
+                        // The tile's "Listen" button.
                         if !app.watch(&key) {
                             return self.fail("watch refused");
                         }
                         self.goto(4, "pressed Ouvir");
                     } else if self.waited(60) && !app.voice.audio_only.contains(&key) {
-                        return self.fail("A is live but the room never said the live is audio-only");
+                        return self
+                            .fail("A is live but the room never said the live is audio-only");
                     }
                 } else if self.waited(150) {
                     return self.fail("A never went live");
@@ -2899,7 +3444,8 @@ impl Auto {
                 }
                 let id = self.ao.streamer.clone();
                 let label = format!("watch-audio:{id}");
-                let labels: Vec<String> = Self::ao_labels(app).iter().map(|s| s.to_string()).collect();
+                let labels: Vec<String> =
+                    Self::ao_labels(app).iter().map(|s| s.to_string()).collect();
                 let info = Self::ao_audio(app, &label).cloned();
                 self.ao_log(&format!("streams {labels:?}; {label}: {info:?}"));
                 // No video subscription, no surface, no tile window.
@@ -2909,7 +3455,9 @@ impl Auto {
                 if app.video.placed.contains_key(&id) || Self::tile_state(&id).is_some() {
                     return self.fail("an audio-only live got a video surface");
                 }
-                let Some(info) = info else { return self.fail("the live's audio is not subscribed") };
+                let Some(info) = info else {
+                    return self.fail("the live's audio is not subscribed");
+                };
                 let secs = self.ao.at.map(|t| t.elapsed().as_secs_f64()).unwrap_or(4.0);
                 let rate = (info.chunks.saturating_sub(self.ao.chunks)) as f64 / secs;
                 self.ao_log(&format!("audio chunks/s {rate:.0}, rms {:?} dBFS, side {:?} dBFS, {:?} kbps, codec [{}]", info.rms_dbfs, info.side_dbfs, info.kbps, info.codec));
@@ -2923,16 +3471,29 @@ impl Auto {
                     return self.fail(&format!("not Opus: {}", info.codec));
                 }
                 let stereo_flag = info.codec.contains("stereo=1");
-                self.ao_log(&format!("stereo: negotiated flag {stereo_flag}, side energy {:?}", info.side_dbfs));
+                self.ao_log(&format!(
+                    "stereo: negotiated flag {stereo_flag}, side energy {:?}",
+                    info.side_dbfs
+                ));
                 if mode == "tone" {
                     // Left and right differ (440 / 660 Hz), so a real stereo path has side energy.
                     if !info.side_dbfs.is_some_and(|d| d > -40.0) {
-                        return self.fail(&format!("the audio is not stereo on the wire (side {:?} dBFS, codec {})", info.side_dbfs, info.codec));
+                        return self.fail(&format!(
+                            "the audio is not stereo on the wire (side {:?} dBFS, codec {})",
+                            info.side_dbfs, info.codec
+                        ));
                     }
                 }
                 // Am I in A's viewer list (item 7)?
-                let my_name = app.me.as_ref().map(|u| u.username.clone()).unwrap_or_default();
-                let viewers = id.parse::<i64>().map(|i| app.viewers_of(i)).unwrap_or_default();
+                let my_name = app
+                    .me
+                    .as_ref()
+                    .map(|u| u.username.clone())
+                    .unwrap_or_default();
+                let viewers = id
+                    .parse::<i64>()
+                    .map(|i| app.viewers_of(i))
+                    .unwrap_or_default();
                 self.ao_log(&format!("viewers of {id} as the hub says: {viewers:?}"));
                 if app.viewers_supported && !viewers.contains(&my_name) {
                     return self.fail("I am not in the streamer's viewer list");
@@ -2940,7 +3501,13 @@ impl Auto {
                 // The sound must survive A's switch of source: watch for another while.
                 self.ao.chunks = info.chunks;
                 self.ao.at = Some(Instant::now());
-                let next = if self.args.switch_pid.is_some() { 7 } else if self.args.kinds { 8 } else { 20 };
+                let next = if self.args.switch_pid.is_some() {
+                    7
+                } else if self.args.kinds {
+                    8
+                } else {
+                    20
+                };
                 self.goto(next, "stereo audio verified");
             }
             // The sound goes on while A switches app (`--switch-pid`) for about 12 s.
@@ -2951,17 +3518,28 @@ impl Auto {
                 let label = format!("watch-audio:{}", self.ao.streamer);
                 let info = Self::ao_audio(app, &label).cloned();
                 self.ao_log(&format!("after A's switch window: {label}: {info:?}"));
-                let Some(info) = info else { return self.fail("the audio went away") };
-                if info.chunks.saturating_sub(self.ao.chunks) < 500 || !info.rms_dbfs.is_some_and(|d| d > AO_SILENCE_DBFS) {
+                let Some(info) = info else {
+                    return self.fail("the audio went away");
+                };
+                if info.chunks.saturating_sub(self.ao.chunks) < 500
+                    || !info.rms_dbfs.is_some_and(|d| d > AO_SILENCE_DBFS)
+                {
                     return self.fail("the audio stopped or went silent after the source switch");
                 }
-                self.goto(if self.args.kinds { 8 } else { 20 }, "audio still flowing after the switch");
+                self.goto(
+                    if self.args.kinds { 8 } else { 20 },
+                    "audio still flowing after the switch",
+                );
             }
             // `--kinds`: A turns into a screen share. The listener's tile becomes a video one.
             8 => {
                 let id = self.ao.streamer.clone();
                 if !app.voice.audio_only.contains(&id) {
-                    self.ao_log(&format!("A became a screen share: watching {:?}, placed {:?}", app.voice.watching, app.video.placed.get(&id)));
+                    self.ao_log(&format!(
+                        "A became a screen share: watching {:?}, placed {:?}",
+                        app.voice.watching,
+                        app.video.placed.get(&id)
+                    ));
                     self.goto(9, "kind flipped to video");
                 } else if self.waited(60) {
                     return self.fail("A's live never flipped to a screen share");
@@ -2970,7 +3548,8 @@ impl Auto {
             9 if self.waited(5) => {
                 if self.fresh_stats(app) {
                     let id = self.ao.streamer.clone();
-                    self.ao.chunks = Self::stat_count(app, &format!("watch-video:{id}")).unwrap_or(0);
+                    self.ao.chunks =
+                        Self::stat_count(app, &format!("watch-video:{id}")).unwrap_or(0);
                     self.goto(10, &format!("video frames so far {}", self.ao.chunks));
                 }
             }
@@ -2982,7 +3561,10 @@ impl Auto {
                 let frames = Self::stat_count(app, &format!("watch-video:{id}")).unwrap_or(0);
                 let audio = Self::ao_audio(app, &format!("watch-audio:{id}")).cloned();
                 let placed = app.video.placed.get(&id).copied();
-                self.ao_log(&format!("screen phase: video frames {} -> {frames}, placed {placed:?}, audio {audio:?}", self.ao.chunks));
+                self.ao_log(&format!(
+                    "screen phase: video frames {} -> {frames}, placed {placed:?}, audio {audio:?}",
+                    self.ao.chunks
+                ));
                 if !app.is_watching(&id) {
                     return self.fail("I stopped watching when the live changed kind");
                 }
@@ -2995,7 +3577,10 @@ impl Auto {
                 if placed.is_none() {
                     return self.fail("the screen share has no video surface in the tile");
                 }
-                self.goto(11, "screen share verified; waiting for A to go audio-only again");
+                self.goto(
+                    11,
+                    "screen share verified; waiting for A to go audio-only again",
+                );
             }
             11 => {
                 let id = self.ao.streamer.clone();
@@ -3010,16 +3595,24 @@ impl Auto {
                     return None;
                 }
                 let id = self.ao.streamer.clone();
-                let labels: Vec<String> = Self::ao_labels(app).iter().map(|s| s.to_string()).collect();
+                let labels: Vec<String> =
+                    Self::ao_labels(app).iter().map(|s| s.to_string()).collect();
                 let audio = Self::ao_audio(app, &format!("watch-audio:{id}")).cloned();
-                self.ao_log(&format!("audio-only again: streams {labels:?}, placed {:?}, tile {:?}, audio {audio:?}", app.video.placed.get(&id), Self::tile_state(&id)));
+                self.ao_log(&format!(
+                    "audio-only again: streams {labels:?}, placed {:?}, tile {:?}, audio {audio:?}",
+                    app.video.placed.get(&id),
+                    Self::tile_state(&id)
+                ));
                 if !app.is_watching(&id) {
                     return self.fail("I stopped watching when the live went back to audio-only");
                 }
                 if app.streamer_hub_audio_only(&id) != Some(true) {
                     return self.fail("the hub does not flag the live as audio-only again");
                 }
-                if labels.iter().any(|l| l.starts_with("watch-video")) || app.video.placed.contains_key(&id) || Self::tile_state(&id).is_some() {
+                if labels.iter().any(|l| l.starts_with("watch-video"))
+                    || app.video.placed.contains_key(&id)
+                    || Self::tile_state(&id).is_some()
+                {
                     return self.fail("the video of the screen share was not released");
                 }
                 if !audio.is_some_and(|a| a.rms_dbfs.is_some_and(|d| d > AO_SILENCE_DBFS)) {
@@ -3044,10 +3637,10 @@ impl Auto {
                 self.goto(21, "muted the stream and set 50% (item 2 controls)");
             }
             21 if self.waited(2) => {
-                // "Parar de ouvir": gone from the viewer list and the stats.
+                // "Stop listening": gone from the viewer list and the stats.
                 let id = self.ao.streamer.clone();
                 app.unwatch(&id);
-                self.goto(22, "Parar de ouvir");
+                self.goto(22, "Stop listening");
             }
             22 if self.waited(3) => {
                 let id = self.ao.streamer.clone();
@@ -3057,11 +3650,15 @@ impl Auto {
                 if !self.fresh_stats(app) {
                     return None;
                 }
-                let labels: Vec<String> = Self::ao_labels(app).iter().map(|s| s.to_string()).collect();
-                if labels.iter().any(|l| l.ends_with(&format!(":{id}")) && l.starts_with("watch-")) {
+                let labels: Vec<String> =
+                    Self::ao_labels(app).iter().map(|s| s.to_string()).collect();
+                if labels
+                    .iter()
+                    .any(|l| l.ends_with(&format!(":{id}")) && l.starts_with("watch-"))
+                {
                     return self.fail("the stream's subscriptions are still there");
                 }
-                // The tile offers "Ouvir" again; pressing it works a second time.
+                // The tile offers "Listen" again; pressing it works a second time.
                 if !app.watch(&id) {
                     return self.fail("watch refused the second time");
                 }
@@ -3078,8 +3675,16 @@ impl Auto {
             24 => {
                 let id = self.ao.streamer.parse::<i64>().unwrap_or(-1);
                 if !app.voice_members.get(&id).is_some_and(|m| m.streaming) {
-                    let toast = app.call.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
-                    self.ao_log(&format!("A ended its live: watching {:?}, toast {toast:?}", app.voice.watching));
+                    let toast = app
+                        .call
+                        .toast
+                        .as_ref()
+                        .map(|t| t.0.clone())
+                        .unwrap_or_default();
+                    self.ao_log(&format!(
+                        "A ended its live: watching {:?}, toast {toast:?}",
+                        app.voice.watching
+                    ));
                     if !app.voice.watching.is_empty() {
                         return self.fail("still 'watching' after the live ended");
                     }
@@ -3101,24 +3706,42 @@ impl Auto {
 
 impl Auto {
     /// C: a third client that logs in and never joins voice. It must learn from the hub alone
-    /// (`VoiceMember::audio_only`) that A's live is audio-only: the music note and "Ouvir"
+    /// (`VoiceMember::audio_only`) that A's live is audio-only: the music note and "Listen"
     /// decision is right although the voice room (the LiveKit fallback) says nothing about A.
     /// With `--kinds` it follows A's live to a screen share and back; at the end the flag is
     /// cleared again.
     pub(crate) fn run_audio_c(&mut self, app: &mut App) -> Option<i32> {
         // The hub never lists the flag on someone who is not streaming.
-        if let Some(m) = app.voice_members.values().find(|m| m.audio_only && !m.streaming) {
-            return self.fail(&format!("{} has audio_only without streaming", m.user.username));
+        if let Some(m) = app
+            .voice_members
+            .values()
+            .find(|m| m.audio_only && !m.streaming)
+        {
+            return self.fail(&format!(
+                "{} has audio_only without streaming",
+                m.user.username
+            ));
         }
         let me = app.my_id();
-        let live = |app: &App| app.voice_members.values().find(|m| m.streaming && Some(m.user.id) != me).cloned();
+        let live = |app: &App| {
+            app.voice_members
+                .values()
+                .find(|m| m.streaming && Some(m.user.id) != me)
+                .cloned()
+        };
         match self.step {
             0 => self.connect(app),
             1 => {
                 if self.logged_in(app) {
-                    self.goto(2, "logged in; staying out of voice, waiting for an audio-only live");
+                    self.goto(
+                        2,
+                        "logged in; staying out of voice, waiting for an audio-only live",
+                    );
                 } else if self.waited(30) || app.form.error.is_some() {
-                    return self.fail(&format!("could not log in: {}", app.form.error.clone().unwrap_or_default()));
+                    return self.fail(&format!(
+                        "could not log in: {}",
+                        app.form.error.clone().unwrap_or_default()
+                    ));
                 }
             }
             2 => {
@@ -3134,10 +3757,14 @@ impl Auto {
                         return self.fail("the voice room knows about a live in a room I am not in (the test proves nothing)");
                     }
                     if !decision {
-                        return self.fail("outside the room the tile ignored the hub's audio_only flag");
+                        return self
+                            .fail("outside the room the tile ignored the hub's audio_only flag");
                     }
                     self.ao.streamer = key;
-                    self.goto(if self.args.kinds { 3 } else { 5 }, "the hub's flag alone makes the live audio-only here");
+                    self.goto(
+                        if self.args.kinds { 3 } else { 5 },
+                        "the hub's flag alone makes the live audio-only here",
+                    );
                 } else if self.waited(240) {
                     return self.fail("never saw an audio-only live");
                 }
@@ -3148,7 +3775,10 @@ impl Auto {
                     if app.stream_is_audio_only(&m) {
                         return self.fail("a screen share is still shown as audio-only");
                     }
-                    self.goto(4, "the live became a screen share: flag cleared, tile follows");
+                    self.goto(
+                        4,
+                        "the live became a screen share: flag cleared, tile follows",
+                    );
                 } else if live(app).is_none() {
                     return self.fail("the live ended before it became a screen share");
                 } else if self.waited(120) {
@@ -3178,7 +3808,14 @@ impl Auto {
                     }
                     other => {
                         let flag = other.map(|m| m.audio_only);
-                        self.ao_log(&format!("A's live ended; member {} flag {flag:?}", if other.is_some() { "still in voice" } else { "gone" }));
+                        self.ao_log(&format!(
+                            "A's live ended; member {} flag {flag:?}",
+                            if other.is_some() {
+                                "still in voice"
+                            } else {
+                                "gone"
+                            }
+                        ));
                         if flag == Some(true) {
                             return self.fail("the audio_only flag outlived the live");
                         }

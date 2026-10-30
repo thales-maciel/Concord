@@ -1,4 +1,4 @@
-//! Direct messages ("Mensagens diretas") and private 1:1 calls, added after v0.5.2 with no
+//! Direct messages ("Direct messages") and private 1:1 calls, added after v0.5.2 with no
 //! protocol bump: new endpoints, new types and new events only; nothing existing changes.
 //!
 //! A conversation ([`DmConversation`]) belongs to exactly two people, and the hub delivers it,
@@ -145,7 +145,10 @@ impl DmMessageKind {
 
     /// A call line (written by the hub, never deletable).
     pub fn is_call(&self) -> bool {
-        matches!(self, DmMessageKind::CallMissed | DmMessageKind::CallDeclined | DmMessageKind::CallEnded)
+        matches!(
+            self,
+            DmMessageKind::CallMissed | DmMessageKind::CallDeclined | DmMessageKind::CallEnded
+        )
     }
 }
 
@@ -232,7 +235,11 @@ pub struct DmCall {
 impl DmCall {
     /// The other person of the call, seen from `me`.
     pub fn peer_of(&self, me: UserId) -> &User {
-        if self.caller.id == me { &self.callee } else { &self.caller }
+        if self.caller.id == me {
+            &self.callee
+        } else {
+            &self.caller
+        }
     }
 }
 
@@ -289,30 +296,87 @@ mod tests {
 
     #[test]
     fn a_text_message_has_no_kind_and_unknown_kinds_are_tolerated() {
-        let m = DmMessage { id: 1, dm_id: 2, author: User::new(3, "a"), content: "oi".into(), created_at_ms: 4, kind: DmMessageKind::Text, call_secs: 0, attachments: vec![], reply: None, reactions: vec![] };
+        let m = DmMessage {
+            id: 1,
+            dm_id: 2,
+            author: User::new(3, "a"),
+            content: "oi".into(),
+            created_at_ms: 4,
+            kind: DmMessageKind::Text,
+            call_secs: 0,
+            attachments: vec![],
+            reply: None,
+            reactions: vec![],
+        };
         let json = serde_json::to_string(&m).unwrap();
-        assert_eq!(json, r#"{"id":1,"dm_id":2,"author":{"id":3,"username":"a"},"content":"oi","created_at_ms":4}"#);
+        assert_eq!(
+            json,
+            r#"{"id":1,"dm_id":2,"author":{"id":3,"username":"a"},"content":"oi","created_at_ms":4}"#
+        );
         assert_eq!(serde_json::from_str::<DmMessage>(&json).unwrap(), m);
-        let call = DmMessage { kind: DmMessageKind::CallEnded, call_secs: 61, content: String::new(), ..m.clone() };
+        let call = DmMessage {
+            kind: DmMessageKind::CallEnded,
+            call_secs: 61,
+            content: String::new(),
+            ..m.clone()
+        };
         let json = serde_json::to_string(&call).unwrap();
-        assert!(json.contains(r#""kind":"call_ended","call_secs":61"#), "{json}");
+        assert!(
+            json.contains(r#""kind":"call_ended","call_secs":61"#),
+            "{json}"
+        );
         let future = json.replace("call_ended", "video_note");
-        assert_eq!(serde_json::from_str::<DmMessage>(&future).unwrap().kind, DmMessageKind::Other);
+        assert_eq!(
+            serde_json::from_str::<DmMessage>(&future).unwrap().kind,
+            DmMessageKind::Other
+        );
         assert!(DmMessageKind::CallMissed.is_call() && !DmMessageKind::Text.is_call());
     }
 
     #[test]
     fn conversation_and_call_wire_shapes() {
-        let c = DmConversation { id: 5, peer: User::new(2, "b"), last_message: None, last_activity_ms: 9, unread: 0, read_up_to: 0, blocked: false };
+        let c = DmConversation {
+            id: 5,
+            peer: User::new(2, "b"),
+            last_message: None,
+            last_activity_ms: 9,
+            unread: 0,
+            read_up_to: 0,
+            blocked: false,
+        };
         let json = serde_json::to_string(&c).unwrap();
-        assert_eq!(json, r#"{"id":5,"peer":{"id":2,"username":"b"},"last_activity_ms":9,"unread":0,"read_up_to":0}"#);
-        assert_eq!(serde_json::from_str::<DmConversation>(r#"{"id":5,"peer":{"id":2,"username":"b"},"last_activity_ms":9}"#).unwrap(), c);
-        let call = DmCall { id: 1, dm_id: 5, caller: User::new(1, "a"), callee: User::new(2, "b"), state: CallState::Ringing, started_at_ms: 3 };
+        assert_eq!(
+            json,
+            r#"{"id":5,"peer":{"id":2,"username":"b"},"last_activity_ms":9,"unread":0,"read_up_to":0}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<DmConversation>(
+                r#"{"id":5,"peer":{"id":2,"username":"b"},"last_activity_ms":9}"#
+            )
+            .unwrap(),
+            c
+        );
+        let call = DmCall {
+            id: 1,
+            dm_id: 5,
+            caller: User::new(1, "a"),
+            callee: User::new(2, "b"),
+            state: CallState::Ringing,
+            started_at_ms: 3,
+        };
         assert_eq!(call.peer_of(1).id, 2);
         assert_eq!(call.peer_of(2).id, 1);
-        assert!(serde_json::to_string(&call).unwrap().contains(r#""state":"ringing""#));
-        assert_eq!(serde_json::to_string(&CallEndReason::JoinedVoice).unwrap(), r#""joined_voice""#);
-        assert_eq!(serde_json::from_str::<CallEndReason>(r#""exploded""#).unwrap(), CallEndReason::Other);
+        assert!(serde_json::to_string(&call)
+            .unwrap()
+            .contains(r#""state":"ringing""#));
+        assert_eq!(
+            serde_json::to_string(&CallEndReason::JoinedVoice).unwrap(),
+            r#""joined_voice""#
+        );
+        assert_eq!(
+            serde_json::from_str::<CallEndReason>(r#""exploded""#).unwrap(),
+            CallEndReason::Other
+        );
     }
 
     /// The events a v0.5.2 app understands (a subset is enough: an unknown tag fails to parse).
@@ -332,22 +396,60 @@ mod tests {
     #[test]
     fn the_new_events_are_skipped_by_a_v052_app_and_read_by_a_new_one() {
         use crate::ServerEvent;
-        let msg = DmMessage { id: 1, dm_id: 2, author: User::new(3, "a"), content: "oi".into(), created_at_ms: 4, kind: DmMessageKind::Text, call_secs: 0, attachments: vec![], reply: None, reactions: vec![] };
-        let call = DmCall { id: 1, dm_id: 2, caller: User::new(3, "a"), callee: User::new(4, "b"), state: CallState::Active, started_at_ms: 3 };
+        let msg = DmMessage {
+            id: 1,
+            dm_id: 2,
+            author: User::new(3, "a"),
+            content: "oi".into(),
+            created_at_ms: 4,
+            kind: DmMessageKind::Text,
+            call_secs: 0,
+            attachments: vec![],
+            reply: None,
+            reactions: vec![],
+        };
+        let call = DmCall {
+            id: 1,
+            dm_id: 2,
+            caller: User::new(3, "a"),
+            callee: User::new(4, "b"),
+            state: CallState::Active,
+            started_at_ms: 3,
+        };
         for ev in [
             ServerEvent::DmMessageCreated { message: msg },
-            ServerEvent::DmMessageDeleted { dm_id: 2, message_id: 1 },
+            ServerEvent::DmMessageDeleted {
+                dm_id: 2,
+                message_id: 1,
+            },
             ServerEvent::DmRead { dm_id: 2, up_to: 1 },
             ServerEvent::CallInvite { call: call.clone() },
             ServerEvent::CallAccepted { call },
-            ServerEvent::CallDeclined { dm_id: 2, call_id: 1 },
-            ServerEvent::CallEnded { dm_id: 2, call_id: 1, reason: CallEndReason::Missed },
+            ServerEvent::CallDeclined {
+                dm_id: 2,
+                call_id: 1,
+            },
+            ServerEvent::CallEnded {
+                dm_id: 2,
+                call_id: 1,
+                reason: CallEndReason::Missed,
+            },
         ] {
             let json = serde_json::to_string(&ev).unwrap();
-            assert!(serde_json::from_str::<v052::ServerEvent>(&json).is_err(), "{json}");
+            assert!(
+                serde_json::from_str::<v052::ServerEvent>(&json).is_err(),
+                "{json}"
+            );
             assert!(serde_json::from_str::<ServerEvent>(&json).is_ok(), "{json}");
         }
-        let json = serde_json::to_string(&ServerEvent::DmMessageDeleted { dm_id: 2, message_id: 1 }).unwrap();
-        assert_eq!(json, r#"{"type":"dm_message_deleted","dm_id":2,"message_id":1}"#);
+        let json = serde_json::to_string(&ServerEvent::DmMessageDeleted {
+            dm_id: 2,
+            message_id: 1,
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"dm_message_deleted","dm_id":2,"message_id":1}"#
+        );
     }
 }

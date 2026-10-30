@@ -1,6 +1,6 @@
 //! The Windows clipboard for chat images: noticing Ctrl+V (egui only reports a paste when the
 //! clipboard has text, and a screenshot has none), reading a pasted picture or copied files, and
-//! "Copiar" in the image viewer.
+//! "Copy" in the image viewer.
 //!
 //! The DIB <-> picture conversions are plain functions (unit-tested without touching the real
 //! clipboard).
@@ -37,8 +37,20 @@ pub fn dib_to_image(dib: &[u8]) -> Option<DynamicImage> {
     let bits = u16::from_le_bytes([dib[14], dib[15]]);
     let compression = u32_at(16);
     let used = u32_at(32) as usize;
-    let masks = if header == 40 && matches!(compression, 3 | 6) { if compression == 6 { 16 } else { 12 } } else { 0 };
-    let palette = if bits <= 8 { 4 * if used == 0 { 1usize << bits } else { used } } else { 4 * used };
+    let masks = if header == 40 && matches!(compression, 3 | 6) {
+        if compression == 6 {
+            16
+        } else {
+            12
+        }
+    } else {
+        0
+    };
+    let palette = if bits <= 8 {
+        4 * if used == 0 { 1usize << bits } else { used }
+    } else {
+        4 * used
+    };
     let offset = 14 + header + masks + palette;
     let mut file = Vec::with_capacity(dib.len() + 14);
     file.extend(b"BM");
@@ -85,10 +97,17 @@ mod win {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use windows_sys::Win32::Foundation::{GlobalFree, HWND, LPARAM, LRESULT, WPARAM};
-    use windows_sys::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW, SetClipboardData};
-    use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE};
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
+        OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
+    };
+    use windows_sys::Win32::System::Memory::{
+        GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
+    };
     use windows_sys::Win32::System::Ole::{CF_DIB, CF_DIBV5, CF_HDROP, CF_UNICODETEXT};
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_INSERT, VK_MENU, VK_SHIFT};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        GetKeyState, VK_CONTROL, VK_INSERT, VK_MENU, VK_SHIFT,
+    };
     use windows_sys::Win32::UI::Shell::{DefSubclassProc, DragQueryFileW, SetWindowSubclass};
     use windows_sys::Win32::UI::WindowsAndMessaging::WM_KEYDOWN;
 
@@ -98,7 +117,14 @@ mod win {
     static HOOKED: AtomicBool = AtomicBool::new(false);
     const SUBCLASS_ID: usize = 0x766f_7868; // "voxh"
 
-    unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, _data: usize) -> LRESULT {
+    unsafe extern "system" fn proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        _id: usize,
+        _data: usize,
+    ) -> LRESULT {
         if msg == WM_KEYDOWN {
             // SAFETY: plain key-state queries on the UI thread.
             let down = |vk: u16| unsafe { GetKeyState(i32::from(vk)) } < 0;
@@ -194,14 +220,18 @@ mod win {
                 let len = DragQueryFileW(h, i, std::ptr::null_mut(), 0);
                 let mut buf = vec![0u16; len as usize + 1];
                 let got = DragQueryFileW(h, i, buf.as_mut_ptr(), buf.len() as u32);
-                out.push(PathBuf::from(String::from_utf16_lossy(&buf[..got as usize])));
+                out.push(PathBuf::from(String::from_utf16_lossy(
+                    &buf[..got as usize],
+                )));
             }
             Some(out)
         }
     }
 
     pub fn read(owner: isize) -> Clip {
-        let Some(_open) = Open::new(owner) else { return Clip::Nothing };
+        let Some(_open) = Open::new(owner) else {
+            return Clip::Nothing;
+        };
         let has = |f: u32| unsafe { IsClipboardFormatAvailable(f) } != 0;
         if has(u32::from(CF_HDROP)) {
             if let Some(files) = read_files() {
@@ -253,13 +283,19 @@ mod win {
     }
 
     pub fn write(owner: isize, dib: &[u8], png: &[u8]) -> Result<(), String> {
-        let Some(_open) = Open::new(owner) else { return Err("A área de transferência está ocupada.".into()) };
+        let Some(_open) = Open::new(owner) else {
+            return Err("The clipboard is busy.".into());
+        };
         // SAFETY: the clipboard is open.
         unsafe { EmptyClipboard() };
         let ok_dib = put(u32::from(CF_DIB), dib);
         let fmt = png_format();
         let ok_png = fmt != 0 && put(fmt, png);
-        if ok_dib || ok_png { Ok(()) } else { Err("Não deu para copiar a imagem.".into()) }
+        if ok_dib || ok_png {
+            Ok(())
+        } else {
+            Err("Could not copy the image.".into())
+        }
     }
 }
 
@@ -290,17 +326,22 @@ pub fn read(owner: isize) -> Clip {
     }
 }
 
-/// "Copiar": the picture as a bitmap (every app) and as PNG (keeps transparency).
+/// "Copy": the picture as a bitmap (every app) and as PNG (keeps transparency).
 pub fn write_image(owner: isize, img: &RgbaImage) -> Result<(), String> {
     let dib = image_to_dib(img);
     let mut png = Vec::new();
-    image::DynamicImage::ImageRgba8(img.clone()).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    image::DynamicImage::ImageRgba8(img.clone())
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
     #[cfg(windows)]
     return win::write(owner, &dib, &png);
     #[cfg(not(windows))]
     {
         let _ = (owner, dib, png);
-        Err(format!("Copiar imagem: {}.", crate::platform::SOON_MAC.to_lowercase()))
+        Err(format!(
+            "Copy image: {}.",
+            crate::platform::SOON_MAC.to_lowercase()
+        ))
     }
 }
 
@@ -310,12 +351,23 @@ mod tests {
 
     #[test]
     fn dibs_round_trip() {
-        let img = RgbaImage::from_fn(37, 21, |x, y| image::Rgba([(x * 6) as u8, (y * 11) as u8, 77, if x < 5 { 128 } else { 255 }]));
+        let img = RgbaImage::from_fn(37, 21, |x, y| {
+            image::Rgba([
+                (x * 6) as u8,
+                (y * 11) as u8,
+                77,
+                if x < 5 { 128 } else { 255 },
+            ])
+        });
         let dib = image_to_dib(&img);
         assert_eq!(dib.len(), 40 + 37 * 21 * 4);
         let back = dib_to_image(&dib).unwrap().to_rgba8();
         assert_eq!((back.width(), back.height()), (37, 21));
-        assert_eq!(back.get_pixel(20, 3), img.get_pixel(20, 3), "rows come back in order");
+        assert_eq!(
+            back.get_pixel(20, 3),
+            img.get_pixel(20, 3),
+            "rows come back in order"
+        );
     }
 
     #[test]
@@ -335,7 +387,11 @@ mod tests {
             dib.extend([0u8; 3]); // 9 bytes -> 12
         }
         let img = dib_to_image(&dib).unwrap().to_rgb8();
-        assert_eq!(img.get_pixel(0, 0).0, [0, 0, 255], "first row is blue (top-down)");
+        assert_eq!(
+            img.get_pixel(0, 0).0,
+            [0, 0, 255],
+            "first row is blue (top-down)"
+        );
         assert_eq!(img.get_pixel(2, 1).0, [0, 255, 0]);
     }
 

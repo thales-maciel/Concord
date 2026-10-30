@@ -11,7 +11,10 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use tokio::sync::broadcast::{error::RecvError, Receiver};
 use tokio::time::Instant;
-use vox_proto::{ChannelId, ChannelKind, ClientEvent, ServerEvent, User, VoiceMember, ERR_TOO_MANY_MENTIONS, MENTIONS_WIRE_MAX};
+use vox_proto::{
+    ChannelId, ChannelKind, ClientEvent, ServerEvent, User, VoiceMember, ERR_TOO_MANY_MENTIONS,
+    MENTIONS_WIRE_MAX,
+};
 
 use crate::access::{self, VoiceView};
 use crate::api::{user_for_token_hash, ApiErr};
@@ -51,23 +54,36 @@ pub async fn handler(
         tracing::warn!(%peer, user = %row.username, "ws refused: too many connections of this user");
         return ApiErr::new(StatusCode::TOO_MANY_REQUESTS, "too many connections").into_response();
     }
-    if let Err(e) = crate::owner::claim_from_host_pc(&s, &row, peer.ip(), &headers, Some(&hash)).await {
+    if let Err(e) =
+        crate::owner::claim_from_host_pc(&s, &row, peer.ip(), &headers, Some(&hash)).await
+    {
         tracing::error!("claiming the server for {}: {e:#}", row.username);
     }
     // The connection's slot in the listener's caps lives as long as the socket.
     let slot = slot.map(|Extension(s)| s);
-    ws.max_message_size(64 * 1024).on_upgrade(move |socket| async move {
-        let _slot = slot;
-        run(socket, s, row, hash, peer).await
-    })
+    ws.max_message_size(64 * 1024)
+        .on_upgrade(move |socket| async move {
+            let _slot = slot;
+            run(socket, s, row, hash, peer).await
+        })
 }
 
-async fn run(mut socket: WebSocket, s: AppState, row: UserRow, session_hash: String, peer: SocketAddr) {
+async fn run(
+    mut socket: WebSocket,
+    s: AppState,
+    row: UserRow,
+    session_hash: String,
+    peer: SocketAddr,
+) {
     let owner = s.owner();
     let user = row.user(&owner);
     // Profiles: the presence and status the person left (a status that ran out is gone).
     let id = user.id;
-    let presence = match s.db.call(move |c| crate::profile::load_entry(c, id, crate::util::now_ms())).await {
+    let presence = match s
+        .db
+        .call(move |c| crate::profile::load_entry(c, id, crate::util::now_ms()))
+        .await
+    {
         Ok(p) => p,
         Err(e) => {
             tracing::error!("loading the presence of {}: {e:#}", user.username);
@@ -85,7 +101,10 @@ async fn run(mut socket: WebSocket, s: AppState, row: UserRow, session_hash: Str
 }
 
 async fn send(socket: &mut WebSocket, msg: WsMsg) -> bool {
-    matches!(tokio::time::timeout(SEND_TIMEOUT, socket.send(msg)).await, Ok(Ok(())))
+    matches!(
+        tokio::time::timeout(SEND_TIMEOUT, socket.send(msg)).await,
+        Ok(Ok(()))
+    )
 }
 
 async fn send_event(socket: &mut WebSocket, ev: &ServerEvent) -> bool {
@@ -121,7 +140,10 @@ async fn session(
     let mut ping = tokio::time::interval(PING_EVERY);
     ping.tick().await;
     // A `VoiceState` over the rate limit waits here (only the newest one) until it may go.
-    let mut voice = PendingVoice { ev: None, at: Instant::now() };
+    let mut voice = PendingVoice {
+        ev: None,
+        at: Instant::now(),
+    };
     loop {
         tokio::select! {
             incoming = socket.recv() => {
@@ -208,7 +230,12 @@ async fn session(
 /// what it was told, it gets the new `ChannelsChanged`; the voice members of a channel it can no
 /// longer see leave voice for it, those of a channel it can see now join. Returns false when
 /// sending failed.
-async fn send_view(socket: &mut WebSocket, s: &AppState, user: vox_proto::UserId, view: &mut Vec<vox_proto::Channel>) -> bool {
+async fn send_view(
+    socket: &mut WebSocket,
+    s: &AppState,
+    user: vox_proto::UserId,
+    view: &mut Vec<vox_proto::Channel>,
+) -> bool {
     let now = s.visible_channels(user);
     if now == *view {
         return true;
@@ -218,11 +245,26 @@ async fn send_view(socket: &mut WebSocket, s: &AppState, user: vox_proto::UserId
     let mut members = s.voice_members();
     members.sort_by_key(|m| m.user.id);
     let in_channels = |set: &HashSet<ChannelId>, other: &HashSet<ChannelId>| -> Vec<VoiceMember> {
-        members.iter().filter(|m| m.user.id != user && m.channel_id.is_some_and(|c| set.contains(&c) && !other.contains(&c))).cloned().collect()
+        members
+            .iter()
+            .filter(|m| {
+                m.user.id != user
+                    && m.channel_id
+                        .is_some_and(|c| set.contains(&c) && !other.contains(&c))
+            })
+            .cloned()
+            .collect()
     };
     let (gone, came) = (in_channels(&had, &has), in_channels(&has, &had));
     for m in gone {
-        if !send_event(socket, &ServerEvent::VoiceStateChanged { member: state::left(m) }).await {
+        if !send_event(
+            socket,
+            &ServerEvent::VoiceStateChanged {
+                member: state::left(m),
+            },
+        )
+        .await
+        {
             return false;
         }
     }
@@ -247,14 +289,24 @@ struct PendingVoice {
 
 impl PendingVoice {
     async fn offer(&mut self, s: &AppState, user: &User, ev: ClientEvent) -> Option<ServerEvent> {
-        let ClientEvent::VoiceState { channel_id, muted, deafened, streaming, camera, audio_only } = ev else {
+        let ClientEvent::VoiceState {
+            channel_id,
+            muted,
+            deafened,
+            streaming,
+            camera,
+            audio_only,
+        } = ev
+        else {
             return None;
         };
         if self.ev.is_some() {
             self.ev = Some(ev); // newest wins; the timer is already set
             return None;
         }
-        if s.voice_unchanged(user.id, channel_id, muted, deafened, streaming, camera, audio_only) {
+        if s.voice_unchanged(
+            user.id, channel_id, muted, deafened, streaming, camera, audio_only,
+        ) {
             return None;
         }
         if let Err(wait) = s.take_voice_token(user.id) {
@@ -271,15 +323,28 @@ impl PendingVoice {
 async fn handle(s: &AppState, user: &User, ev: ClientEvent) -> Option<ServerEvent> {
     match ev {
         ClientEvent::Ping { nonce } => Some(ServerEvent::Pong { nonce }),
-        ClientEvent::VoiceState { channel_id, muted, deafened, streaming, camera, audio_only } => {
+        ClientEvent::VoiceState {
+            channel_id,
+            muted,
+            deafened,
+            streaming,
+            camera,
+            audio_only,
+        } => {
             tracing::debug!(user = %user.username, ?channel_id, muted, deafened, streaming, camera, audio_only, "voice state");
             let before = s.voice_of(user.id).and_then(|m| m.channel_id);
-            if let Err(e) = s.set_voice(user, channel_id, muted, deafened, streaming, camera, audio_only) {
+            if let Err(e) = s.set_voice(
+                user, channel_id, muted, deafened, streaming, camera, audio_only,
+            ) {
                 return Some(err(e));
             }
             if let Some(ch) = channel_id.filter(|ch| Some(*ch) != before) {
                 if s.is_server_muted(user.id) {
-                    crate::admin::enforce_mute_on_join(s, user.id, crate::voice_guard::voice_room(ch));
+                    crate::admin::enforce_mute_on_join(
+                        s,
+                        user.id,
+                        crate::voice_guard::voice_room(ch),
+                    );
                 }
                 // Joining a voice channel leaves a DM call (as on Discord).
                 crate::calls::on_voice_join(s, user.id, ch).await;
@@ -291,7 +356,13 @@ async fn handle(s: &AppState, user: &User, ev: ClientEvent) -> Option<ServerEven
             None
         }
         ClientEvent::PlaySound { sound_id } => crate::sounds::play(s, user, sound_id).await,
-        ClientEvent::SendMessage { channel_id, content, mentions, reply_to, reply_mention } => {
+        ClientEvent::SendMessage {
+            channel_id,
+            content,
+            mentions,
+            reply_to,
+            reply_mention,
+        } => {
             let content = content.trim();
             if content.is_empty() || content.chars().count() > MAX_CONTENT_CHARS {
                 return Some(err("message must be 1-4000 characters"));
@@ -300,7 +371,8 @@ async fn handle(s: &AppState, user: &User, ev: ClientEvent) -> Option<ServerEven
                 return Some(err(ERR_TOO_MANY_MENTIONS));
             }
             // A private channel without access is as unknown as a missing one (v0.9).
-            if !matches!(s.channel_for(user.id, channel_id), Some(c) if c.kind == ChannelKind::Text) {
+            if !matches!(s.channel_for(user.id, channel_id), Some(c) if c.kind == ChannelKind::Text)
+            {
                 return Some(err("unknown text channel"));
             }
             if !s.allow_message(user.id) {
@@ -308,8 +380,19 @@ async fn handle(s: &AppState, user: &User, ev: ClientEvent) -> Option<ServerEven
             }
             // The author as everybody sees them now (a role may have changed since connecting).
             let (u, text, owner) = (s.current_user(user), content.to_string(), s.owner());
-            let draft = crate::chat::Draft { mentions, reply_to, reply_mention, access: Some(s.access.rules()) };
-            match s.db.call(move |c| db::insert_message_with(c, channel_id, &u, &text, &[], &draft, &owner)).await {
+            let draft = crate::chat::Draft {
+                mentions,
+                reply_to,
+                reply_mention,
+                access: Some(s.access.rules()),
+            };
+            match s
+                .db
+                .call(move |c| {
+                    db::insert_message_with(c, channel_id, &u, &text, &[], &draft, &owner)
+                })
+                .await
+            {
                 Ok(Ok(message)) => {
                     s.send_channel(channel_id, &ServerEvent::MessageCreated { message });
                     None

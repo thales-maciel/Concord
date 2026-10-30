@@ -22,16 +22,30 @@ pub struct Opts {
 
 impl Opts {
     pub fn lossy(quality: f32) -> Opts {
-        Opts { lossless: false, quality, method: 4, sharp_yuv: false }
+        Opts {
+            lossless: false,
+            quality,
+            method: 4,
+            sharp_yuv: false,
+        }
     }
 
     pub fn lossless() -> Opts {
-        Opts { lossless: true, quality: 75.0, method: 4, sharp_yuv: false }
+        Opts {
+            lossless: true,
+            quality: 75.0,
+            method: 4,
+            sharp_yuv: false,
+        }
     }
 }
 
 fn config(o: Opts) -> Option<ffi::WebPConfig> {
-    let preset = if o.lossless { ffi::WebPPreset::WEBP_PRESET_DEFAULT } else { ffi::WebPPreset::WEBP_PRESET_PHOTO };
+    let preset = if o.lossless {
+        ffi::WebPPreset::WEBP_PRESET_DEFAULT
+    } else {
+        ffi::WebPPreset::WEBP_PRESET_PHOTO
+    };
     let mut c = ffi::WebPConfig::new_with_preset(preset, o.quality).ok()?;
     if o.lossless {
         c.lossless = 1;
@@ -92,7 +106,8 @@ pub fn encode(pixels: &[u8], w: u32, h: u32, alpha: bool, o: Opts) -> Option<Vec
         pic.0.writer = Some(ffi::WebPMemoryWrite);
         pic.0.custom_ptr = (&mut writer as *mut ffi::WebPMemoryWriter).cast::<c_void>();
         let ok = ffi::WebPEncode(&cfg, &mut pic.0);
-        let out = (ok != 0 && !writer.mem.is_null()).then(|| std::slice::from_raw_parts(writer.mem, writer.size).to_vec());
+        let out = (ok != 0 && !writer.mem.is_null())
+            .then(|| std::slice::from_raw_parts(writer.mem, writer.size).to_vec());
         ffi::WebPMemoryWriterClear(&mut writer);
         out
     }
@@ -106,13 +121,25 @@ pub struct Frame<'a> {
 
 /// Encode an animation (frames are full RGBA canvases of `w`x`h`). Each frame may be lossy or
 /// lossless, whichever is smaller (`allow_mixed`); `end_ms` is when the last frame ends.
-pub fn encode_animation(frames: &[Frame<'_>], w: u32, h: u32, end_ms: i32, quality: f32) -> Option<Vec<u8>> {
-    let cfg = config(Opts { lossless: false, quality, method: 4, sharp_yuv: false })?;
+pub fn encode_animation(
+    frames: &[Frame<'_>],
+    w: u32,
+    h: u32,
+    end_ms: i32,
+    quality: f32,
+) -> Option<Vec<u8>> {
+    let cfg = config(Opts {
+        lossless: false,
+        quality,
+        method: 4,
+        sharp_yuv: false,
+    })?;
     // SAFETY: every pointer handed to libwebp is valid for the call; the encoder is deleted on
     // every path (guard), pictures free themselves, and the assembled data is copied then freed.
     unsafe {
         let mut opts: ffi::WebPAnimEncoderOptions = std::mem::zeroed();
-        if ffi::WebPAnimEncoderOptionsInitInternal(&mut opts, ffi::WEBP_MUX_ABI_VERSION as i32) == 0 {
+        if ffi::WebPAnimEncoderOptionsInitInternal(&mut opts, ffi::WEBP_MUX_ABI_VERSION as i32) == 0
+        {
             return None;
         }
         opts.anim_params.loop_count = 0;
@@ -124,7 +151,12 @@ pub fn encode_animation(frames: &[Frame<'_>], w: u32, h: u32, end_ms: i32, quali
                 unsafe { ffi::WebPAnimEncoderDelete(self.0) };
             }
         }
-        let enc = ffi::WebPAnimEncoderNewInternal(w as i32, h as i32, &opts, ffi::WEBP_MUX_ABI_VERSION as i32);
+        let enc = ffi::WebPAnimEncoderNewInternal(
+            w as i32,
+            h as i32,
+            &opts,
+            ffi::WEBP_MUX_ABI_VERSION as i32,
+        );
         if enc.is_null() {
             return None;
         }
@@ -155,11 +187,15 @@ mod tests {
     #[test]
     fn stills_and_animations_decode_back() {
         let (w, h) = (64u32, 40u32);
-        let rgb: Vec<u8> = (0..w * h).flat_map(|i| [(i % 256) as u8, (i / 7 % 256) as u8, 30]).collect();
+        let rgb: Vec<u8> = (0..w * h)
+            .flat_map(|i| [(i % 256) as u8, (i / 7 % 256) as u8, 30])
+            .collect();
         let lossy = encode(&rgb, w, h, false, Opts::lossy(80.0)).unwrap();
         let back = image::load_from_memory(&lossy).unwrap();
         assert_eq!((back.width(), back.height()), (w, h));
-        let rgba: Vec<u8> = (0..w * h).flat_map(|i| [200, 10, (i % 256) as u8, if i % 2 == 0 { 0 } else { 255 }]).collect();
+        let rgba: Vec<u8> = (0..w * h)
+            .flat_map(|i| [200, 10, (i % 256) as u8, if i % 2 == 0 { 0 } else { 255 }])
+            .collect();
         let lossless = encode(&rgba, w, h, true, Opts::lossless()).unwrap();
         let back = image::load_from_memory(&lossless).unwrap().to_rgba8();
         // Exact wherever something is visible (the colour under fully transparent pixels is free).
@@ -169,9 +205,21 @@ mod tests {
                 assert_eq!(got, want, "lossless is exact");
             }
         }
-        assert!(encode(&rgb, w, h + 1, false, Opts::lossy(80.0)).is_none(), "wrong buffer size");
-        let frames: Vec<Vec<u8>> = (0..3).map(|k| (0..w * h).flat_map(|_| [k * 80, 50, 50, 255]).collect()).collect();
-        let list: Vec<Frame<'_>> = frames.iter().enumerate().map(|(i, f)| Frame { rgba: f, start_ms: i as i32 * 100 }).collect();
+        assert!(
+            encode(&rgb, w, h + 1, false, Opts::lossy(80.0)).is_none(),
+            "wrong buffer size"
+        );
+        let frames: Vec<Vec<u8>> = (0..3)
+            .map(|k| (0..w * h).flat_map(|_| [k * 80, 50, 50, 255]).collect())
+            .collect();
+        let list: Vec<Frame<'_>> = frames
+            .iter()
+            .enumerate()
+            .map(|(i, f)| Frame {
+                rgba: f,
+                start_ms: i as i32 * 100,
+            })
+            .collect();
         let anim = encode_animation(&list, w, h, 300, 75.0).unwrap();
         let d = image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(&anim)).unwrap();
         assert!(d.has_animation());

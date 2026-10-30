@@ -1,17 +1,6 @@
-//! Chat notifications and the tray: who deserves a sound, a counter, a taskbar flash, a badge and
-//! a Windows notification, and the window that hides in the tray instead of quitting.
-//!
-//! The rules are pure functions ([`plan`], [`badge_count`], [`preview`], [`BalloonGate`]) so they
-//! are unit tested; the Win32 side is `tray.rs`. A child module of `app` (declared there), so it
-//! uses the app's private helpers.
-//!
-//! What counts as "reading": the conversation is open in the chat AND the window has focus. A
-//! message for something you are reading is silent. Everything else counts as unread (sidebar
-//! counter, taskbar badge) and plays its sound. The Windows notification (taskbar flash,
-//! balloon) is only for when the window is not in front, and follows the setting "Notificações do
-//! Windows". A message that mentions me (v0.8: by id, `@todos` from staff, or a reply with
-//! "@ ligado") has its own sound, counts for "Só mensagens diretas e menções" and puts an `@` on
-//! the channel's counter.
+//! Notification policy and tray behavior; Win32 integration lives in `tray.rs`.
+//! A conversation is read only when visible and focused. Other messages count as unread;
+//! Windows notifications require an unfocused window and follow the user's filter.
 
 use std::sync::mpsc::{channel, Receiver};
 use std::time::{Duration, Instant};
@@ -26,7 +15,7 @@ use crate::tray::{Tray, TrayEvent};
 
 // ---------------------------------------------------------------- settings
 
-/// "Notificações do Windows".
+/// "Windows notifications".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WinNotify {
@@ -44,9 +33,9 @@ impl WinNotify {
 
     pub fn label(self) -> &'static str {
         match self {
-            WinNotify::All => "Todas as mensagens",
-            WinNotify::DmsAndMentions => "Só mensagens diretas e menções",
-            WinNotify::Off => "Desligadas",
+            WinNotify::All => "All messages",
+            WinNotify::DmsAndMentions => "Direct messages and mentions only",
+            WinNotify::Off => "Off",
         }
     }
 }
@@ -56,7 +45,7 @@ impl WinNotify {
 #[serde(default)]
 pub struct NotifySettings {
     pub windows: WinNotify,
-    /// "Ao fechar, minimizar para a bandeja" (on by default; older files get the default).
+    /// "Minimize to tray on close" (on by default; older files get the default).
     pub tray_on_close: bool,
     /// The one-time "o concord continua na bandeja" balloon was shown already.
     pub tray_hint_shown: bool,
@@ -64,7 +53,11 @@ pub struct NotifySettings {
 
 impl Default for NotifySettings {
     fn default() -> Self {
-        Self { windows: WinNotify::default(), tray_on_close: true, tray_hint_shown: false }
+        Self {
+            windows: WinNotify::default(),
+            tray_on_close: true,
+            tray_hint_shown: false,
+        }
     }
 }
 
@@ -91,14 +84,18 @@ pub struct Incoming {
 pub struct Plan {
     /// Count it as unread (sidebar counter, taskbar badge).
     pub unread: bool,
-    /// The chat sound to ask for (the alert settings and "Não perturbe" still apply).
+    /// The chat sound to ask for (the alert settings and "Do not disturb" still apply).
     pub sound: Option<AlertKind>,
     /// Flash the taskbar button and raise a Windows notification.
     pub toast: bool,
 }
 
 pub fn plan(mode: WinNotify, dnd: bool, i: &Incoming) -> Plan {
-    const NOTHING: Plan = Plan { unread: false, sound: None, toast: false };
+    const NOTHING: Plan = Plan {
+        unread: false,
+        sound: None,
+        toast: false,
+    };
     if i.mine || i.blocked || (i.open && i.focused) {
         return NOTHING;
     }
@@ -114,12 +111,21 @@ pub fn plan(mode: WinNotify, dnd: bool, i: &Incoming) -> Plan {
         WinNotify::DmsAndMentions => i.is_dm || i.is_mention,
         WinNotify::Off => false,
     };
-    Plan { unread: true, sound: Some(sound), toast: wanted && !dnd && !i.focused }
+    Plan {
+        unread: true,
+        sound: Some(sound),
+        toast: wanted && !dnd && !i.focused,
+    }
 }
 
 /// The number on the taskbar button: what the setting says is worth a notification, unread.
 /// (`mention_unread` is part of `channel_unread`.)
-pub fn badge_count(mode: WinNotify, dm_unread: u32, channel_unread: u32, mention_unread: u32) -> u32 {
+pub fn badge_count(
+    mode: WinNotify,
+    dm_unread: u32,
+    channel_unread: u32,
+    mention_unread: u32,
+) -> u32 {
     match mode {
         WinNotify::Off => 0,
         WinNotify::DmsAndMentions => dm_unread.saturating_add(mention_unread),
@@ -135,8 +141,8 @@ pub fn preview(caption: &str, images: usize) -> String {
     if text.is_empty() {
         return match images {
             0 => String::new(),
-            1 => "Enviou uma imagem".into(),
-            n => format!("Enviou {n} imagens"),
+            1 => "Sent an image".into(),
+            n => format!("Sent {n} images"),
         };
     }
     if text.chars().count() <= PREVIEW_CHARS {
@@ -151,14 +157,14 @@ pub fn preview(caption: &str, images: usize) -> String {
 /// The title of a notification: the author, and where they wrote when it is a channel.
 pub fn toast_title(author: &str, channel: Option<&str>) -> String {
     match channel {
-        Some(c) => format!("{author} em #{c}"),
+        Some(c) => format!("{author} in #{c}"),
         None => author.to_string(),
     }
 }
 
 /// The title of a mention's notification.
 pub fn mention_title(author: &str, channel: &str) -> String {
-    format!("{author} mencionou você em #{channel}")
+    format!("{author} mentioned you in #{channel}")
 }
 
 /// Windows queues balloons and shows each for a few seconds: a burst of messages gets one.
@@ -171,7 +177,10 @@ pub struct BalloonGate {
 
 impl BalloonGate {
     pub fn admit(&mut self, now: Instant) -> bool {
-        if self.last.is_some_and(|t| now.saturating_duration_since(t) < BALLOON_GAP) {
+        if self
+            .last
+            .is_some_and(|t| now.saturating_duration_since(t) < BALLOON_GAP)
+        {
             return false;
         }
         self.last = Some(now);
@@ -214,7 +223,11 @@ impl RowLayout {
 
 /// The counter's text: "1".."99", then "99+".
 pub fn count_text(unread: u32) -> String {
-    if unread > 99 { "99+".to_string() } else { unread.to_string() }
+    if unread > 99 {
+        "99+".to_string()
+    } else {
+        unread.to_string()
+    }
 }
 
 /// The counter pill's width for a text this wide.
@@ -224,12 +237,21 @@ pub fn pill_width(text_w: f32) -> f32 {
 
 /// Lay out a row: `name_left` is where the name starts (after an avatar, say); `count_w` the
 /// counter pill's width (none: no counter), `mention` the "@", `icon_w` an extra icon slot (0: none).
-pub fn row_layout(row: egui::Rect, name_left: f32, count_w: Option<f32>, mention: bool, icon_w: f32) -> RowLayout {
+pub fn row_layout(
+    row: egui::Rect,
+    name_left: f32,
+    count_w: Option<f32>,
+    mention: bool,
+    icon_w: f32,
+) -> RowLayout {
     let name_left = name_left.clamp(row.left(), row.right());
     let cy = row.center().y;
     let mut right = row.right() - ROW_PAD;
     let mut place = |w: f32| {
-        let r = egui::Rect::from_min_max(egui::pos2(right - w, cy - PILL_H / 2.0), egui::pos2(right, cy + PILL_H / 2.0));
+        let r = egui::Rect::from_min_max(
+            egui::pos2(right - w, cy - PILL_H / 2.0),
+            egui::pos2(right, cy + PILL_H / 2.0),
+        );
         right = r.left() - BADGE_GAP;
         r
     };
@@ -238,9 +260,22 @@ pub fn row_layout(row: egui::Rect, name_left: f32, count_w: Option<f32>, mention
     let icon = (icon_w > 0.0).then(|| place(icon_w));
     let any = count.is_some() || mention.is_some() || icon.is_some();
     // The name ends a little before the first badge (or before the row's padding).
-    let name_right = if any { right + BADGE_GAP - ROW_PAD } else { right };
-    let name = egui::Rect::from_min_max(egui::pos2(name_left, row.top()), egui::pos2(name_right.max(name_left), row.bottom()));
-    RowLayout { row, name, count, mention, icon }
+    let name_right = if any {
+        right + BADGE_GAP - ROW_PAD
+    } else {
+        right
+    };
+    let name = egui::Rect::from_min_max(
+        egui::pos2(name_left, row.top()),
+        egui::pos2(name_right.max(name_left), row.bottom()),
+    );
+    RowLayout {
+        row,
+        name,
+        count,
+        mention,
+        icon,
+    }
 }
 
 /// Paint the badges of a laid-out row (the v1.0 look, `ui_kit::paint_badges`).
@@ -249,8 +284,17 @@ pub fn paint_badges(painter: &egui::Painter, l: &RowLayout, unread: u32) {
 }
 
 /// A row's name laid out to fit `max_w` on one line ("…" at the end when it does not).
-pub fn fit_name(painter: &egui::Painter, text: &str, font: egui::FontId, color: egui::Color32, max_w: f32) -> std::sync::Arc<egui::Galley> {
-    let mut job = egui::text::LayoutJob::single_section(text.to_string(), egui::TextFormat::simple(font, color));
+pub fn fit_name(
+    painter: &egui::Painter,
+    text: &str,
+    font: egui::FontId,
+    color: egui::Color32,
+    max_w: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::single_section(
+        text.to_string(),
+        egui::TextFormat::simple(font, color),
+    );
     job.wrap.max_width = max_w.max(1.0);
     job.wrap.max_rows = 1;
     job.wrap.break_anywhere = true;
@@ -303,7 +347,7 @@ pub struct NotifyUi {
     tray_retry_at: Option<Instant>,
     /// The window is hidden in the tray (no ui passes run, only `logic()`).
     pub hidden: bool,
-    /// "Sair" or an autotest finishing: closing the window really closes it.
+    /// "Quit" or an autotest finishing: closing the window really closes it.
     quitting: bool,
     /// Real Windows effects (flash, balloon). Off in the autotests, which only record them.
     real_effects: bool,
@@ -340,12 +384,12 @@ impl NotifyUi {
         }
     }
 
-    /// Closing the window now really closes the app (an autotest is done, or "Sair").
+    /// Closing the window now really closes the app (an autotest is done, or "Quit").
     pub fn allow_quit(&mut self) {
         self.quitting = true;
     }
 
-    /// "Sair" was cancelled (the host's "your server goes down" question, `host.rs`).
+    /// "Quit" was cancelled (the host's "your server goes down" question, `host.rs`).
     pub fn cancel_quit(&mut self) {
         self.quitting = false;
     }
@@ -382,7 +426,11 @@ impl App {
         if let Some(f) = self.notify.focus_override {
             return f;
         }
-        !self.notify.hidden && self.repaint.ctx().is_some_and(|c| c.input(|i| i.viewport().focused.unwrap_or(false)))
+        !self.notify.hidden
+            && self
+                .repaint
+                .ctx()
+                .is_some_and(|c| c.input(|i| i.viewport().focused.unwrap_or(false)))
     }
 
     /// The channel's chat is on screen: open in the center, or docked beside the cards (focus
@@ -420,12 +468,20 @@ impl App {
             self.chat_sound(kind, m.author.id);
         }
         if p.toast {
-            let channel = self.channels.iter().find(|c| c.id == m.channel_id).map(|c| c.name.clone());
+            let channel = self
+                .channels
+                .iter()
+                .find(|c| c.id == m.channel_id)
+                .map(|c| c.name.clone());
             let title = match (&channel, is_mention) {
                 (Some(c), true) => mention_title(m.author.shown_name(), c),
                 _ => toast_title(m.author.shown_name(), channel.as_deref()),
             };
-            self.raise_toast(Target::Channel(m.channel_id), title, preview(m.caption(), m.attachments.len()));
+            self.raise_toast(
+                Target::Channel(m.channel_id),
+                title,
+                preview(m.caption(), m.attachments.len()),
+            );
         }
     }
 
@@ -437,14 +493,24 @@ impl App {
             is_mention: false,
             mine: m.author.id == me,
             blocked: self.dms.is_blocked(m.author.id),
-            open: self.dms.selected == Some(m.dm_id) && self.screen == Screen::Main && self.center == Center::Chat,
+            open: self.dms.selected == Some(m.dm_id)
+                && self.screen == Screen::Main
+                && self.center == Center::Chat,
             focused: self.window_focused(),
         };
         let p = plan(self.settings.notify.windows, self.do_not_disturb(), &inc);
         if p.toast {
             self.dms.flashes += 1;
-            let body = if m.kind.is_call() { super::dms::call_line_text(m, me) } else { preview(m.caption(), m.attachments.len()) };
-            self.raise_toast(Target::Dm(m.dm_id), toast_title(m.author.shown_name(), None), body);
+            let body = if m.kind.is_call() {
+                super::dms::call_line_text(m, me)
+            } else {
+                preview(m.caption(), m.attachments.len())
+            };
+            self.raise_toast(
+                Target::Dm(m.dm_id),
+                toast_title(m.author.shown_name(), None),
+                body,
+            );
         }
     }
 
@@ -478,8 +544,16 @@ impl App {
         }
         #[cfg(windows)]
         if let Some(hwnd) = self.video.parent {
-            use windows_sys::Win32::UI::WindowsAndMessaging::{FlashWindowEx, FLASHWINFO, FLASHW_TIMERNOFG, FLASHW_TRAY};
-            let info = FLASHWINFO { cbSize: std::mem::size_of::<FLASHWINFO>() as u32, hwnd: hwnd as _, dwFlags: FLASHW_TRAY | FLASHW_TIMERNOFG, uCount: 0, dwTimeout: 0 };
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                FlashWindowEx, FLASHWINFO, FLASHW_TIMERNOFG, FLASHW_TRAY,
+            };
+            let info = FLASHWINFO {
+                cbSize: std::mem::size_of::<FLASHWINFO>() as u32,
+                hwnd: hwnd as _,
+                dwFlags: FLASHW_TRAY | FLASHW_TIMERNOFG,
+                uCount: 0,
+                dwTimeout: 0,
+            };
             // SAFETY: a plain call with a filled struct; the window is ours.
             unsafe { FlashWindowEx(&info) };
         }
@@ -493,7 +567,11 @@ impl App {
         self.notify.hidden = true;
         self.notify.stats.hides += 1;
         self.repaint.set_hidden(true);
-        match self.video.parent.filter(|_| vox_client_core::testmode::background()) {
+        match self
+            .video
+            .parent
+            .filter(|_| vox_client_core::testmode::background())
+        {
             // Autotests: natively, so the restore below can show it again without activating it.
             Some(hwnd) => vox_client_core::testmode::hide(hwnd),
             None => ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false)),
@@ -502,18 +580,25 @@ impl App {
             self.settings.notify.tray_hint_shown = true;
             self.save_settings();
             if let Some(t) = &self.notify.tray {
-                t.balloon("O concord continua aberto", "Ele ficou na bandeja do sistema. Clique no ícone para abrir ou use o botão direito para sair.");
+                t.balloon("concord is still running", "It is still in the system tray. Click the icon to open it or right-click to quit.");
             }
         }
     }
 
-    /// Bring the window back to the front (tray click, "Abrir concord", a clicked notification).
+    /// Bring the window back to the front (tray click, "Open concord", a clicked notification).
     pub fn show_window(&mut self, ctx: &egui::Context) {
-        tracing::info!(was_hidden = self.notify.hidden, "window restored from the tray");
+        tracing::info!(
+            was_hidden = self.notify.hidden,
+            "window restored from the tray"
+        );
         self.notify.hidden = false;
         self.notify.stats.restores += 1;
         self.repaint.set_hidden(false);
-        match self.video.parent.filter(|_| vox_client_core::testmode::background()) {
+        match self
+            .video
+            .parent
+            .filter(|_| vox_client_core::testmode::background())
+        {
             // Autotests (also with the real tray, `VOX_TRAY_TEST`): shown again without taking the
             // foreground (`SW_SHOWNOACTIVATE`), never focused.
             Some(hwnd) => vox_client_core::testmode::show_behind(hwnd),
@@ -540,7 +625,9 @@ impl App {
                 TrayEvent::BalloonClicked => {
                     self.show_window(ctx);
                     match self.notify.last_target {
-                        Some(Target::Channel(ch)) if self.channels.iter().any(|c| c.id == ch) => self.select_text(ch),
+                        Some(Target::Channel(ch)) if self.channels.iter().any(|c| c.id == ch) => {
+                            self.select_text(ch)
+                        }
                         Some(Target::Dm(dm)) if self.dms.conv(dm).is_some() => self.select_dm(dm),
                         _ => {}
                     }
@@ -553,7 +640,11 @@ impl App {
         }
 
         // The close button: hide instead (when the tray is there to bring the window back).
-        if ctx.input(|i| i.viewport().close_requested()) && self.notify.hides_on_close(self.settings.notify.tray_on_close) {
+        if ctx.input(|i| i.viewport().close_requested())
+            && self
+                .notify
+                .hides_on_close(self.settings.notify.tray_on_close)
+        {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.hide_to_tray(ctx);
         }
@@ -565,7 +656,12 @@ impl App {
             }
         }
 
-        let want = badge_count(self.settings.notify.windows, self.dms.total_unread(), self.unread.values().sum(), self.chatx.total_mentions());
+        let want = badge_count(
+            self.settings.notify.windows,
+            self.dms.total_unread(),
+            self.unread.values().sum(),
+            self.chatx.total_mentions(),
+        );
         let due = self.notify.badge_resend_at.is_some_and(|t| now >= t);
         if want != self.notify.badge_sent || (due && want > 0) {
             if want != self.notify.badge_sent {
@@ -589,10 +685,15 @@ impl App {
         if !wanted && self.notify.tray.is_some() && !self.notify.hidden {
             self.notify.tray = None;
         }
-        if !wanted || self.notify.tray.is_some() || self.notify.tray_retry_at.is_some_and(|t| now < t) {
+        if !wanted
+            || self.notify.tray.is_some()
+            || self.notify.tray_retry_at.is_some_and(|t| now < t)
+        {
             return;
         }
-        let Some(hwnd) = self.video.parent else { return };
+        let Some(hwnd) = self.video.parent else {
+            return;
+        };
         let r = self.repaint.clone();
         match Tray::start(hwnd, "concord", self.notify.tx.clone(), move || r.wake()) {
             Ok(t) => {
@@ -612,8 +713,8 @@ impl App {
     pub(super) fn notify_on_exit(&mut self) {
         self.notify.tray = None; // removes the icon and the badge
     }
-    // (The settings of this module, "Notificações do Windows" and the tray, are drawn in
-    // Configurações → Notificações: `settings_ui.rs`.)
+    // (The settings of this module, "Windows notifications" and the tray, are drawn in
+    // Settings → Notifications: `settings_ui.rs`.)
 }
 
 #[cfg(test)]
@@ -638,26 +739,50 @@ mod tests {
             ] {
                 let l = row_layout(row, row.left() + indent, count, mention, icon);
                 assert!(l.name_is_clear(), "w {w}: {l:?}");
-                assert!(l.name.left() >= row.left() && l.name.right() <= row.right() && l.name.width() >= 0.0, "w {w}: {l:?}");
+                assert!(
+                    l.name.left() >= row.left()
+                        && l.name.right() <= row.right()
+                        && l.name.width() >= 0.0,
+                    "w {w}: {l:?}"
+                );
                 for b in l.badges() {
-                    assert!(b.right() <= row.right() && (b.center().y - row.center().y).abs() < 0.01, "w {w}: {b:?}");
+                    assert!(
+                        b.right() <= row.right() && (b.center().y - row.center().y).abs() < 0.01,
+                        "w {w}: {b:?}"
+                    );
                 }
                 let badges: Vec<egui::Rect> = l.badges().collect();
                 for (i, a) in badges.iter().enumerate() {
                     for b in &badges[i + 1..] {
-                        assert!(!a.intersect(*b).is_positive(), "badges overlap each other: {a:?} {b:?}");
+                        assert!(
+                            !a.intersect(*b).is_positive(),
+                            "badges overlap each other: {a:?} {b:?}"
+                        );
                     }
                 }
                 if count.is_none() && !mention && icon == 0.0 {
-                    assert_eq!(l.name.right(), row.right() - ROW_PAD, "no badges: the whole row is the name's");
+                    assert_eq!(
+                        l.name.right(),
+                        row.right() - ROW_PAD,
+                        "no badges: the whole row is the name's"
+                    );
                 }
                 if w >= 180.0 {
-                    assert!(l.name.width() > 50.0, "a normal sidebar keeps room for the name: {l:?}");
+                    assert!(
+                        l.name.width() > 50.0,
+                        "a normal sidebar keeps room for the name: {l:?}"
+                    );
                 }
             }
         }
         // The "@" sits left of the counter, the icon left of both.
-        let l = row_layout(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(235.0, 20.0)), 6.0, Some(24.0), true, 16.0);
+        let l = row_layout(
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(235.0, 20.0)),
+            6.0,
+            Some(24.0),
+            true,
+            16.0,
+        );
         let (c, m, i) = (l.count.unwrap(), l.mention.unwrap(), l.icon.unwrap());
         assert!(i.right() < m.left() && m.right() < c.left() && l.name.right() < i.left());
         assert_eq!(count_text(7), "7");
@@ -672,17 +797,33 @@ mod tests {
         crate::theme::apply(&ctx);
         let mut drawn = Vec::new();
         let mut run = |events: Vec<egui::Event>| {
-            let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(235.0, 200.0))), events, ..Default::default() };
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(235.0, 200.0),
+                )),
+                events,
+                ..Default::default()
+            };
             let mut out = ctx.run_ui(raw, |ui| {
                 drawn.clear();
                 for (label, unread, mentions) in [
-                    ("# um-canal-com-um-nome-muito-comprido-mesmo-de-verdade", 150u32, 3u32),
+                    ("# a-channel-with-a-really-very-long-name", 150u32, 3u32),
                     ("# geral", 2, 0),
-                    ("# outro-canal-de-nome-longo-sem-mencoes-aqui", 5, 0),
+                    ("# another-long-channel-name-without-mentions", 5, 0),
                     ("# lido", 0, 0),
                 ] {
                     let name = label.trim_start_matches("# ");
-                    let row = crate::ui_kit::Row { icon: crate::theme::ph::HASH, name, label, selected: false, unread: unread > 0, count: unread, mentions, hover: None };
+                    let row = crate::ui_kit::Row {
+                        icon: crate::theme::ph::HASH,
+                        name,
+                        label,
+                        selected: false,
+                        unread: unread > 0,
+                        count: unread,
+                        mentions,
+                        hover: None,
+                    };
                     drawn.push(crate::ui_kit::sidebar_row(ui, row).1);
                 }
             });
@@ -693,26 +834,54 @@ mod tests {
         assert_eq!(drawn.len(), 4);
         for d in &drawn {
             assert!(d.layout.name_is_clear(), "{d:?}");
-            assert!(d.text_right <= d.layout.name.right() + 0.5, "the drawn name runs under the badges: {d:?}");
+            assert!(
+                d.text_right <= d.layout.name.right() + 0.5,
+                "the drawn name runs under the badges: {d:?}"
+            );
         }
-        assert!(drawn[0].elided && drawn[0].layout.count.is_some() && drawn[0].layout.mention.is_some(), "{:?}", drawn[0]);
+        assert!(
+            drawn[0].elided && drawn[0].layout.count.is_some() && drawn[0].layout.mention.is_some(),
+            "{:?}",
+            drawn[0]
+        );
         assert!(!drawn[1].elided && drawn[1].layout.mention.is_none());
         assert!(drawn[2].elided);
         assert!(drawn[3].layout.count.is_none() && !drawn[3].elided);
     }
 
     fn inc(is_dm: bool) -> Incoming {
-        Incoming { is_dm, is_mention: false, mine: false, blocked: false, open: false, focused: false }
+        Incoming {
+            is_dm,
+            is_mention: false,
+            mine: false,
+            blocked: false,
+            open: false,
+            focused: false,
+        }
     }
 
     #[test]
     fn never_for_my_own_messages_or_blocked_people() {
         for mode in WinNotify::ALL {
             for dm in [false, true] {
-                let mine = Incoming { mine: true, ..inc(dm) };
-                let blocked = Incoming { blocked: true, ..inc(dm) };
+                let mine = Incoming {
+                    mine: true,
+                    ..inc(dm)
+                };
+                let blocked = Incoming {
+                    blocked: true,
+                    ..inc(dm)
+                };
                 for i in [mine, blocked] {
-                    assert_eq!(plan(mode, false, &i), Plan { unread: false, sound: None, toast: false }, "{mode:?} {i:?}");
+                    assert_eq!(
+                        plan(mode, false, &i),
+                        Plan {
+                            unread: false,
+                            sound: None,
+                            toast: false
+                        },
+                        "{mode:?} {i:?}"
+                    );
                 }
             }
         }
@@ -720,14 +889,33 @@ mod tests {
 
     #[test]
     fn the_open_and_focused_conversation_is_silent() {
-        let reading = Incoming { open: true, focused: true, ..inc(false) };
-        assert_eq!(plan(WinNotify::All, false, &reading), Plan { unread: false, sound: None, toast: false });
+        let reading = Incoming {
+            open: true,
+            focused: true,
+            ..inc(false)
+        };
+        assert_eq!(
+            plan(WinNotify::All, false, &reading),
+            Plan {
+                unread: false,
+                sound: None,
+                toast: false
+            }
+        );
         // Open but the window is behind another: it is news (sound, unread, notification).
-        let behind = Incoming { open: true, focused: false, ..inc(false) };
+        let behind = Incoming {
+            open: true,
+            focused: false,
+            ..inc(false)
+        };
         let p = plan(WinNotify::All, false, &behind);
         assert!(p.unread && p.toast && p.sound == Some(AlertKind::ChannelMessage));
         // In front but looking at another conversation: a sound and a counter, no Windows notice.
-        let elsewhere = Incoming { open: false, focused: true, ..inc(false) };
+        let elsewhere = Incoming {
+            open: false,
+            focused: true,
+            ..inc(false)
+        };
         let p = plan(WinNotify::All, false, &elsewhere);
         assert!(p.unread && !p.toast && p.sound.is_some());
     }
@@ -736,16 +924,29 @@ mod tests {
     fn the_setting_decides_what_reaches_windows() {
         let chan = inc(false);
         let dm = inc(true);
-        let mention = Incoming { is_mention: true, ..inc(false) };
+        let mention = Incoming {
+            is_mention: true,
+            ..inc(false)
+        };
         let toast = |mode, i: &Incoming| plan(mode, false, i).toast;
-        assert!(toast(WinNotify::All, &chan) && toast(WinNotify::All, &dm) && toast(WinNotify::All, &mention));
+        assert!(
+            toast(WinNotify::All, &chan)
+                && toast(WinNotify::All, &dm)
+                && toast(WinNotify::All, &mention)
+        );
         assert!(!toast(WinNotify::DmsAndMentions, &chan));
-        assert!(toast(WinNotify::DmsAndMentions, &dm) && toast(WinNotify::DmsAndMentions, &mention));
-        assert!(!toast(WinNotify::Off, &chan) && !toast(WinNotify::Off, &dm) && !toast(WinNotify::Off, &mention));
+        assert!(
+            toast(WinNotify::DmsAndMentions, &dm) && toast(WinNotify::DmsAndMentions, &mention)
+        );
+        assert!(
+            !toast(WinNotify::Off, &chan)
+                && !toast(WinNotify::Off, &dm)
+                && !toast(WinNotify::Off, &mention)
+        );
         // Off silences Windows only: the in-app counter and the sound are separate settings.
         let p = plan(WinNotify::Off, false, &dm);
         assert!(p.unread && p.sound.is_some());
-        // "Não perturbe" silences Windows too.
+        // "Do not disturb" silences Windows too.
         assert!(!plan(WinNotify::All, true, &dm).toast);
     }
 
@@ -754,25 +955,46 @@ mod tests {
         let kind = |i: Incoming| plan(WinNotify::Off, false, &i).sound;
         assert_eq!(kind(inc(false)), Some(AlertKind::ChannelMessage));
         assert_eq!(kind(inc(true)), Some(AlertKind::DirectMessage));
-        assert_eq!(kind(Incoming { is_mention: true, ..inc(false) }), Some(AlertKind::Mention));
-        assert_eq!(kind(Incoming { is_mention: true, ..inc(true) }), Some(AlertKind::Mention), "a mention beats the kind");
+        assert_eq!(
+            kind(Incoming {
+                is_mention: true,
+                ..inc(false)
+            }),
+            Some(AlertKind::Mention)
+        );
+        assert_eq!(
+            kind(Incoming {
+                is_mention: true,
+                ..inc(true)
+            }),
+            Some(AlertKind::Mention),
+            "a mention beats the kind"
+        );
     }
 
     #[test]
     fn the_badge_counts_what_the_setting_cares_about() {
         assert_eq!(badge_count(WinNotify::Off, 3, 4, 1), 0);
         assert_eq!(badge_count(WinNotify::DmsAndMentions, 3, 4, 0), 3);
-        assert_eq!(badge_count(WinNotify::DmsAndMentions, 3, 4, 2), 5, "mentions count with DMs");
-        assert_eq!(badge_count(WinNotify::All, 3, 4, 2), 7, "a mention is already one of the channel lines");
+        assert_eq!(
+            badge_count(WinNotify::DmsAndMentions, 3, 4, 2),
+            5,
+            "mentions count with DMs"
+        );
+        assert_eq!(
+            badge_count(WinNotify::All, 3, 4, 2),
+            7,
+            "a mention is already one of the channel lines"
+        );
         assert_eq!(badge_count(WinNotify::All, u32::MAX, 5, 0), u32::MAX);
-        assert_eq!(mention_title("Ana", "geral"), "Ana mencionou você em #geral");
+        assert_eq!(mention_title("Ana", "geral"), "Ana mentioned you in #geral");
     }
 
     #[test]
     fn previews_are_one_short_line() {
         assert_eq!(preview("  oi \n  tudo   bem? ", 0), "oi tudo bem?");
-        assert_eq!(preview("", 1), "Enviou uma imagem");
-        assert_eq!(preview("", 3), "Enviou 3 imagens");
+        assert_eq!(preview("", 1), "Sent an image");
+        assert_eq!(preview("", 3), "Sent 3 images");
         assert_eq!(preview("olha isso", 2), "olha isso");
         let long = "palavra ".repeat(60);
         let p = preview(&long, 0);
@@ -781,7 +1003,7 @@ mod tests {
         // Multi-byte text is cut on characters, never inside one.
         let acentos = "ação ".repeat(60);
         assert!(preview(&acentos, 0).ends_with('…'));
-        assert_eq!(toast_title("Ana", Some("geral")), "Ana em #geral");
+        assert_eq!(toast_title("Ana", Some("geral")), "Ana in #geral");
         assert_eq!(toast_title("Ana", None), "Ana");
     }
 
@@ -801,20 +1023,25 @@ mod tests {
         assert!(d.tray_on_close && d.windows == WinNotify::DmsAndMentions && !d.tray_hint_shown);
         let s: NotifySettings = serde_json::from_str("{}").unwrap();
         assert_eq!(s, d);
-        let s: NotifySettings = serde_json::from_str(r#"{"windows":"all","tray_on_close":false}"#).unwrap();
+        let s: NotifySettings =
+            serde_json::from_str(r#"{"windows":"all","tray_on_close":false}"#).unwrap();
         assert_eq!((s.windows, s.tray_on_close), (WinNotify::All, false));
         assert_eq!(serde_json::to_string(&WinNotify::Off).unwrap(), "\"off\"");
         // A mode a newer app wrote does not throw the whole settings file away.
         let s: NotifySettings = serde_json::from_str(r#"{"windows":"mentions_only"}"#).unwrap();
         assert_eq!(s.windows, WinNotify::DmsAndMentions);
-        let back: NotifySettings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        let back: NotifySettings =
+            serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back, s);
     }
 
     #[test]
     fn closing_hides_only_with_a_tray_the_setting_and_no_quit_in_progress() {
         let mut n = NotifyUi::new(false);
-        assert!(!n.hides_on_close(true), "no tray icon: nothing could bring the window back");
+        assert!(
+            !n.hides_on_close(true),
+            "no tray icon: nothing could bring the window back"
+        );
         n.quitting = true;
         assert!(!n.hides_on_close(true));
     }

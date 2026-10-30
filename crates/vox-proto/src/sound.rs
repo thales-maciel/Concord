@@ -1,7 +1,7 @@
 //! Server soundboard (v0.5, no protocol bump): wire types, limits, the permission rule and the one
 //! audio format the hub stores.
 //!
-//! Sounds belong to the server. Anyone uploads a clip; the uploader (or a Moderador+) renames or
+//! Sounds belong to the server. Anyone uploads a clip; the uploader (or a Moderator+) renames or
 //! deletes it. Playing is announced by the hub to the members of one voice channel and each app
 //! plays the clip locally, so nothing goes through LiveKit.
 //!
@@ -89,7 +89,7 @@ pub struct SoundRenameRequest {
     pub emoji: Option<String>,
 }
 
-/// Who may rename or delete a sound: its uploader, and Moderador+ (item 12's matrix: the same
+/// Who may rename or delete a sound: its uploader, and Moderator+ (item 12's matrix: the same
 /// people who may delete any chat message).
 pub fn may_edit_sound(role: Role, me: UserId, uploader: UserId) -> bool {
     me == uploader || role.can_moderate()
@@ -99,14 +99,17 @@ pub fn may_edit_sound(role: Role, me: UserId, uploader: UserId) -> bool {
 pub fn clean_sound_name(raw: &str) -> Option<String> {
     let name = raw.trim();
     let n = name.chars().count();
-    ((1..=SOUND_NAME_MAX).contains(&n) && !name.chars().any(char::is_control)).then(|| name.to_string())
+    ((1..=SOUND_NAME_MAX).contains(&n) && !name.chars().any(char::is_control))
+        .then(|| name.to_string())
 }
 
 /// A sound emoji, trimmed: empty, or at most [`SOUND_EMOJI_MAX_CHARS`] characters without control
 /// characters or spaces.
 pub fn clean_sound_emoji(raw: &str) -> Option<String> {
     let e = raw.trim();
-    (e.chars().count() <= SOUND_EMOJI_MAX_CHARS && !e.chars().any(|c| c.is_control() || c.is_whitespace())).then(|| e.to_string())
+    (e.chars().count() <= SOUND_EMOJI_MAX_CHARS
+        && !e.chars().any(|c| c.is_control() || c.is_whitespace()))
+    .then(|| e.to_string())
 }
 
 // ---------------------------------------------------------------- the stored format
@@ -186,7 +189,12 @@ pub fn parse_wav(bytes: &[u8]) -> Result<WavInfo, WavError> {
             }
             let tag = le16(bytes, body).ok_or(WavError::NotWav)?;
             // WAVE_FORMAT_EXTENSIBLE (0xFFFE) carries PCM too; only plain PCM is accepted.
-            fmt = Some((tag, le16(bytes, body + 2).ok_or(WavError::NotWav)?, le32(bytes, body + 4).ok_or(WavError::NotWav)?, le16(bytes, body + 14).ok_or(WavError::NotWav)?));
+            fmt = Some((
+                tag,
+                le16(bytes, body + 2).ok_or(WavError::NotWav)?,
+                le32(bytes, body + 4).ok_or(WavError::NotWav)?,
+                le16(bytes, body + 14).ok_or(WavError::NotWav)?,
+            ));
         } else if id == b"data" {
             let (tag, channels, rate, bits) = fmt.ok_or(WavError::NotWav)?;
             if tag != 1 || bits != 16 {
@@ -207,11 +215,17 @@ pub fn parse_wav(bytes: &[u8]) -> Result<WavInfo, WavError> {
                 return Err(WavError::BadData);
             }
             let frames = (len / frame) as u32;
-            let info = WavInfo { channels, frames, data_start: body };
+            let info = WavInfo {
+                channels,
+                frames,
+                data_start: body,
+            };
             return match info.duration_ms() {
                 ms if ms < SOUND_MIN_MS => Err(WavError::TooShort),
                 // The limit is on the exact length: 5 s is 240 000 frames.
-                _ if frames as u64 * 1000 > SOUND_MAX_MS as u64 * SOUND_RATE as u64 => Err(WavError::TooLong),
+                _ if frames as u64 * 1000 > SOUND_MAX_MS as u64 * SOUND_RATE as u64 => {
+                    Err(WavError::TooLong)
+                }
                 _ => Ok(info),
             };
         }
@@ -224,7 +238,12 @@ pub fn parse_wav(bytes: &[u8]) -> Result<WavInfo, WavError> {
 /// The samples of a clip [`parse_wav`] accepted, interleaved.
 pub fn wav_samples(bytes: &[u8], info: &WavInfo) -> Vec<i16> {
     let len = info.frames as usize * info.channels as usize * 2;
-    bytes[info.data_start..info.data_start + len].as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b)).collect()
+    bytes[info.data_start..info.data_start + len]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| i16::from_le_bytes(*b))
+        .collect()
 }
 
 /// A plain 44-byte-header WAV of interleaved 48 kHz 16-bit `samples`.
@@ -260,10 +279,15 @@ mod tests {
     #[test]
     fn canonical_wav_round_trips() {
         for ch in [1u16, 2] {
-            let samples: Vec<i16> = (0..9600 * ch as usize).map(|i| (i as i16).wrapping_mul(7)).collect();
+            let samples: Vec<i16> = (0..9600 * ch as usize)
+                .map(|i| (i as i16).wrapping_mul(7))
+                .collect();
             let wav = canonical_wav(ch, &samples);
             let info = parse_wav(&wav).unwrap();
-            assert_eq!((info.channels, info.frames, info.duration_ms()), (ch, 9600, 200));
+            assert_eq!(
+                (info.channels, info.frames, info.duration_ms()),
+                (ch, 9600, 200)
+            );
             assert_eq!(wav_samples(&wav, &info), samples);
         }
     }
@@ -274,7 +298,10 @@ mod tests {
         assert_eq!(parse_wav(&clip(2, 240_001)), Err(WavError::TooLong));
         assert_eq!(parse_wav(&clip(1, 4_799)), Err(WavError::TooShort));
         assert!(parse_wav(&clip(1, 4_800)).is_ok());
-        assert!(clip(2, 240_000).len() <= SOUND_MAX_UPLOAD_BYTES, "the longest stereo clip fits the upload limit");
+        assert!(
+            clip(2, 240_000).len() <= SOUND_MAX_UPLOAD_BYTES,
+            "the longest stereo clip fits the upload limit"
+        );
     }
 
     #[test]
@@ -291,8 +318,14 @@ mod tests {
         let mut w = clip(1, 9600);
         w[20] = 3; // IEEE float
         assert_eq!(parse_wav(&w), Err(WavError::NotPcm16));
-        assert_eq!(parse_wav(b"OggS\0\x02\0\0\0\0\0\0\0\0\0\0\0\0\0\0"), Err(WavError::NotWav));
-        assert_eq!(parse_wav(&[0xff, 0xfb, 0x90, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0]), Err(WavError::NotWav));
+        assert_eq!(
+            parse_wav(b"OggS\0\x02\0\0\0\0\0\0\0\0\0\0\0\0\0\0"),
+            Err(WavError::NotWav)
+        );
+        assert_eq!(
+            parse_wav(&[0xff, 0xfb, 0x90, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            Err(WavError::NotWav)
+        );
         assert_eq!(parse_wav(&[]), Err(WavError::NotWav));
         // Truncated data and a half frame.
         let w = clip(2, 9600);
@@ -319,10 +352,16 @@ mod tests {
         assert_eq!(clean_sound_name(&"a".repeat(32)).map(|n| n.len()), Some(32));
         assert_eq!(clean_sound_name(&"a".repeat(33)), None);
         assert_eq!(clean_sound_name("a\nb"), None);
-        assert!(clean_sound_name(&"ã".repeat(32)).is_some(), "32 characters, not bytes");
+        assert!(
+            clean_sound_name(&"ã".repeat(32)).is_some(),
+            "32 characters, not bytes"
+        );
         assert_eq!(clean_sound_emoji("").as_deref(), Some(""));
         assert_eq!(clean_sound_emoji("🎺").as_deref(), Some("🎺"));
-        assert!(clean_sound_emoji("👨‍👩‍👧‍👦").is_some(), "a ZWJ family is 7 code points");
+        assert!(
+            clean_sound_emoji("👨‍👩‍👧‍👦").is_some(),
+            "a ZWJ family is 7 code points"
+        );
         assert_eq!(clean_sound_emoji("a b"), None);
         assert_eq!(clean_sound_emoji(&"x".repeat(13)), None);
     }
@@ -348,9 +387,27 @@ mod tests {
         // A sound without an emoji (the field is optional on the wire).
         let no_emoji = r#"{"id":3,"name":"x","uploader":{"id":7,"username":"Ana"},"created_at_ms":5,"duration_ms":1200,"size":4096,"hash":"ab"}"#;
         assert_eq!(serde_json::from_str::<Sound>(no_emoji).unwrap().emoji, "");
-        assert_eq!(serde_json::to_string(&SoundRenameRequest { name: "n".into(), emoji: None }).unwrap(), r#"{"name":"n"}"#);
-        assert_eq!(serde_json::from_str::<SoundRenameRequest>(r#"{"name":"n"}"#).unwrap().emoji, None);
-        assert_eq!(serde_json::from_str::<SoundRenameRequest>(r#"{"name":"n","emoji":""}"#).unwrap().emoji.as_deref(), Some(""));
+        assert_eq!(
+            serde_json::to_string(&SoundRenameRequest {
+                name: "n".into(),
+                emoji: None
+            })
+            .unwrap(),
+            r#"{"name":"n"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<SoundRenameRequest>(r#"{"name":"n"}"#)
+                .unwrap()
+                .emoji,
+            None
+        );
+        assert_eq!(
+            serde_json::from_str::<SoundRenameRequest>(r#"{"name":"n","emoji":""}"#)
+                .unwrap()
+                .emoji
+                .as_deref(),
+            Some("")
+        );
     }
 
     #[test]
@@ -358,6 +415,10 @@ mod tests {
         use Role::*;
         assert!(may_edit_sound(Member, 3, 3), "the uploader");
         assert!(!may_edit_sound(Member, 3, 4));
-        assert!(may_edit_sound(Moderator, 3, 4) && may_edit_sound(Admin, 3, 4) && may_edit_sound(Owner, 3, 4));
+        assert!(
+            may_edit_sound(Moderator, 3, 4)
+                && may_edit_sound(Admin, 3, 4)
+                && may_edit_sound(Owner, 3, 4)
+        );
     }
 }

@@ -1,13 +1,13 @@
 @echo off
-rem Inicia o servidor do concord (chat + voz). Feche esta janela ou aperte Ctrl+C para desligar.
-rem Este e o servidor "oficial" (versao estavel em bin\). Builds de desenvolvimento nao sao usados aqui.
-rem Desde a v1.0.1 o programa se chama concord-server.exe; sem ele, usa o antigo voxhub-server.exe.
+rem Start concord's chat and voice server. Close this window or press Ctrl+C to stop.
+rem Uses the stable release in bin\, not a development build.
+rem Retains the legacy executable fallback for existing installations.
 cd /d "%~dp0"
 set SERVIDOR=bin\concord-server.exe
 if not exist %SERVIDOR% set SERVIDOR=bin\voxhub-server.exe
 if not exist %SERVIDOR% (
-  echo Nao encontrei bin\concord-server.exe nem bin\voxhub-server.exe.
-  echo Rode atualizar-servidor.bat para copiar o servidor de releases\.
+  echo Neither bin\concord-server.exe nor bin\voxhub-server.exe was found.
+  echo Extract the standalone server release into this folder first.
   pause
   exit /b 1
 )

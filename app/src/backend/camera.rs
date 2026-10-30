@@ -40,14 +40,18 @@ pub(super) struct CamBackend {
     call: Option<Running>,
     preview: Option<Running>,
     last_live: Option<CameraLiveInfo>,
-    /// "Configurar câmera" is open: controls are read back from the driver every tick.
+    /// "Configure camera" is open: controls are read back from the driver every tick.
     pub(super) watch: bool,
 }
 
 impl CamBackend {
     /// The setup to start `dev` with: the UI's, when it is for this camera.
     pub(super) fn setup_for(&self, dev: &CamDev) -> CameraSetup {
-        if &self.dev == dev { self.setup.clone() } else { CameraSetup::default() }
+        if &self.dev == dev {
+            self.setup.clone()
+        } else {
+            CameraSetup::default()
+        }
     }
 
     pub(super) fn call_started(&mut self, dev: CamDev, setup: CameraSetup) {
@@ -77,7 +81,10 @@ impl Controller {
                 if let Some(v) = &self.voice {
                     v.with_camera(|c| apply_delta(c, &d)).await;
                 }
-                run.setup = CameraSetup { mode: run.setup.mode, ..setup.clone() };
+                run.setup = CameraSetup {
+                    mode: run.setup.mode,
+                    ..setup.clone()
+                };
             }
         }
         // The Settings preview.
@@ -87,14 +94,17 @@ impl Controller {
                 if let Some(c) = self.camera_preview.as_ref().and_then(|p| p.capture()) {
                     apply_delta(c, &d);
                 }
-                run.setup = CameraSetup { mode: run.setup.mode, ..setup.clone() };
+                run.setup = CameraSetup {
+                    mode: run.setup.mode,
+                    ..setup.clone()
+                };
             }
         }
         // Show the result sooner than the next tick.
         self.camera_tick().await;
     }
 
-    /// "Restaurar padrão": every control of the running camera back to its default.
+    /// "Restore defaults": every control of the running camera back to its default.
     pub(super) async fn camera_reset_controls(&mut self, dev: CamDev) {
         if let Some(run) = self.cam.call.as_mut().filter(|r| r.dev == dev) {
             run.setup.controls.clear();
@@ -112,7 +122,11 @@ impl Controller {
     }
 
     /// The capture running with `dev` (call camera first, else the preview).
-    async fn with_running<R>(&self, dev: &CamDev, f: impl Fn(&vox_capture::CameraCapture) -> R) -> Option<R> {
+    async fn with_running<R>(
+        &self,
+        dev: &CamDev,
+        f: impl Fn(&vox_capture::CameraCapture) -> R,
+    ) -> Option<R> {
         if self.cam.call.as_ref().is_some_and(|r| &r.dev == dev) {
             if let Some(v) = &self.voice {
                 if let Some(r) = v.with_camera(&f).await {
@@ -121,17 +135,30 @@ impl Controller {
             }
         }
         if self.cam.preview.as_ref().is_some_and(|r| &r.dev == dev) {
-            return self.camera_preview.as_ref().and_then(|p| p.capture()).map(f);
+            return self
+                .camera_preview
+                .as_ref()
+                .and_then(|p| p.capture())
+                .map(f);
         }
         None
     }
 
-    /// Native modes of a camera (the "Formato" list). A camera we are running already knows
+    /// Native modes of a camera (the "Format" list). A camera we are running already knows
     /// them: opening the device a second time would get it in shared mode, where Windows lists
     /// only the format that is streaming.
-    pub(super) async fn camera_formats(&self, id: Option<String>, name: Option<String>, key: String) {
+    pub(super) async fn camera_formats(
+        &self,
+        id: Option<String>,
+        name: Option<String>,
+        key: String,
+    ) {
         let dev = (id.clone(), name.clone());
-        if let Some(list) = self.with_running(&dev, |c| c.native_modes()).await.filter(|l| !l.is_empty()) {
+        if let Some(list) = self
+            .with_running(&dev, |c| c.native_modes())
+            .await
+            .filter(|l| !l.is_empty())
+        {
             self.out.send(Ev::CameraFormats { key, list });
             return;
         }
@@ -142,7 +169,10 @@ impl Controller {
                 Ok(list) => out.send(Ev::CameraFormats { key, list }),
                 Err(e) => {
                     warn!(error = %e, "cannot list camera formats");
-                    out.send(Ev::CameraFormats { key, list: Vec::new() })
+                    out.send(Ev::CameraFormats {
+                        key,
+                        list: Vec::new(),
+                    })
                 }
             }
         });
@@ -164,25 +194,27 @@ impl Controller {
         let spawned = std::thread::Builder::new().name("vox-camera-native".into()).spawn(move || {
             let mut device = Self::resolve_camera(id, name);
             if device.is_empty() {
-                // "Padrão": the first camera.
+                // "Default": the first camera.
                 device = vox_capture::list_cameras().unwrap_or_default().into_iter().next().map(|c| c.id).unwrap_or_default();
             }
             let res = if device.is_empty() {
-                Err("Nenhuma câmera encontrada.".to_string())
+                Err("No cameras found.".to_string())
             } else {
-                vox_capture::show_camera_settings_dialog(&device, "Configurações da câmera").map_err(|e| {
+                vox_capture::show_camera_settings_dialog(&device, "Camera settings").map_err(|e| {
                     warn!(error = %e, "camera driver dialog failed");
                     match e.fault {
-                        vox_capture::CameraFault::NotFound => "O Windows não achou o driver desta câmera para abrir as configurações do fabricante.".to_string(),
-                        vox_capture::CameraFault::Unsupported => "Esta câmera não tem configurações do fabricante.".to_string(),
-                        _ => "Não foi possível abrir as configurações do fabricante.".to_string(),
+                        vox_capture::CameraFault::NotFound => "Windows could not find this camera's driver to open the manufacturer's settings.".to_string(),
+                        vox_capture::CameraFault::Unsupported => "This camera has no manufacturer settings.".to_string(),
+                        _ => "Could not open the manufacturer's settings.".to_string(),
                     }
                 })
             };
             out.send(Ev::CameraNativeClosed(res));
         });
         if spawned.is_err() {
-            self.out.send(Ev::CameraNativeClosed(Err("Não foi possível abrir as configurações do fabricante.".into())));
+            self.out.send(Ev::CameraNativeClosed(Err(
+                "Could not open the manufacturer's settings.".into(),
+            )));
         }
     }
 
@@ -194,7 +226,13 @@ impl Controller {
         }
         let snap = |c: &vox_capture::CameraCapture| {
             let st = c.stats();
-            (c.controls(), st.fps, c.format().native_fps, st.low_light, c.transform_supported())
+            (
+                c.controls(),
+                st.fps,
+                c.format().native_fps,
+                st.low_light,
+                c.transform_supported(),
+            )
         };
         let mut got = match &self.voice {
             Some(v) => v.with_camera(snap).await,
@@ -204,17 +242,23 @@ impl Controller {
         if !from_call {
             // The call camera is off (or stopped by itself): no longer ours to configure.
             self.cam.call = None;
-            got = self.camera_preview.as_ref().and_then(|p| p.capture()).map(snap);
+            got = self
+                .camera_preview
+                .as_ref()
+                .and_then(|p| p.capture())
+                .map(snap);
         }
-        let live = got.map(|(controls, fps, requested, low_light, transform_ok)| CameraLiveInfo {
-            controls,
-            // One decimal is all the UI shows.
-            fps: (fps * 10.0).round() / 10.0,
-            requested,
-            low_light,
-            transform_ok,
-            from_call,
-        });
+        let live = got.map(
+            |(controls, fps, requested, low_light, transform_ok)| CameraLiveInfo {
+                controls,
+                // One decimal is all the UI shows.
+                fps: (fps * 10.0).round() / 10.0,
+                requested,
+                low_light,
+                transform_ok,
+                from_call,
+            },
+        );
         if live != self.cam.last_live {
             if let Some(l) = &live {
                 self.out.send(Ev::CameraLive(l.clone()));

@@ -1,25 +1,25 @@
-//! Voice changer ("Modificador de voz"): one effect at a time on the microphone, with an
+//! Voice changer ("Voice changer"): one effect at a time on the microphone, with an
 //! intensity.
 //!
 //! Chain (see `audio::device`): mic -> (resample) -> WebRTC APM -> AI denoiser -> **voice
 //! changer** -> level meter + gate -> Opus. The denoiser cleans the real voice first; the meter
 //! and the gate see the changed voice (what is actually sent). Only the microphone goes through
-//! here: Go Live audio (screen share or "Só áudio"), the soundboard and the alert sounds never do.
+//! here: Go Live audio (screen share or "Audio only"), the soundboard and the alert sounds never do.
 //!
 //! The effects:
-//! - **Desligado**: a bit-exact bypass (the chunk is not touched).
-//! - **Grave**, **Agudo (esquilo)**, **Alienígena**: pitch shifting by TD-PSOLA ([`Psola`]): a
+//! - **Off**: a bit-exact bypass (the chunk is not touched).
+//! - **Deep**, **High (chipmunk)**, **Alien**: pitch shifting by TD-PSOLA ([`Psola`]): a
 //!   YIN pitch tracker, pitch marks on the glottal peaks, and two-period grains laid out again at
 //!   the new period. The grains keep the spectral envelope, so the formants stay where they are
 //!   (a lower voice, not slow motion); each effect then moves them on purpose by resampling the
-//!   grains a little (slightly down for Grave, up for the chipmunk). Unvoiced sounds (s, f, breath,
-//!   noise) go through unshifted. Fixed added latency [`PITCH_DELAY`] (30 ms). Alienígena adds a
+//!   grains a little (slightly down for Deep, up for the chipmunk). Unvoiced sounds (s, f, breath,
+//!   noise) go through unshifted. Fixed added latency [`PITCH_DELAY`] (30 ms). Alien adds a
 //!   6 Hz vibrato to the shift and a two-voice chorus.
-//! - **Robô**: ring modulation, a short metallic comb and a light bit crush (no latency).
-//! - **Rádio / telefone**: 300-3400 Hz band-pass, soft saturation, a hiss that rides the voice and
+//! - **Robot**: ring modulation, a short metallic comb and a light bit crush (no latency).
+//! - **Radio / telephone**: 300-3400 Hz band-pass, soft saturation, a hiss that rides the voice and
 //!   a short squelch burst when a phrase ends (no latency).
 //! - **Eco**: a 280 ms feedback delay that gets darker on each repeat.
-//! - **Caverna**: a Freeverb-style reverb (8 damped combs, 4 all-passes) after a 30 ms pre-delay.
+//! - **Cave**: a Freeverb-style reverb (8 damped combs, 4 all-passes) after a 30 ms pre-delay.
 //!
 //! Switching effects applies at the next 10 ms chunk with a 10 ms equal-power crossfade between
 //! the old and the new effect (both run during the fade); a pitch effect that comes in is first
@@ -45,26 +45,26 @@ const HIST: usize = 2048;
 
 // ---------------------------------------------------------------- settings
 
-/// "Modificador de voz".
+/// "Voice changer".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum VoiceEffect {
-    /// "Desligado": bit-exact bypass.
+    /// "Off": bit-exact bypass.
     #[default]
     Off,
-    /// "Grave": pitch down 3-7 semitones.
+    /// "Deep": pitch down 3-7 semitones.
     Deep,
-    /// "Agudo (esquilo)": pitch up 4-8 semitones, formants up too.
+    /// "High (chipmunk)": pitch up 4-8 semitones, formants up too.
     High,
-    /// "Robô".
+    /// "Robot".
     Robot,
-    /// "Rádio / telefone".
+    /// "Radio / telephone".
     Radio,
-    /// "Eco".
+    /// "Echo".
     Echo,
-    /// "Caverna" (reverb).
+    /// "Cave" (reverb).
     Cave,
-    /// "Alienígena": pitch up with vibrato and chorus.
+    /// "Alien": pitch up with vibrato and chorus.
     Alien,
 }
 
@@ -83,14 +83,14 @@ impl VoiceEffect {
     /// The name shown in the UI.
     pub fn label(self) -> &'static str {
         match self {
-            VoiceEffect::Off => "Desligado",
-            VoiceEffect::Deep => "Grave",
-            VoiceEffect::High => "Agudo (esquilo)",
-            VoiceEffect::Robot => "Robô",
-            VoiceEffect::Radio => "Rádio / telefone",
-            VoiceEffect::Echo => "Eco",
-            VoiceEffect::Cave => "Caverna",
-            VoiceEffect::Alien => "Alienígena",
+            VoiceEffect::Off => "Off",
+            VoiceEffect::Deep => "Deep",
+            VoiceEffect::High => "High (chipmunk)",
+            VoiceEffect::Robot => "Robot",
+            VoiceEffect::Radio => "Radio / telephone",
+            VoiceEffect::Echo => "Echo",
+            VoiceEffect::Cave => "Cave",
+            VoiceEffect::Alien => "Alien",
         }
     }
 
@@ -111,14 +111,14 @@ impl VoiceEffect {
     /// One line for the settings dialog.
     pub fn hint(self) -> &'static str {
         match self {
-            VoiceEffect::Off => "Sua voz como ela é.",
-            VoiceEffect::Deep => "Voz mais grossa (3 a 7 semitons abaixo), sem soar como câmera lenta. Soma 30 ms de atraso.",
-            VoiceEffect::High => "Voz fina de esquilo (4 a 8 semitons acima). Soma 30 ms de atraso.",
-            VoiceEffect::Robot => "Voz metálica de robô (modulação em anel e bit crush).",
-            VoiceEffect::Radio => "Rádio comunicador ou telefone: banda estreita, saturação e chiado.",
-            VoiceEffect::Echo => "Eco que se repete (280 ms).",
-            VoiceEffect::Cave => "Reverberação de caverna ou salão grande.",
-            VoiceEffect::Alien => "Voz aguda tremida com coro, de outro planeta. Soma 30 ms de atraso.",
+            VoiceEffect::Off => "Your voice as it is.",
+            VoiceEffect::Deep => "Deeper voice (3 to 7 semitones lower), without sounding slowed down. Adds 30 ms of delay.",
+            VoiceEffect::High => "High-pitched chipmunk voice (4 to 8 semitones higher). Adds 30 ms of delay.",
+            VoiceEffect::Robot => "Metallic robot voice (ring modulation and bit crushing).",
+            VoiceEffect::Radio => "Walkie-talkie or telephone: narrow band, saturation and hiss.",
+            VoiceEffect::Echo => "Repeating echo (280 ms).",
+            VoiceEffect::Cave => "Cave or large hall reverberation.",
+            VoiceEffect::Alien => "High-pitched, warbling alien voice with chorus. Adds 30 ms of delay.",
         }
     }
 
@@ -150,7 +150,10 @@ impl VoiceEffect {
     }
 
     fn is_pitch(self) -> bool {
-        matches!(self, VoiceEffect::Deep | VoiceEffect::High | VoiceEffect::Alien)
+        matches!(
+            self,
+            VoiceEffect::Deep | VoiceEffect::High | VoiceEffect::Alien
+        )
     }
 
     fn to_u8(self) -> u8 {
@@ -162,10 +165,13 @@ impl VoiceEffect {
     }
 }
 
-/// Unknown names (a newer or older settings file) fall back to "Desligado".
+/// Unknown names (a newer or older settings file) fall back to "Off".
 impl From<String> for VoiceEffect {
     fn from(s: String) -> Self {
-        Self::ALL.into_iter().find(|e| e.as_str() == s).unwrap_or_default()
+        Self::ALL
+            .into_iter()
+            .find(|e| e.as_str() == s)
+            .unwrap_or_default()
     }
 }
 
@@ -186,13 +192,19 @@ pub struct VoiceFxConfig {
 
 impl Default for VoiceFxConfig {
     fn default() -> Self {
-        Self { effect: VoiceEffect::Off, intensity_pct: 50 }
+        Self {
+            effect: VoiceEffect::Off,
+            intensity_pct: 50,
+        }
     }
 }
 
 impl VoiceFxConfig {
     pub fn sanitized(self) -> Self {
-        Self { effect: self.effect, intensity_pct: self.intensity_pct.min(100) }
+        Self {
+            effect: self.effect,
+            intensity_pct: self.intensity_pct.min(100),
+        }
     }
 }
 
@@ -213,18 +225,25 @@ impl Default for VoiceFxControl {
 impl VoiceFxControl {
     pub fn new(cfg: VoiceFxConfig) -> Self {
         let cfg = cfg.sanitized();
-        Self { effect: AtomicU8::new(cfg.effect.to_u8()), intensity_pct: AtomicU32::new(cfg.intensity_pct) }
+        Self {
+            effect: AtomicU8::new(cfg.effect.to_u8()),
+            intensity_pct: AtomicU32::new(cfg.intensity_pct),
+        }
     }
 
     /// Takes effect on the next 10 ms chunk of every running mic chain (call and mic test).
     pub fn set(&self, cfg: VoiceFxConfig) {
         let cfg = cfg.sanitized();
-        self.intensity_pct.store(cfg.intensity_pct, Ordering::Relaxed);
+        self.intensity_pct
+            .store(cfg.intensity_pct, Ordering::Relaxed);
         self.effect.store(cfg.effect.to_u8(), Ordering::Relaxed);
     }
 
     pub fn config(&self) -> VoiceFxConfig {
-        VoiceFxConfig { effect: self.effect(), intensity_pct: self.intensity_pct.load(Ordering::Relaxed) }
+        VoiceFxConfig {
+            effect: self.effect(),
+            intensity_pct: self.intensity_pct.load(Ordering::Relaxed),
+        }
     }
 
     pub fn effect(&self) -> VoiceEffect {
@@ -312,13 +331,14 @@ impl VoiceChanger {
         let (a, b) = self.hist.split_at(self.hist_pos);
         self.prime_in[..b.len()].copy_from_slice(b);
         self.prime_in[b.len()..].copy_from_slice(a);
-        self.fx.start(target, amt, &self.prime_in[..], &mut self.prime_out[..]);
+        self.fx
+            .start(target, amt, &self.prime_in[..], &mut self.prime_out[..]);
         self.old = Some(self.cur);
         self.cur = target;
         self.fade_pos = 0;
     }
 
-    /// Process `chunk` in place. With "Desligado" (and no fade pending) it is left untouched.
+    /// Process `chunk` in place. With "Off" (and no fade pending) it is left untouched.
     pub fn process(&mut self, chunk: &mut [i16]) {
         let target = self.ctl.voice_fx().effect();
         let amt = self.ctl.voice_fx().amount();
@@ -338,9 +358,11 @@ impl VoiceChanger {
             for (d, &s) in self.dry[..n].iter_mut().zip(part.iter()) {
                 *d = s as f32 / 32768.0;
             }
-            self.fx.run(self.cur, amt, &self.dry[..n], &mut self.wet[..n]);
+            self.fx
+                .run(self.cur, amt, &self.dry[..n], &mut self.wet[..n]);
             if let Some(old) = self.old {
-                self.fx.run(old, amt, &self.dry[..n], &mut self.wet_old[..n]);
+                self.fx
+                    .run(old, amt, &self.dry[..n], &mut self.wet_old[..n]);
                 for i in 0..n {
                     let k = self.fade_pos + i;
                     let (wo, wn) = if k < FADE { fade(k) } else { (0.0, 1.0) };
@@ -355,7 +377,9 @@ impl VoiceChanger {
             let dry = self.dry;
             self.push_hist(&dry[..n]);
             for (s, &v) in part.iter_mut().zip(&self.wet[..n]) {
-                *s = (v * 32768.0).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+                *s = (v * 32768.0)
+                    .round()
+                    .clamp(i16::MIN as f32, i16::MAX as f32) as i16;
             }
             self.blocks += 1;
         }
@@ -363,7 +387,10 @@ impl VoiceChanger {
 }
 
 fn zeros<const N: usize>() -> Box<[f32; N]> {
-    vec![0.0f32; N].into_boxed_slice().try_into().expect("length")
+    vec![0.0f32; N]
+        .into_boxed_slice()
+        .try_into()
+        .expect("length")
 }
 
 /// Unity below 0.8 (-1.9 dBFS), then a smooth knee up to 0.98 (-0.2 dBFS): an effect output
@@ -396,15 +423,30 @@ pub(crate) fn pitch_params(e: VoiceEffect, amt: f32) -> PitchParams {
     match e {
         VoiceEffect::Deep => {
             let st = -(3.0 + 4.0 * amt);
-            PitchParams { semitones: st, formant: 2f32.powf(0.2 * st / 12.0), vib_st: 0.0, vib_hz: 0.0 }
+            PitchParams {
+                semitones: st,
+                formant: 2f32.powf(0.2 * st / 12.0),
+                vib_st: 0.0,
+                vib_hz: 0.0,
+            }
         }
         VoiceEffect::High => {
             let st = 4.0 + 4.0 * amt;
-            PitchParams { semitones: st, formant: 2f32.powf(0.6 * st / 12.0), vib_st: 0.0, vib_hz: 0.0 }
+            PitchParams {
+                semitones: st,
+                formant: 2f32.powf(0.6 * st / 12.0),
+                vib_st: 0.0,
+                vib_hz: 0.0,
+            }
         }
         _ => {
             let st = 3.0 + 3.0 * amt;
-            PitchParams { semitones: st, formant: 2f32.powf(0.4 * st / 12.0), vib_st: 0.3 + 0.9 * amt, vib_hz: 6.0 }
+            PitchParams {
+                semitones: st,
+                formant: 2f32.powf(0.4 * st / 12.0),
+                vib_st: 0.3 + 0.9 * amt,
+                vib_hz: 6.0,
+            }
         }
     }
 }
@@ -494,21 +536,35 @@ const BUTTER4_Q: [f32; 2] = [0.541_196_1, 1.306_563];
 
 impl Biquad {
     fn new(b: [f32; 3], a: [f32; 3]) -> Self {
-        Self { b0: b[0] / a[0], b1: b[1] / a[0], b2: b[2] / a[0], a1: a[1] / a[0], a2: a[2] / a[0], z1: 0.0, z2: 0.0 }
+        Self {
+            b0: b[0] / a[0],
+            b1: b[1] / a[0],
+            b2: b[2] / a[0],
+            a1: a[1] / a[0],
+            a2: a[2] / a[0],
+            z1: 0.0,
+            z2: 0.0,
+        }
     }
 
     fn lowpass(f: f32, q: f32) -> Self {
         let w = 2.0 * PI * f / FS;
         let (s, c) = w.sin_cos();
         let al = s / (2.0 * q);
-        Self::new([(1.0 - c) / 2.0, 1.0 - c, (1.0 - c) / 2.0], [1.0 + al, -2.0 * c, 1.0 - al])
+        Self::new(
+            [(1.0 - c) / 2.0, 1.0 - c, (1.0 - c) / 2.0],
+            [1.0 + al, -2.0 * c, 1.0 - al],
+        )
     }
 
     fn highpass(f: f32, q: f32) -> Self {
         let w = 2.0 * PI * f / FS;
         let (s, c) = w.sin_cos();
         let al = s / (2.0 * q);
-        Self::new([(1.0 + c) / 2.0, -(1.0 + c), (1.0 + c) / 2.0], [1.0 + al, -2.0 * c, 1.0 - al])
+        Self::new(
+            [(1.0 + c) / 2.0, -(1.0 + c), (1.0 + c) / 2.0],
+            [1.0 + al, -2.0 * c, 1.0 - al],
+        )
     }
 
     #[inline]
@@ -750,7 +806,11 @@ impl Psola {
         let mut run = 0.0;
         for (tau, v) in d.iter_mut().enumerate().take(T_MAX_D + 1).skip(1) {
             run += *v;
-            *v = if run > 0.0 { *v * tau as f32 / run } else { 1.0 };
+            *v = if run > 0.0 {
+                *v * tau as f32 / run
+            } else {
+                1.0
+            };
         }
         let thr = if self.voiced { VOICED_KEEP } else { VOICED_ON };
         let mut tau = T_MIN_D;
@@ -820,7 +880,9 @@ impl Psola {
     /// While voiced, marks run up to one period past the latest estimate with its period (the
     /// peaks are there already; only the voicing beyond is not known yet).
     fn marks(&mut self) {
-        let Some(latest) = self.latest_center() else { return };
+        let Some(latest) = self.latest_center() else {
+            return;
+        };
         let p_latest = self.est_p[(self.n_est - 1) % ESTS];
         loop {
             let c = self.cursor;
@@ -839,7 +901,11 @@ impl Psola {
             let (lo, hi, prev) = match self.prev_mark {
                 Some(prev) => {
                     let pred = prev + p.round() as i64;
-                    (pred - (p * 0.25) as i64, pred + (p * 0.25) as i64, Some((prev, pred)))
+                    (
+                        pred - (p * 0.25) as i64,
+                        pred + (p * 0.25) as i64,
+                        Some((prev, pred)),
+                    )
                 }
                 None => (c - (p * 0.5) as i64, c + (p * 0.5) as i64, None),
             };
@@ -894,7 +960,9 @@ impl Psola {
 
     /// Lay out synthesis grains as far as the input allows.
     fn synth(&mut self, p: &PitchParams) {
-        let Some(latest) = self.latest_center() else { return };
+        let Some(latest) = self.latest_center() else {
+            return;
+        };
         let f = p.formant.clamp(F_MIN, F_MAX);
         loop {
             let s = self.s_next;
@@ -925,7 +993,13 @@ impl Psola {
                     if a + h as i64 + 3 >= self.n_in {
                         break;
                     }
-                    let vib = if p.vib_st != 0.0 { p.vib_st * (2.0 * std::f64::consts::PI * p.vib_hz as f64 * s / FS as f64).sin() as f32 } else { 0.0 };
+                    let vib = if p.vib_st != 0.0 {
+                        p.vib_st
+                            * (2.0 * std::f64::consts::PI * p.vib_hz as f64 * s / FS as f64).sin()
+                                as f32
+                    } else {
+                        0.0
+                    };
                     let ratio = 2f32.powf((p.semitones + vib) / 12.0);
                     let spacing = pa / ratio;
                     // Keep the loudness: PSOLA changes the power by about ratio * (h/pa)^2 / f.
@@ -1012,7 +1086,12 @@ struct Chorus {
 
 impl Chorus {
     fn new() -> Self {
-        Self { buf: zeros(), pos: 0, ph: [0.0, 1.7], mix: Smooth(None) }
+        Self {
+            buf: zeros(),
+            pos: 0,
+            ph: [0.0, 1.7],
+            mix: Smooth(None),
+        }
     }
 
     fn reset(&mut self) {
@@ -1064,7 +1143,15 @@ impl Robot {
     const COMB: usize = 240;
 
     fn new() -> Self {
-        Self { phase: 0.0, comb: zeros(), pos: 0, hold: 0.0, hold_k: 0, mix: Smooth(None), fb: Smooth(None) }
+        Self {
+            phase: 0.0,
+            comb: zeros(),
+            pos: 0,
+            hold: 0.0,
+            hold_k: 0,
+            mix: Smooth(None),
+            fb: Smooth(None),
+        }
     }
 
     fn reset(&mut self) {
@@ -1191,7 +1278,13 @@ struct Echo {
 
 impl Echo {
     fn new() -> Self {
-        Self { buf: zeros(), pos: 0, lp: 0.0, fb: Smooth(None), wet: Smooth(None) }
+        Self {
+            buf: zeros(),
+            pos: 0,
+            lp: 0.0,
+            fb: Smooth(None),
+            wet: Smooth(None),
+        }
     }
 
     fn reset(&mut self) {
@@ -1239,10 +1332,16 @@ struct Reverb {
 impl Reverb {
     fn new() -> Self {
         Self {
-            combs: vec![[0.0f32; 2048]; 8].into_boxed_slice().try_into().expect("len"),
+            combs: vec![[0.0f32; 2048]; 8]
+                .into_boxed_slice()
+                .try_into()
+                .expect("len"),
             comb_idx: [0; 8],
             comb_store: [0.0; 8],
-            aps: vec![[0.0f32; 1024]; 4].into_boxed_slice().try_into().expect("len"),
+            aps: vec![[0.0f32; 1024]; 4]
+                .into_boxed_slice()
+                .try_into()
+                .expect("len"),
             ap_idx: [0; 4],
             pre: zeros(),
             pre_pos: 0,
@@ -1274,7 +1373,11 @@ impl Reverb {
             self.pre_pos = (self.pre_pos + 1) & 2047;
             let inp = pd * REVERB_IN;
             let mut s = 0.0;
-            let combs = self.combs.iter_mut().zip(self.comb_idx.iter_mut()).zip(self.comb_store.iter_mut().zip(COMB_LEN));
+            let combs = self
+                .combs
+                .iter_mut()
+                .zip(self.comb_idx.iter_mut())
+                .zip(self.comb_store.iter_mut().zip(COMB_LEN));
             for ((buf, idx), (store, len)) in combs {
                 let out = buf[*idx];
                 *store = out * (1.0 - DAMP) + *store * DAMP;
@@ -1282,7 +1385,12 @@ impl Reverb {
                 *idx = if *idx + 1 == len { 0 } else { *idx + 1 };
                 s += out;
             }
-            for ((buf, idx), len) in self.aps.iter_mut().zip(self.ap_idx.iter_mut()).zip(ALLPASS_LEN) {
+            for ((buf, idx), len) in self
+                .aps
+                .iter_mut()
+                .zip(self.ap_idx.iter_mut())
+                .zip(ALLPASS_LEN)
+            {
                 let bo = buf[*idx];
                 buf[*idx] = s + bo * 0.5;
                 s = bo - s;
@@ -1302,7 +1410,13 @@ pub(crate) mod synth {
     use super::*;
 
     /// Vowel formants (F1, F2, F3) in Hz.
-    const VOWELS: [[f32; 3]; 5] = [[730.0, 1090.0, 2440.0], [530.0, 1840.0, 2480.0], [270.0, 2290.0, 3010.0], [570.0, 840.0, 2410.0], [300.0, 870.0, 2240.0]];
+    const VOWELS: [[f32; 3]; 5] = [
+        [730.0, 1090.0, 2440.0],
+        [530.0, 1840.0, 2480.0],
+        [270.0, 2290.0, 3010.0],
+        [570.0, 840.0, 2410.0],
+        [300.0, 870.0, 2240.0],
+    ];
 
     /// Klatt formant resonator (unity gain at DC), to be cascaded like a vocal tract.
     fn formant(f: f32, bw: f32) -> Biquad {
@@ -1339,10 +1453,16 @@ pub(crate) mod synth {
             let len = (8_500.0 + rnd() * 4_000.0) as usize;
             let v = VOWELS[syll % VOWELS.len()];
             syll += 1;
-            let mut res = [formant(v[0], 90.0), formant(v[1], 110.0), formant(v[2], 160.0)];
+            let mut res = [
+                formant(v[0], 90.0),
+                formant(v[1], 110.0),
+                formant(v[2], 160.0),
+            ];
             for k in 0..len.min(n.saturating_sub(t)) {
                 let time = (t + k) as f32 / FS;
-                let f = f0 * (1.0 + 0.12 * (2.0 * PI * 0.6 * time).sin()) * (1.0 + 0.01 * (2.0 * PI * 5.0 * time).sin());
+                let f = f0
+                    * (1.0 + 0.12 * (2.0 * PI * 0.6 * time).sin())
+                    * (1.0 + 0.01 * (2.0 * PI * 5.0 * time).sin());
                 phase += 2.0 * PI * f / FS;
                 if phase > 2.0 * PI {
                     phase -= 2.0 * PI;
@@ -1351,7 +1471,11 @@ pub(crate) mod synth {
                 let h = (5_000.0 / f).floor().max(1.0);
                 let half = phase * 0.5;
                 let den = half.sin();
-                let blit = if den.abs() < 1e-5 { h } else { ((h + 0.5) * phase).sin() / (2.0 * den) - 0.5 };
+                let blit = if den.abs() < 1e-5 {
+                    h
+                } else {
+                    ((h + 0.5) * phase).sin() / (2.0 * den) - 0.5
+                };
                 leak = leak * 0.995 + blit * (f / FS) * 2.0;
                 let env = ((k as f32 / 960.0).min(1.0)) * (((len - k) as f32 / 1_920.0).min(1.0));
                 let mut s = leak;
@@ -1362,7 +1486,11 @@ pub(crate) mod synth {
             }
             t += len;
             // Pause: short between syllables, long between phrases.
-            t += if syll.is_multiple_of(5) { 19_200 } else { (1_500.0 + rnd() * 4_000.0) as usize };
+            t += if syll.is_multiple_of(5) {
+                19_200
+            } else {
+                (1_500.0 + rnd() * 4_000.0) as usize
+            };
         }
         let talking: Vec<f32> = out.iter().copied().filter(|v| v.abs() > 1e-4).collect();
         let rms = (talking.iter().map(|v| v * v).sum::<f32>() / talking.len().max(1) as f32).sqrt();
@@ -1415,9 +1543,13 @@ pub(crate) mod synth {
                 for div in [3usize, 2] {
                     let l = best.0 / div;
                     if l > lag_min + 1 {
-                        let (lo, hi) = (l.saturating_sub(3).max(lag_min + 1), (l + 3).min(lag_max - 1));
+                        let (lo, hi) = (
+                            l.saturating_sub(3).max(lag_min + 1),
+                            (l + 3).min(lag_max - 1),
+                        );
                         if let Some(c) = (lo..=hi).max_by(|&a, &b| ncc[a].total_cmp(&ncc[b])) {
-                            if ncc[c] > 0.9 * best.1 && ncc[c] >= ncc[c - 1] && ncc[c] >= ncc[c + 1] {
+                            if ncc[c] > 0.9 * best.1 && ncc[c] >= ncc[c - 1] && ncc[c] >= ncc[c + 1]
+                            {
                                 best = (c, ncc[c]);
                                 break;
                             }
@@ -1428,7 +1560,11 @@ pub(crate) mod synth {
                     let l = best.0;
                     let (a0, b0, c0) = (ncc[l - 1], ncc[l], ncc[l + 1]);
                     let den = a0 - 2.0 * b0 + c0;
-                    let lf = if den.abs() > 1e-9 { l as f32 + 0.5 * (a0 - c0) / den } else { l as f32 };
+                    let lf = if den.abs() > 1e-9 {
+                        l as f32 + 0.5 * (a0 - c0) / den
+                    } else {
+                        l as f32
+                    };
                     f0s.push(fs / lf);
                 }
             }
@@ -1446,7 +1582,9 @@ pub(crate) mod synth {
     }
 
     pub fn to_i16(x: &[f32]) -> Vec<i16> {
-        x.iter().map(|v| (v * 32768.0).round().clamp(-32768.0, 32767.0) as i16).collect()
+        x.iter()
+            .map(|v| (v * 32768.0).round().clamp(-32768.0, 32767.0) as i16)
+            .collect()
     }
 
     pub fn to_f32(x: &[i16]) -> Vec<f32> {
@@ -1462,7 +1600,10 @@ mod tests {
 
     fn chain(effect: VoiceEffect, pct: u32) -> (Arc<NoiseControl>, VoiceChanger) {
         let ctl = Arc::new(NoiseControl::new(NoiseLevel::Standard));
-        ctl.voice_fx().set(VoiceFxConfig { effect, intensity_pct: pct });
+        ctl.voice_fx().set(VoiceFxConfig {
+            effect,
+            intensity_pct: pct,
+        });
         let fx = VoiceChanger::new(ctl.clone());
         (ctl, fx)
     }
@@ -1482,12 +1623,27 @@ mod tests {
             assert_eq!(serde_json::from_str::<VoiceEffect>(&j).unwrap(), e);
             assert_eq!(VoiceEffect::from_u8(e.to_u8()), e);
         }
-        assert_eq!(serde_json::to_string(&VoiceEffect::Cave).unwrap(), "\"cave\"");
-        assert_eq!(serde_json::from_str::<VoiceEffect>("\"vocoder\"").unwrap(), VoiceEffect::Off);
+        assert_eq!(
+            serde_json::to_string(&VoiceEffect::Cave).unwrap(),
+            "\"cave\""
+        );
+        assert_eq!(
+            serde_json::from_str::<VoiceEffect>("\"vocoder\"").unwrap(),
+            VoiceEffect::Off
+        );
         let cfg: VoiceFxConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(cfg, VoiceFxConfig::default());
-        let c = VoiceFxControl::new(VoiceFxConfig { effect: VoiceEffect::Robot, intensity_pct: 250 });
-        assert_eq!(c.config(), VoiceFxConfig { effect: VoiceEffect::Robot, intensity_pct: 100 });
+        let c = VoiceFxControl::new(VoiceFxConfig {
+            effect: VoiceEffect::Robot,
+            intensity_pct: 250,
+        });
+        assert_eq!(
+            c.config(),
+            VoiceFxConfig {
+                effect: VoiceEffect::Robot,
+                intensity_pct: 100
+            }
+        );
     }
 
     #[test]
@@ -1511,11 +1667,21 @@ mod tests {
         let want = 2f32.powf(pitch_params(effect, pct as f32 / 100.0).semitones / 12.0);
         let (fi, fo) = (median_f0(&x), median_f0(&y));
         let got = fo / fi;
-        assert!((got / want - 1.0).abs() < 0.03, "{effect:?} at {f0} Hz: ratio {got:.3}, wanted {want:.3} ({fi:.1} -> {fo:.1} Hz)");
-        assert_eq!(fx.late_grains(), 0, "{effect:?}: grains later than the fixed delay");
+        assert!(
+            (got / want - 1.0).abs() < 0.03,
+            "{effect:?} at {f0} Hz: ratio {got:.3}, wanted {want:.3} ({fi:.1} -> {fo:.1} Hz)"
+        );
+        assert_eq!(
+            fx.late_grains(),
+            0,
+            "{effect:?}: grains later than the fixed delay"
+        );
         // Loudness kept within 3 dB, nothing at full scale.
         let db = 20.0 * (rms(&y) / rms(&x)).log10();
-        assert!(db.abs() < 3.0, "{effect:?} at {f0} Hz: level changed by {db:.1} dB");
+        assert!(
+            db.abs() < 3.0,
+            "{effect:?} at {f0} Hz: level changed by {db:.1} dB"
+        );
         assert!(y.iter().all(|v| v.abs() < 0.99));
     }
 
@@ -1544,10 +1710,20 @@ mod tests {
         let x: Vec<f32> = (0..48_000).map(|_| r.white() * 0.1).collect();
         // Straight to the engine (no crossfade from the bypass, no soft clip).
         let mut y = vec![0.0; x.len()];
-        fx.fx.deep.process(&x, &mut y, &pitch_params(VoiceEffect::Deep, 0.5));
+        fx.fx
+            .deep
+            .process(&x, &mut y, &pitch_params(VoiceEffect::Deep, 0.5));
         let d = PITCH_DELAY;
-        let err = x[..x.len() - d].iter().zip(&y[d..]).skip(4_800).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
-        assert!(err < 1e-4, "noise is delayed by exactly {d} samples (max error {err})");
+        let err = x[..x.len() - d]
+            .iter()
+            .zip(&y[d..])
+            .skip(4_800)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            err < 1e-4,
+            "noise is delayed by exactly {d} samples (max error {err})"
+        );
     }
 
     #[test]
@@ -1555,12 +1731,28 @@ mod tests {
         let (ctl, mut fx) = chain(VoiceEffect::Off, 50);
         let x = speech(4.0, 140.0, 21);
         let mut pcm = to_i16(&x);
-        let natural = pcm.windows(2).map(|w| (w[1] as i32 - w[0] as i32).abs()).max().unwrap();
+        let natural = pcm
+            .windows(2)
+            .map(|w| (w[1] as i32 - w[0] as i32).abs())
+            .max()
+            .unwrap();
         let mut seen = Vec::new();
-        let steps = [VoiceEffect::Deep, VoiceEffect::Robot, VoiceEffect::High, VoiceEffect::Echo, VoiceEffect::Alien, VoiceEffect::Radio, VoiceEffect::Cave, VoiceEffect::Off];
+        let steps = [
+            VoiceEffect::Deep,
+            VoiceEffect::Robot,
+            VoiceEffect::High,
+            VoiceEffect::Echo,
+            VoiceEffect::Alien,
+            VoiceEffect::Radio,
+            VoiceEffect::Cave,
+            VoiceEffect::Off,
+        ];
         for (k, c) in pcm.chunks_mut(BLOCK).enumerate() {
             if k % 40 == 10 && k / 40 < steps.len() {
-                ctl.voice_fx().set(VoiceFxConfig { effect: steps[k / 40], intensity_pct: 30 + (k as u32 % 70) });
+                ctl.voice_fx().set(VoiceFxConfig {
+                    effect: steps[k / 40],
+                    intensity_pct: 30 + (k as u32 % 70),
+                });
             }
             fx.process(c);
             seen.push(fx.effect());
@@ -1569,9 +1761,16 @@ mod tests {
         for (i, e) in steps.iter().enumerate() {
             assert_eq!(seen[i * 40 + 10], *e);
         }
-        let max_step = pcm.windows(2).map(|w| (w[1] as i32 - w[0] as i32).abs()).max().unwrap();
-        assert!(max_step <= natural * 2, "step {max_step} vs natural {natural}");
-        // Back to Desligado (chunk 290, faded by 291): bit for bit from chunk 291 on.
+        let max_step = pcm
+            .windows(2)
+            .map(|w| (w[1] as i32 - w[0] as i32).abs())
+            .max()
+            .unwrap();
+        assert!(
+            max_step <= natural * 2,
+            "step {max_step} vs natural {natural}"
+        );
+        // Back to Off (chunk 290, faded by 291): bit for bit from chunk 291 on.
         let orig = to_i16(&x);
         assert_eq!(&pcm[BLOCK * 291..], &orig[BLOCK * 291..]);
         assert_eq!(fx.late_grains(), 0);
@@ -1583,12 +1782,26 @@ mod tests {
         let x = speech(2.0, 150.0, 4);
         let mut pcm = to_i16(&x);
         for (k, c) in pcm.chunks_mut(BLOCK).enumerate() {
-            ctl.voice_fx().set(VoiceFxConfig { effect: VoiceEffect::Echo, intensity_pct: if (k / 10) % 2 == 0 { 0 } else { 100 } });
+            ctl.voice_fx().set(VoiceFxConfig {
+                effect: VoiceEffect::Echo,
+                intensity_pct: if (k / 10) % 2 == 0 { 0 } else { 100 },
+            });
             fx.process(c);
         }
-        let natural = to_i16(&x).windows(2).map(|w| (w[1] as i32 - w[0] as i32).abs()).max().unwrap();
-        let max_step = pcm.windows(2).map(|w| (w[1] as i32 - w[0] as i32).abs()).max().unwrap();
-        assert!(max_step <= natural * 2, "step {max_step} vs natural {natural}");
+        let natural = to_i16(&x)
+            .windows(2)
+            .map(|w| (w[1] as i32 - w[0] as i32).abs())
+            .max()
+            .unwrap();
+        let max_step = pcm
+            .windows(2)
+            .map(|w| (w[1] as i32 - w[0] as i32).abs())
+            .max()
+            .unwrap();
+        assert!(
+            max_step <= natural * 2,
+            "step {max_step} vs natural {natural}"
+        );
     }
 
     #[test]
@@ -1615,8 +1828,15 @@ mod tests {
                 let (_ctl, mut fx) = chain(e, 100);
                 let y = run(&mut fx, input);
                 assert!(y.iter().all(|v| v.abs() < 0.995), "{e:?} {name}: clipped");
-                let diff = rms(&y.iter().zip(input.iter()).map(|(a, b)| a - b).collect::<Vec<_>>());
-                assert!(diff > rms(input) * 0.1, "{e:?} {name}: barely changed the voice");
+                let diff = rms(&y
+                    .iter()
+                    .zip(input.iter())
+                    .map(|(a, b)| a - b)
+                    .collect::<Vec<_>>());
+                assert!(
+                    diff > rms(input) * 0.1,
+                    "{e:?} {name}: barely changed the voice"
+                );
                 assert!(rms(&y) > rms(input) * 0.3, "{e:?} {name}: too quiet");
             }
         }
@@ -1626,13 +1846,24 @@ mod tests {
     fn radio_is_band_limited() {
         let (_ctl, mut fx) = chain(VoiceEffect::Radio, 0);
         // 100 Hz and 8 kHz tones are cut, 1 kHz passes.
-        let tone = |f: f32| (0..24_000).map(|i| (2.0 * PI * f * i as f32 / FS).sin() * 0.05).collect::<Vec<f32>>();
+        let tone = |f: f32| {
+            (0..24_000)
+                .map(|i| (2.0 * PI * f * i as f32 / FS).sin() * 0.05)
+                .collect::<Vec<f32>>()
+        };
         let level = |fx: &mut VoiceChanger, f: f32| {
             let y = run(fx, &tone(f));
             20.0 * (rms(&y[9_600..]) / (0.05 / 2f32.sqrt())).log10()
         };
-        let (lo, mid, hi) = (level(&mut fx, 100.0), level(&mut fx, 1_000.0), level(&mut fx, 8_000.0));
-        assert!(mid > -3.0 && lo < mid - 20.0 && hi < mid - 20.0, "100 Hz {lo:.1} dB, 1 kHz {mid:.1} dB, 8 kHz {hi:.1} dB");
+        let (lo, mid, hi) = (
+            level(&mut fx, 100.0),
+            level(&mut fx, 1_000.0),
+            level(&mut fx, 8_000.0),
+        );
+        assert!(
+            mid > -3.0 && lo < mid - 20.0 && hi < mid - 20.0,
+            "100 Hz {lo:.1} dB, 1 kHz {mid:.1} dB, 8 kHz {hi:.1} dB"
+        );
     }
 
     #[test]
@@ -1645,6 +1876,9 @@ mod tests {
         let y = run(&mut fx, &x);
         let after = &y[4_800 + ECHO_DELAY..4_800 + ECHO_DELAY + 480];
         assert!(rms(after) > 0.05, "the echo comes back 280 ms later");
-        assert!(rms(&y[6_000..4_800 + ECHO_DELAY - 200]) < 1e-3, "and nothing in between");
+        assert!(
+            rms(&y[6_000..4_800 + ECHO_DELAY - 200]) < 1e-3,
+            "and nothing in between"
+        );
     }
 }

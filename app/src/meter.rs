@@ -38,7 +38,11 @@ pub struct Shown {
 pub fn shown(g: &VoiceGate) -> Shown {
     let level = g.level_db();
     Shown {
-        level: if level <= SCALE_MIN_DB { i32::MIN } else { (level / 3.0).round() as i32 },
+        level: if level <= SCALE_MIN_DB {
+            i32::MIN
+        } else {
+            (level / 3.0).round() as i32
+        },
         threshold: g.threshold_db().round() as i32,
         open: g.is_open(),
     }
@@ -60,12 +64,19 @@ pub fn level_bar(ui: &mut egui::Ui, gate: Option<&VoiceGate>, size: Vec2) -> egu
         let lit = level >= thr || (g.ptt() && g.is_open());
         let w = rect.width() * frac(level);
         if w > 0.5 {
-            let fill = egui::Rect::from_min_size(rect.min, egui::vec2(w.max(2.0 * r), rect.height()));
+            let fill =
+                egui::Rect::from_min_size(rect.min, egui::vec2(w.max(2.0 * r), rect.height()));
             p.rect_filled(fill, r, if lit { GREEN } else { QUIET });
         }
         if !g.ptt() {
             let x = (rect.left() + rect.width() * frac(thr)).round();
-            p.line_segment([egui::pos2(x, rect.top() - 1.0), egui::pos2(x, rect.bottom() + 1.0)], Stroke::new(2.0, crate::theme::GIZ));
+            p.line_segment(
+                [
+                    egui::pos2(x, rect.top() - 1.0),
+                    egui::pos2(x, rect.bottom() + 1.0),
+                ],
+                Stroke::new(2.0, crate::theme::GIZ),
+            );
         }
     }
     resp

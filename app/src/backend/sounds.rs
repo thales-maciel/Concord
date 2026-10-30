@@ -67,7 +67,7 @@ pub(super) struct LateSound {
     pub pcm: Result<Arc<SoundPcm>, String>,
     pub asked: Instant,
     /// A preview that cannot go through a voice session plays on this output device (`None`: the
-    /// default one). Only the trim editor's "Ouvir trecho" (`sound_id` < 0) uses it.
+    /// default one). Only the trim editor's "Listen to clip" (`sound_id` < 0) uses it.
     pub device: Option<String>,
 }
 
@@ -79,33 +79,50 @@ fn cache_root() -> PathBuf {
         return PathBuf::from(p);
     }
     if vox_client_core::testmode::background() {
-        return std::env::temp_dir().join(format!("concord-autotest-sounds-{}", std::process::id()));
+        return std::env::temp_dir()
+            .join(format!("concord-autotest-sounds-{}", std::process::id()));
     }
-    let base = std::env::var_os("LOCALAPPDATA").or_else(|| std::env::var_os("APPDATA")).map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    let base = std::env::var_os("LOCALAPPDATA")
+        .or_else(|| std::env::var_os("APPDATA"))
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
     base.join("concord").join("sounds")
 }
 
 /// One directory per server (ids are per server): its address with the odd characters replaced.
 fn server_dir(base: &Path, host: &str, port: u16) -> PathBuf {
     let host = format!("{host}_{port}");
-    base.join(host.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' }).collect::<String>())
+    base.join(
+        host.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>(),
+    )
 }
 
-/// A failed hub call for a person: what happened, in Portuguese.
+/// A failed hub call for a person: what happened, in English.
 pub(super) fn friendly_error(e: &anyhow::Error) -> String {
     if let Some(h) = e.downcast_ref::<HttpStatusError>() {
         return match h.status {
-            400 => format!("O servidor recusou o áudio: {}.", h.message),
-            401 => "Sua sessão expirou. Entre de novo.".into(),
-            403 => "Só quem enviou o som (ou um moderador) pode mudar ou apagar.".into(),
-            404 => "Esse som não existe mais.".into(),
-            409 => format!("O soundboard está cheio ({} sons). Apague algum antes.", vox_proto::SOUND_MAX_COUNT),
+            400 => format!("The server rejected the audio: {}.", h.message),
+            401 => "Your session expired. Sign in again.".into(),
+            403 => "Only the uploader (or a moderator) can edit or delete a sound.".into(),
+            404 => "This sound no longer exists.".into(),
+            409 => format!(
+                "The soundboard is full ({} sounds). Delete a sound first.",
+                vox_proto::SOUND_MAX_COUNT
+            ),
             413 => "O som passou de 1 MB.".into(),
             429 => "Muitos envios seguidos. Espere um pouco e tente de novo.".into(),
-            s => format!("O servidor respondeu com erro {s}."),
+            s => format!("The server returned error {s}."),
         };
     }
-    "Não foi possível falar com o servidor.".into()
+    "Could not reach the server.".into()
 }
 
 impl Controller {
@@ -113,13 +130,21 @@ impl Controller {
         if self.sb.cache.is_none() {
             let hub = self.hub.as_ref()?;
             let url = hub.base_url();
-            self.sb.cache = Some(Arc::new(SoundCache::new(server_dir(&cache_root(), url.host_str().unwrap_or("hub"), url.port_or_known_default().unwrap_or(0)))));
+            self.sb.cache = Some(Arc::new(SoundCache::new(server_dir(
+                &cache_root(),
+                url.host_str().unwrap_or("hub"),
+                url.port_or_known_default().unwrap_or(0),
+            ))));
         }
         self.sb.cache.clone()
     }
 
     fn sb_list(&self) -> Vec<Sound> {
-        self.sb.list.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.sb
+            .list
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// The hub snapshot arrived (login, reconnect): ask for the sound list.
@@ -140,8 +165,15 @@ impl Controller {
             SoundsReply::Unsupported => {
                 info!("the hub has no soundboard (older server): the Sons button stays hidden");
                 self.sb.supported = Some(false);
-                self.sb.list.lock().unwrap_or_else(|e| e.into_inner()).clear();
-                self.out.send(Ev::Sound(SoundEv::List { supported: false, sounds: Vec::new() }));
+                self.sb
+                    .list
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clear();
+                self.out.send(Ev::Sound(SoundEv::List {
+                    supported: false,
+                    sounds: Vec::new(),
+                }));
             }
             SoundsReply::Failed(why) => warn!(%why, "could not load the sound list"),
         }
@@ -157,7 +189,10 @@ impl Controller {
             let keep: Vec<_> = list.iter().map(|s| (s.id, s.hash.clone())).collect();
             tokio::task::spawn_blocking(move || cache.retain(&keep));
         }
-        self.out.send(Ev::Sound(SoundEv::List { supported: true, sounds: list }));
+        self.out.send(Ev::Sound(SoundEv::List {
+            supported: true,
+            sounds: list,
+        }));
         self.prefetch_sounds();
     }
 
@@ -165,8 +200,15 @@ impl Controller {
     pub(super) fn sounds_reset(&mut self) {
         self.sb.supported = None;
         self.sb.cache = None;
-        self.sb.list.lock().unwrap_or_else(|e| e.into_inner()).clear();
-        self.out.send(Ev::Sound(SoundEv::List { supported: false, sounds: Vec::new() }));
+        self.sb
+            .list
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.out.send(Ev::Sound(SoundEv::List {
+            supported: false,
+            sounds: Vec::new(),
+        }));
     }
 
     /// We are in a voice channel now: apply the volume / mute and fetch the clips we do not have.
@@ -188,16 +230,27 @@ impl Controller {
         if self.voice_channel.is_none() || self.sb.supported != Some(true) {
             return;
         }
-        let (Some(hub), Some(cache)) = (self.hub.clone(), self.sound_cache()) else { return };
+        let (Some(hub), Some(cache)) = (self.hub.clone(), self.sound_cache()) else {
+            return;
+        };
         if self.sb.prefetching.swap(true, Ordering::AcqRel) {
             return; // the running task re-reads the list when it finishes an item
         }
         let (list, flag) = (self.sb.list.clone(), self.sb.prefetching.clone());
         tokio::spawn(async move {
             loop {
-                let next = list.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|s| !cache.has(s.id, &s.hash)).cloned();
+                let next = list
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .iter()
+                    .find(|s| !cache.has(s.id, &s.hash))
+                    .cloned();
                 let Some(s) = next else { break };
-                match hub.sound_audio(s.id, &s.hash).await.and_then(|wav| cache.put(s.id, &s.hash, &wav).map(|_| ())) {
+                match hub
+                    .sound_audio(s.id, &s.hash)
+                    .await
+                    .and_then(|wav| cache.put(s.id, &s.hash, &wav).map(|_| ()))
+                {
                     Ok(()) => tracing::debug!(id = s.id, name = %s.name, "sound downloaded"),
                     Err(e) => {
                         warn!(id = s.id, error = %format!("{e:#}"), "sound download failed");
@@ -211,30 +264,52 @@ impl Controller {
 
     pub(super) fn sound_cmd(&mut self, cmd: SoundCmd) {
         match cmd {
-            SoundCmd::Prefs { volume_pct, muted, muted_sounds } => {
+            SoundCmd::Prefs {
+                volume_pct,
+                muted,
+                muted_sounds,
+            } => {
                 self.sb.volume_pct = volume_pct.min(100);
                 self.sb.muted = muted;
                 self.sb.muted_sounds = muted_sounds.into_iter().collect();
                 self.apply_sound_gain();
             }
             SoundCmd::Play(id) => {
-                let sent = self.hub_tx.as_ref().map(|tx| tx.send(ClientEvent::PlaySound { sound_id: id }));
+                let sent = self
+                    .hub_tx
+                    .as_ref()
+                    .map(|tx| tx.send(ClientEvent::PlaySound { sound_id: id }));
                 if !matches!(sent, Some(Ok(()))) {
-                    self.out.send(Ev::Notice("Som não enviado: sem conexão com o servidor.".into()));
+                    self.out.send(Ev::Notice(
+                        "Sound not sent: not connected to the server.".into(),
+                    ));
                 }
             }
             SoundCmd::Preview(id) => self.sound_preview(id),
-            SoundCmd::Upload { path, name, emoji, trim } => self.sound_upload(path, name, emoji, trim),
-            SoundCmd::PreviewClip { path, trim, output_device } => self.sound_preview_clip(path, trim, output_device),
+            SoundCmd::Upload {
+                path,
+                name,
+                emoji,
+                trim,
+            } => self.sound_upload(path, name, emoji, trim),
+            SoundCmd::PreviewClip {
+                path,
+                trim,
+                output_device,
+            } => self.sound_preview_clip(path, trim, output_device),
             SoundCmd::Rename { id, name, emoji } => {
-                let (Some(hub), out) = (self.hub.clone(), self.out.clone()) else { return };
+                let (Some(hub), out) = (self.hub.clone(), self.out.clone()) else {
+                    return;
+                };
                 tokio::spawn(async move {
                     let r = hub.rename_sound(id, &name, Some(&emoji)).await;
                     done(&out, SoundOp::Rename, r.map(|_| ()));
                 });
             }
             SoundCmd::Delete(id) => {
-                let (Some(hub), out) = (self.hub.clone(), self.out.clone()) else { return };
+                let (Some(hub), out) = (self.hub.clone(), self.out.clone()) else {
+                    return;
+                };
                 tokio::spawn(async move {
                     let r = hub.delete_sound(id).await;
                     done(&out, SoundOp::Delete, r);
@@ -252,19 +327,31 @@ impl Controller {
             return done(&out, SoundOp::Upload, Err(anyhow::anyhow!("offline")));
         };
         tokio::spawn(async move {
-            let fail = |msg: String| out.send(Ev::Sound(SoundEv::Done { op: SoundOp::Upload, result: Err(msg) }));
-            let size = tokio::fs::metadata(&path).await.map(|m| m.len()).map_err(|_| ());
+            let fail = |msg: String| {
+                out.send(Ev::Sound(SoundEv::Done {
+                    op: SoundOp::Upload,
+                    result: Err(msg),
+                }))
+            };
+            let size = tokio::fs::metadata(&path)
+                .await
+                .map(|m| m.len())
+                .map_err(|_| ());
             match size {
-                Err(()) => return fail("Não consegui abrir esse arquivo. Confira o caminho.".into()),
-                Ok(n) if n > vox_client_core::soundboard::process::MAX_SOURCE_BYTES as u64 => return fail(ProcessError::TooBig.to_string()),
+                Err(()) => return fail("Could not open this file. Check the path.".into()),
+                Ok(n) if n > vox_client_core::soundboard::process::MAX_SOURCE_BYTES as u64 => {
+                    return fail(ProcessError::TooBig.to_string())
+                }
                 Ok(_) => {}
             }
             let t = Instant::now();
-            let prepared = match tokio::task::spawn_blocking(move || prepare_file(&path, trim.as_ref())).await {
-                Ok(Ok(p)) => p,
-                Ok(Err(e)) => return fail(e.to_string()),
-                Err(_) => return fail("Não foi possível processar o áudio.".into()),
-            };
+            let prepared =
+                match tokio::task::spawn_blocking(move || prepare_file(&path, trim.as_ref())).await
+                {
+                    Ok(Ok(p)) => p,
+                    Ok(Err(e)) => return fail(e.to_string()),
+                    Err(_) => return fail("Could not process the audio.".into()),
+                };
             info!(
                 ms = t.elapsed().as_millis() as u64,
                 duration_ms = prepared.duration_ms,
@@ -283,9 +370,15 @@ impl Controller {
                 Ok(sound) => {
                     // The hub stores exactly these samples: keep them, nothing to download.
                     if let Some(cache) = cache {
-                        let _ = tokio::task::spawn_blocking(move || cache.put(sound.id, &sound.hash, &wav)).await;
+                        let _ = tokio::task::spawn_blocking(move || {
+                            cache.put(sound.id, &sound.hash, &wav)
+                        })
+                        .await;
                     }
-                    out.send(Ev::Sound(SoundEv::Done { op: SoundOp::Upload, result: Ok(()) }));
+                    out.send(Ev::Sound(SoundEv::Done {
+                        op: SoundOp::Upload,
+                        result: Ok(()),
+                    }));
                 }
                 Err(e) => {
                     warn!(error = %format!("{e:#}"), "sound upload failed");
@@ -295,39 +388,57 @@ impl Controller {
         });
     }
 
-    /// "Ouvir trecho": cut the part of the file exactly as an upload would, then play it here only.
+    /// "Listen to clip": cut the part of the file exactly as an upload would, then play it here only.
     /// In a voice channel it goes through the session's output (the person's speakers, and the echo
     /// canceller's reference), otherwise to `device`. Headless runs play nothing; they just say the
     /// clip is ready.
     fn sound_preview_clip(&mut self, path: PathBuf, trim: Trim, device: Option<String>) {
-        let (out, int_tx, voice_gen, no_playback) = (self.out.clone(), self.int_tx.clone(), self.voice_gen, self.no_playback);
+        let (out, int_tx, voice_gen, no_playback) = (
+            self.out.clone(),
+            self.int_tx.clone(),
+            self.voice_gen,
+            self.no_playback,
+        );
         tokio::spawn(async move {
             let say = |r: Result<u32, String>| out.send(Ev::Sound(SoundEv::ClipPreview(r)));
-            let prepared = match tokio::task::spawn_blocking(move || prepare_file(&path, Some(&trim))).await {
-                Ok(Ok(p)) => p,
-                Ok(Err(e)) => return say(Err(e.to_string())),
-                Err(_) => return say(Err("Não foi possível processar o áudio.".into())),
-            };
+            let prepared =
+                match tokio::task::spawn_blocking(move || prepare_file(&path, Some(&trim))).await {
+                    Ok(Ok(p)) => p,
+                    Ok(Err(e)) => return say(Err(e.to_string())),
+                    Err(_) => return say(Err("Could not process the audio.".into())),
+                };
             let pcm = match SoundPcm::from_wav(&prepared.wav) {
                 Ok(p) => Arc::new(p),
                 Err(e) => return say(Err(format!("{e:#}"))),
             };
             if no_playback {
-                info!(ms = pcm.duration_ms(), "clip preview suppressed (VOX_NO_PLAYBACK)");
+                info!(
+                    ms = pcm.duration_ms(),
+                    "clip preview suppressed (VOX_NO_PLAYBACK)"
+                );
                 return say(Ok(pcm.duration_ms()));
             }
-            let late = LateSound { voice_gen, sound_id: -1, by: User::new(-1, ""), pcm: Ok(pcm), asked: Instant::now(), device };
+            let late = LateSound {
+                voice_gen,
+                sound_id: -1,
+                by: User::new(-1, ""),
+                pcm: Ok(pcm),
+                asked: Instant::now(),
+                device,
+            };
             let _ = int_tx.send(Internal::LateSound(late));
         });
     }
 
-    /// "Ouvir só aqui".
+    /// "Listen locally".
     fn sound_preview(&mut self, id: SoundId) {
         if self.no_playback {
             tracing::debug!(id, "sound preview suppressed (VOX_NO_PLAYBACK)");
             return;
         }
-        let Some(sound) = self.sb_list().into_iter().find(|s| s.id == id) else { return };
+        let Some(sound) = self.sb_list().into_iter().find(|s| s.id == id) else {
+            return;
+        };
         let gain = self.sb.gain();
         match self.sound_pcm(&sound) {
             Some(pcm) => {
@@ -348,15 +459,26 @@ impl Controller {
 
     /// Download a clip nobody had cached. `by`: who played it (`None`: a local preview).
     fn fetch_late(&mut self, sound: Sound, by: Option<User>) {
-        let (Some(hub), Some(cache)) = (self.hub.clone(), self.sound_cache()) else { return };
+        let (Some(hub), Some(cache)) = (self.hub.clone(), self.sound_cache()) else {
+            return;
+        };
         let (int_tx, voice_gen, asked) = (self.int_tx.clone(), self.voice_gen, Instant::now());
         tokio::spawn(async move {
             let pcm = match hub.sound_audio(sound.id, &sound.hash).await {
-                Ok(wav) => cache.put(sound.id, &sound.hash, &wav).map_err(|e| format!("{e:#}")),
+                Ok(wav) => cache
+                    .put(sound.id, &sound.hash, &wav)
+                    .map_err(|e| format!("{e:#}")),
                 Err(e) => Err(format!("{e:#}")),
             };
             let by = by.unwrap_or_else(|| User::new(-1, ""));
-            let _ = int_tx.send(Internal::LateSound(LateSound { voice_gen, sound_id: sound.id, by, pcm, asked, device: None }));
+            let _ = int_tx.send(Internal::LateSound(LateSound {
+                voice_gen,
+                sound_id: sound.id,
+                by,
+                pcm,
+                asked,
+                device: None,
+            }));
         });
     }
 
@@ -375,20 +497,33 @@ impl Controller {
             let played = match &self.voice {
                 Some(v) => v.preview_sound(&pcm, gain),
                 // Not in a voice channel: the output device is opened just for it.
-                None if late.sound_id < 0 => self.ui_player.play_pcm(pcm.to_stereo(), gain, late.device.as_deref()),
+                None if late.sound_id < 0 => {
+                    self.ui_player
+                        .play_pcm(pcm.to_stereo(), gain, late.device.as_deref())
+                }
                 None => false,
             };
             if late.sound_id < 0 {
-                let r = if played { Ok(pcm.duration_ms()) } else { Err("Não consegui tocar: a saída de áudio não está disponível.".to_string()) };
+                let r = if played {
+                    Ok(pcm.duration_ms())
+                } else {
+                    Err("Could not play: audio output is unavailable.".to_string())
+                };
                 self.out.send(Ev::Sound(SoundEv::ClipPreview(r)));
             }
             return;
         }
         if late.asked.elapsed() > MAX_LATE {
-            return info!(id = late.sound_id, "downloaded sound arrived too late; not played");
+            return info!(
+                id = late.sound_id,
+                "downloaded sound arrived too late; not played"
+            );
         }
         // The personal rules may have changed while it downloaded.
-        if self.sb.muted || self.sb.muted_sounds.contains(&late.sound_id) || self.voice.as_ref().is_none_or(|v| v.is_deafened()) {
+        if self.sb.muted
+            || self.sb.muted_sounds.contains(&late.sound_id)
+            || self.voice.as_ref().is_none_or(|v| v.is_deafened())
+        {
             return;
         }
         self.queue_sound(late.sound_id, &pcm);
@@ -399,11 +534,20 @@ impl Controller {
     pub(super) fn sound_played(&mut self, sound_id: SoundId, by: User, channel_id: ChannelId) {
         let heard = self.sound_played_inner(sound_id, &by, channel_id);
         if let Some(heard) = heard {
-            self.out.send(Ev::Sound(SoundEv::Played { sound_id, by, heard }));
+            self.out.send(Ev::Sound(SoundEv::Played {
+                sound_id,
+                by,
+                heard,
+            }));
         }
     }
 
-    fn sound_played_inner(&mut self, sound_id: SoundId, by: &User, channel_id: ChannelId) -> Option<Heard> {
+    fn sound_played_inner(
+        &mut self,
+        sound_id: SoundId,
+        by: &User,
+        channel_id: ChannelId,
+    ) -> Option<Heard> {
         // Only the room we are in (a stale event after leaving or moving is ignored).
         if self.voice_channel != Some(channel_id) || self.voice.is_none() {
             return None;
@@ -445,7 +589,12 @@ impl Controller {
             return false;
         }
         if self.no_playback {
-            measure_headless(v.playback_mixer(), sound_id, pcm.duration_ms(), self.out.clone());
+            measure_headless(
+                v.playback_mixer(),
+                sound_id,
+                pcm.duration_ms(),
+                self.out.clone(),
+            );
         }
         true
     }
@@ -461,7 +610,12 @@ fn done(out: &Out, op: SoundOp, r: anyhow::Result<()>) {
 
 /// No output device exists in a silent run: pull the playback mix by hand until the clips are
 /// done and report how loud it was. Nothing is ever played.
-fn measure_headless(mixer: Arc<vox_client_core::audio::Mixer>, sound_id: SoundId, clip_ms: u32, out: Out) {
+fn measure_headless(
+    mixer: Arc<vox_client_core::audio::Mixer>,
+    sound_id: SoundId,
+    clip_ms: u32,
+    out: Out,
+) {
     tokio::task::spawn_blocking(move || {
         let mut block = vec![0i16; MIX_10MS];
         let (mut sum, mut n, mut peak) = (0f64, 0u64, 0i16);
@@ -475,10 +629,19 @@ fn measure_headless(mixer: Arc<vox_client_core::audio::Mixer>, sound_id: SoundId
             n += block.len() as u64;
         }
         let rms = if n > 0 { (sum / n as f64).sqrt() } else { 0.0 };
-        let rms_dbfs = if rms > 0.0 { 20.0 * rms.log10() as f32 } else { f32::NEG_INFINITY };
+        let rms_dbfs = if rms > 0.0 {
+            20.0 * rms.log10() as f32
+        } else {
+            f32::NEG_INFINITY
+        };
         let ms = (n / 2 * 1000 / 48_000) as u32;
         tracing::debug!(sound_id, clip_ms, ms, "headless mix measured");
-        out.send(Ev::Sound(SoundEv::MixerHeard { sound_id, rms_dbfs, peak: peak as f32 / 32768.0, ms }));
+        out.send(Ev::Sound(SoundEv::MixerHeard {
+            sound_id,
+            rms_dbfs,
+            peak: peak as f32 / 32768.0,
+            ms,
+        }));
     });
 }
 
@@ -487,35 +650,58 @@ mod tests {
     use super::*;
 
     fn http(status: u16) -> anyhow::Error {
-        anyhow::Error::new(HttpStatusError { status, message: "boom".into() }).context("sound upload failed")
+        anyhow::Error::new(HttpStatusError {
+            status,
+            message: "boom".into(),
+        })
+        .context("sound upload failed")
     }
 
     #[test]
-    fn hub_refusals_become_portuguese_sentences() {
-        assert!(friendly_error(&http(403)).starts_with("Só quem enviou"));
-        assert!(friendly_error(&http(409)).contains("cheio") && friendly_error(&http(409)).contains("50"));
+    fn hub_refusals_become_english_sentences() {
+        assert!(friendly_error(&http(403)).starts_with("Only the uploader"));
+        assert!(
+            friendly_error(&http(409)).contains("cheio")
+                && friendly_error(&http(409)).contains("50")
+        );
         assert!(friendly_error(&http(413)).contains("1 MB"));
         assert!(friendly_error(&http(429)).contains("Espere"));
-        assert!(friendly_error(&http(404)).contains("não existe"));
-        assert!(friendly_error(&http(400)).contains("boom"), "the hub's reason is passed on");
+        assert!(friendly_error(&http(404)).contains("no longer exists"));
+        assert!(
+            friendly_error(&http(400)).contains("boom"),
+            "the hub's reason is passed on"
+        );
         assert!(friendly_error(&http(500)).contains("500"));
-        assert!(friendly_error(&anyhow::anyhow!("connection refused")).contains("servidor"));
+        assert!(friendly_error(&anyhow::anyhow!("connection refused")).contains("server"));
     }
 
     #[test]
     fn each_server_has_its_own_safe_cache_directory() {
         let base = Path::new("cache");
-        assert_eq!(server_dir(base, "192.168.1.50", 7890), base.join("192.168.1.50_7890"));
-        assert_ne!(server_dir(base, "a.example.com", 7890), server_dir(base, "a.example.com", 7891));
+        assert_eq!(
+            server_dir(base, "192.168.1.50", 7890),
+            base.join("192.168.1.50_7890")
+        );
+        assert_ne!(
+            server_dir(base, "a.example.com", 7890),
+            server_dir(base, "a.example.com", 7891)
+        );
         let odd = server_dir(base, "../../x/y:z", 1);
-        assert_eq!(odd.parent(), Some(base), "never leaves the cache directory: {odd:?}");
+        assert_eq!(
+            odd.parent(),
+            Some(base),
+            "never leaves the cache directory: {odd:?}"
+        );
     }
 
     #[test]
     fn the_default_volume_is_half() {
         let s = SoundState::default();
         assert_eq!((s.volume_pct, s.muted, s.gain()), (50, false, 0.5));
-        let loud = SoundState { volume_pct: 400, ..SoundState::default() };
+        let loud = SoundState {
+            volume_pct: 400,
+            ..SoundState::default()
+        };
         assert_eq!(loud.gain(), 1.0, "capped at 100 %");
     }
 }

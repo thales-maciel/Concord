@@ -16,8 +16,14 @@ impl TestPattern {
     pub fn new(width: u32, height: u32) -> Self {
         assert!(width >= 16 && height >= 16 && width.is_multiple_of(2) && height.is_multiple_of(2));
         let w = width as usize;
-        let ramp = (0..2 * w).map(|x| (16 + (x * 219 / w) % 220) as u8).collect();
-        Self { width, height, ramp }
+        let ramp = (0..2 * w)
+            .map(|x| (16 + (x * 219 / w) % 220) as u8)
+            .collect();
+        Self {
+            width,
+            height,
+            ramp,
+        }
     }
 
     pub fn width(&self) -> u32 {
@@ -29,7 +35,14 @@ impl TestPattern {
     }
 
     /// Render frame `index` into NV12 planes.
-    pub fn render(&self, index: u64, y: &mut [u8], y_stride: usize, uv: &mut [u8], uv_stride: usize) {
+    pub fn render(
+        &self,
+        index: u64,
+        y: &mut [u8],
+        y_stride: usize,
+        uv: &mut [u8],
+        uv_stride: usize,
+    ) {
         let (w, h) = (self.width as usize, self.height as usize);
         assert!(y_stride >= w && uv_stride >= w);
         assert!(y.len() >= y_stride * (h - 1) + w && uv.len() >= uv_stride * (h / 2 - 1) + w);
@@ -59,7 +72,9 @@ impl TestPattern {
         for row in 0..ch {
             let band = (row * 8 / ch) as u8;
             let u = 64u8.wrapping_add(band.wrapping_mul(24)).wrapping_add(phase);
-            let v = 192u8.wrapping_sub(band.wrapping_mul(20)).wrapping_add(phase / 2);
+            let v = 192u8
+                .wrapping_sub(band.wrapping_mul(20))
+                .wrapping_add(phase / 2);
             let dst = &mut uv[row * uv_stride..row * uv_stride + w];
             for px in dst.as_chunks_mut::<2>().0 {
                 px[0] = u;
@@ -116,11 +131,15 @@ mod tests {
             assert!(y0[row * ys + w..(row + 1) * ys].iter().all(|&b| b == 0xAA));
         }
         for row in 0..h / 2 {
-            assert!(uv0[row * uvs + w..(row + 1) * uvs].iter().all(|&b| b == 0xAA));
+            assert!(uv0[row * uvs + w..(row + 1) * uvs]
+                .iter()
+                .all(|&b| b == 0xAA));
         }
         // Luma stays in video range.
         for row in 0..h {
-            assert!(y0[row * ys..row * ys + w].iter().all(|&b| (16..=235).contains(&b)));
+            assert!(y0[row * ys..row * ys + w]
+                .iter()
+                .all(|&b| (16..=235).contains(&b)));
         }
     }
 

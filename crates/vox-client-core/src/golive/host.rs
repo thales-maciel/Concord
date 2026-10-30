@@ -22,7 +22,10 @@ use std::sync::Once;
 
 use anyhow::{anyhow, Result};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows_sys::Win32::Graphics::Gdi::{CombineRgn, CreateRectRgn, DeleteObject, GetWindowRgn, GetWindowRgnBox, PtInRegion, SetWindowRgn, ValidateRect, RGN_DIFF};
+use windows_sys::Win32::Graphics::Gdi::{
+    CombineRgn, CreateRectRgn, DeleteObject, GetWindowRgn, GetWindowRgnBox, PtInRegion,
+    SetWindowRgn, ValidateRect, RGN_DIFF,
+};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
@@ -30,8 +33,22 @@ use super::viewer::Viewer;
 use super::viewer_native::{CTRL, WM_VOX_REDRAW};
 
 const CLASS_NAME: &[u16] = &[
-    b'V' as u16, b'o' as u16, b'x' as u16, b'H' as u16, b'u' as u16, b'b' as u16, b'V' as u16, b'i' as u16, b'd' as u16, b'e' as u16, b'o' as u16, b'H' as u16,
-    b'o' as u16, b's' as u16, b't' as u16, 0,
+    b'V' as u16,
+    b'o' as u16,
+    b'x' as u16,
+    b'H' as u16,
+    b'u' as u16,
+    b'b' as u16,
+    b'V' as u16,
+    b'i' as u16,
+    b'd' as u16,
+    b'e' as u16,
+    b'o' as u16,
+    b'H' as u16,
+    b'o' as u16,
+    b's' as u16,
+    b't' as u16,
+    0,
 ];
 
 /// A rectangle in physical pixels relative to the parent's client area.
@@ -61,7 +78,12 @@ fn post_redraw(hwnd: HWND) {
     }
 }
 
-unsafe extern "system" fn host_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn host_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     match msg {
         // Mouse input goes to the app window underneath (same thread), as if we were not here.
         WM_NCHITTEST => HTTRANSPARENT as LRESULT,
@@ -84,7 +106,9 @@ impl VideoHost {
     pub fn new(parent: isize) -> Result<VideoHost> {
         let viewer = Viewer::get()?;
         if !viewer.is_native() {
-            return Err(anyhow!("inline video needs the native viewer (Viewer::prefer_native_window)"));
+            return Err(anyhow!(
+                "inline video needs the native viewer (Viewer::prefer_native_window)"
+            ));
         }
         static REGISTER: Once = Once::new();
         // SAFETY: class registration and window creation with valid, NUL-terminated strings.
@@ -124,7 +148,13 @@ impl VideoHost {
             return Err(anyhow!("cannot create the video child window"));
         }
         tracing::info!(hwnd = hwnd as isize, parent, "video host created");
-        Ok(VideoHost { hwnd, placed: None, clip: Vec::new(), clip_size: (0, 0), viewer })
+        Ok(VideoHost {
+            hwnd,
+            placed: None,
+            clip: Vec::new(),
+            clip_size: (0, 0),
+            viewer,
+        })
     }
 
     pub fn hwnd(&self) -> isize {
@@ -159,10 +189,26 @@ impl VideoHost {
         unsafe {
             match rect {
                 Some(r) => {
-                    SetWindowPos(self.hwnd, HWND_TOP, r.x, r.y, r.w, r.h, SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
+                    SetWindowPos(
+                        self.hwnd,
+                        HWND_TOP,
+                        r.x,
+                        r.y,
+                        r.w,
+                        r.h,
+                        SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER,
+                    );
                 }
                 None => {
-                    SetWindowPos(self.hwnd, null_mut(), 0, 0, 0, 0, SWP_NOACTIVATE | SWP_HIDEWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
+                    SetWindowPos(
+                        self.hwnd,
+                        null_mut(),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOACTIVATE | SWP_HIDEWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+                    );
                 }
             }
         }
@@ -209,11 +255,26 @@ impl VideoHost {
     /// What the system says about the window (for tests): shown, and the bounding box of its
     /// region relative to the window (`None`: no region, the whole window shows).
     pub fn window_state(&self) -> (bool, Option<PxRect>) {
-        let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        let mut r = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
         // SAFETY: read-only queries on our own window with a valid out-pointer.
-        let (shown, kind) = unsafe { (IsWindowVisible(self.hwnd) != 0, GetWindowRgnBox(self.hwnd, &mut r)) };
+        let (shown, kind) = unsafe {
+            (
+                IsWindowVisible(self.hwnd) != 0,
+                GetWindowRgnBox(self.hwnd, &mut r),
+            )
+        };
         // ERROR (0): the window has no region.
-        let region = (kind != 0).then_some(PxRect { x: r.left, y: r.top, w: r.right - r.left, h: r.bottom - r.top });
+        let region = (kind != 0).then_some(PxRect {
+            x: r.left,
+            y: r.top,
+            w: r.right - r.left,
+            h: r.bottom - r.top,
+        });
         (shown, region)
     }
 

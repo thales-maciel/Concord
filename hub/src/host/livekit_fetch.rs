@@ -1,4 +1,4 @@
-//! The voice server (LiveKit) is not shipped with the app: the first "Criar servidor" downloads
+//! The voice server (LiveKit) is not shipped with the app: the first "Create server" downloads
 //! the pinned release, the same one `hub/scripts/fetch-livekit.ps1` installs, and checks it against
 //! the SHA-256 pinned here (the zip, then the `livekit-server.exe` inside it). A mismatch installs
 //! nothing. The zip is read with a few lines over `miniz_oxide` (already in the tree through `png`).
@@ -36,7 +36,10 @@ pub fn zip_name() -> String {
 }
 
 pub fn zip_url() -> String {
-    format!("https://github.com/livekit/livekit/releases/download/v{VERSION}/{}", zip_name())
+    format!(
+        "https://github.com/livekit/livekit/releases/download/v{VERSION}/{}",
+        zip_name()
+    )
 }
 
 pub fn sha256_file(path: &Path) -> Result<String> {
@@ -68,7 +71,10 @@ pub fn installed(bin_dir: &Path) -> Option<PathBuf> {
 }
 
 /// Download the pinned zip (`progress(bytes so far, total)`), check it and install the exe.
-pub async fn download(bin_dir: &Path, progress: &(dyn Fn(u64, Option<u64>) + Send + Sync)) -> Result<PathBuf> {
+pub async fn download(
+    bin_dir: &Path,
+    progress: &(dyn Fn(u64, Option<u64>) + Send + Sync),
+) -> Result<PathBuf> {
     crate::linkpreview::fetch::install_crypto_provider();
     let client = reqwest::Client::builder()
         .user_agent(concat!("concord/", env!("CARGO_PKG_VERSION")))
@@ -82,17 +88,21 @@ pub async fn download(bin_dir: &Path, progress: &(dyn Fn(u64, Option<u64>) + Sen
         .send()
         .await
         .and_then(|r| r.error_for_status())
-        .context("Não foi possível baixar o servidor de voz. Confira a internet e tente de novo.")?;
+        .context("Could not download the voice server. Check your internet and try again.")?;
     let total = resp.content_length();
     if total.is_some_and(|t| t as usize > MAX_ZIP) {
-        bail!("O download do servidor de voz é maior do que o esperado; nada foi instalado.");
+        bail!("The voice server download is larger than expected; nothing was installed.");
     }
     let mut buf = Vec::with_capacity(total.unwrap_or(32 << 20).min(MAX_ZIP as u64) as usize);
     progress(0, total);
-    while let Some(chunk) = resp.chunk().await.context("O download do servidor de voz parou no meio. Tente de novo.")? {
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .context("The voice server download was interrupted. Try again.")?
+    {
         buf.extend_from_slice(&chunk);
         if buf.len() > MAX_ZIP {
-            bail!("O download do servidor de voz é maior do que o esperado; nada foi instalado.");
+            bail!("The voice server download is larger than expected; nothing was installed.");
         }
         progress(buf.len() as u64, total);
     }
@@ -106,10 +116,14 @@ pub async fn download(bin_dir: &Path, progress: &(dyn Fn(u64, Option<u64>) + Sen
 pub fn install_zip(bin_dir: &Path, zip: &[u8], pins: &Pins) -> Result<PathBuf> {
     let got = hex(&Sha256::digest(zip));
     if got != pins.zip_sha256 {
-        tracing::error!(expected = pins.zip_sha256, got, "livekit: zip hash mismatch");
-        bail!("O arquivo do servidor de voz não confere com a assinatura esperada (SHA-256). Por segurança, nada foi instalado.");
+        tracing::error!(
+            expected = pins.zip_sha256,
+            got,
+            "livekit: zip hash mismatch"
+        );
+        bail!("The voice server file does not match the expected SHA-256 hash. For safety, nothing was installed.");
     }
-    let exe = extract(zip, EXE_NAME, MAX_EXE).context("O arquivo do servidor de voz veio danificado.")?;
+    let exe = extract(zip, EXE_NAME, MAX_EXE).context("The voice server archive is damaged.")?;
     install_exe_bytes(bin_dir, &exe, pins)
 }
 
@@ -117,7 +131,8 @@ pub fn install_zip(bin_dir: &Path, zip: &[u8], pins: &Pins) -> Result<PathBuf> {
 /// or the exe itself. Checked exactly like a download.
 pub fn install_from(bin_dir: &Path, source: &Path, pins: &Pins) -> Result<PathBuf> {
     if source.is_dir() {
-        let zip = std::fs::read(source.join(zip_name())).with_context(|| format!("reading {} from {}", zip_name(), source.display()))?;
+        let zip = std::fs::read(source.join(zip_name()))
+            .with_context(|| format!("reading {} from {}", zip_name(), source.display()))?;
         return install_zip(bin_dir, &zip, pins);
     }
     let exe = std::fs::read(source).with_context(|| format!("reading {}", source.display()))?;
@@ -127,8 +142,12 @@ pub fn install_from(bin_dir: &Path, source: &Path, pins: &Pins) -> Result<PathBu
 fn install_exe_bytes(bin_dir: &Path, exe: &[u8], pins: &Pins) -> Result<PathBuf> {
     let got = hex(&Sha256::digest(exe));
     if got != pins.exe_sha256 {
-        tracing::error!(expected = pins.exe_sha256, got, "livekit: exe hash mismatch");
-        bail!("O servidor de voz não confere com a assinatura esperada (SHA-256). Por segurança, nada foi instalado.");
+        tracing::error!(
+            expected = pins.exe_sha256,
+            got,
+            "livekit: exe hash mismatch"
+        );
+        bail!("The voice server does not match the expected SHA-256 hash. For safety, nothing was installed.");
     }
     std::fs::create_dir_all(bin_dir).with_context(|| format!("creating {}", bin_dir.display()))?;
     let part = bin_dir.join(format!("{EXE_NAME}.part"));
@@ -157,7 +176,10 @@ pub fn extract(zip: &[u8], name: &str, max: usize) -> Result<Vec<u8>> {
     const LOCAL: u32 = 0x0403_4b50;
     let bad = || anyhow::anyhow!("not a usable zip");
     let floor = zip.len().saturating_sub(22 + 0xFFFF);
-    let eocd = (floor..=zip.len().saturating_sub(22)).rev().find(|&i| u32_at(zip, i) == Some(EOCD)).ok_or_else(bad)?;
+    let eocd = (floor..=zip.len().saturating_sub(22))
+        .rev()
+        .find(|&i| u32_at(zip, i) == Some(EOCD))
+        .ok_or_else(bad)?;
     let entries = u16_at(zip, eocd + 10).ok_or_else(bad)? as usize;
     let mut at = u32_at(zip, eocd + 16).ok_or_else(bad)? as usize;
     for _ in 0..entries {
@@ -168,9 +190,14 @@ pub fn extract(zip: &[u8], name: &str, max: usize) -> Result<Vec<u8>> {
         let method = u16_at(zip, at + 10).ok_or_else(bad)?;
         let csize = u32_at(zip, at + 20).ok_or_else(bad)? as usize;
         let usize_ = u32_at(zip, at + 24).ok_or_else(bad)? as usize;
-        let (n, e, c) = (u16_at(zip, at + 28).ok_or_else(bad)? as usize, u16_at(zip, at + 30).ok_or_else(bad)? as usize, u16_at(zip, at + 32).ok_or_else(bad)? as usize);
+        let (n, e, c) = (
+            u16_at(zip, at + 28).ok_or_else(bad)? as usize,
+            u16_at(zip, at + 30).ok_or_else(bad)? as usize,
+            u16_at(zip, at + 32).ok_or_else(bad)? as usize,
+        );
         let local = u32_at(zip, at + 42).ok_or_else(bad)? as usize;
-        let entry_name = String::from_utf8_lossy(zip.get(at + 46..at + 46 + n).ok_or_else(bad)?).into_owned();
+        let entry_name =
+            String::from_utf8_lossy(zip.get(at + 46..at + 46 + n).ok_or_else(bad)?).into_owned();
         at += 46 + n + e + c;
         let last = entry_name.rsplit(['/', '\\']).next().unwrap_or("");
         if !last.eq_ignore_ascii_case(name) {
@@ -182,11 +209,16 @@ pub fn extract(zip: &[u8], name: &str, max: usize) -> Result<Vec<u8>> {
         if u32_at(zip, local) != Some(LOCAL) {
             return Err(bad());
         }
-        let data_at = local + 30 + u16_at(zip, local + 26).ok_or_else(bad)? as usize + u16_at(zip, local + 28).ok_or_else(bad)? as usize;
+        let data_at = local
+            + 30
+            + u16_at(zip, local + 26).ok_or_else(bad)? as usize
+            + u16_at(zip, local + 28).ok_or_else(bad)? as usize;
         let data = zip.get(data_at..data_at + csize).ok_or_else(bad)?;
         let out = match method {
             0 => data.to_vec(),
-            8 => miniz_oxide::inflate::decompress_to_vec_with_limit(data, max).map_err(|_| bad())?,
+            8 => {
+                miniz_oxide::inflate::decompress_to_vec_with_limit(data, max).map_err(|_| bad())?
+            }
             _ => return Err(bad()),
         };
         if out.len() != usize_ {
@@ -206,7 +238,11 @@ pub(crate) mod tests {
         let mut out = Vec::new();
         let mut central = Vec::new();
         for (name, data) in files {
-            let (method, body) = if deflate { (8u16, miniz_oxide::deflate::compress_to_vec(data, 6)) } else { (0u16, data.to_vec()) };
+            let (method, body) = if deflate {
+                (8u16, miniz_oxide::deflate::compress_to_vec(data, 6))
+            } else {
+                (0u16, data.to_vec())
+            };
             let offset = out.len() as u32;
             out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
             out.extend_from_slice(&[20, 0, 0, 0]);
@@ -249,14 +285,23 @@ pub(crate) mod tests {
     fn the_exe_comes_out_of_the_zip() {
         let exe = b"MZ fake livekit ".repeat(1000);
         for deflate in [false, true] {
-            let zip = make_zip(&[("LICENSE", b"text"), ("livekit_1.13.7/livekit-server.exe", &exe)], deflate);
+            let zip = make_zip(
+                &[
+                    ("LICENSE", b"text"),
+                    ("livekit_1.13.7/livekit-server.exe", &exe),
+                ],
+                deflate,
+            );
             assert_eq!(extract(&zip, EXE_NAME, MAX_EXE).unwrap(), exe);
             assert!(extract(&zip, "other.exe", MAX_EXE).is_err());
             assert!(extract(&zip, EXE_NAME, 100).is_err(), "over the size cap");
         }
         assert!(extract(b"not a zip at all", EXE_NAME, MAX_EXE).is_err());
         let zip = make_zip(&[("livekit-server.exe", &exe)], true);
-        assert!(extract(&zip[..zip.len() / 2], EXE_NAME, MAX_EXE).is_err(), "cut short");
+        assert!(
+            extract(&zip[..zip.len() / 2], EXE_NAME, MAX_EXE).is_err(),
+            "cut short"
+        );
     }
 
     #[test]
@@ -270,12 +315,23 @@ pub(crate) mod tests {
         assert!(!dir.path().join(EXE_NAME).exists());
         // A zip with the right hash but another exe inside is refused too.
         let zip_sha = sha(&zip);
-        let e = install_zip(dir.path(), &zip, &Pins { zip_sha256: &zip_sha, exe_sha256: PINNED.exe_sha256 }).unwrap_err();
+        let e = install_zip(
+            dir.path(),
+            &zip,
+            &Pins {
+                zip_sha256: &zip_sha,
+                exe_sha256: PINNED.exe_sha256,
+            },
+        )
+        .unwrap_err();
         assert!(format!("{e:#}").contains("SHA-256"), "{e:#}");
         assert!(!dir.path().join(EXE_NAME).exists());
         // Both right: installed.
         let exe_sha = sha(&exe);
-        let pins = Pins { zip_sha256: &zip_sha, exe_sha256: &exe_sha };
+        let pins = Pins {
+            zip_sha256: &zip_sha,
+            exe_sha256: &exe_sha,
+        };
         let out = install_zip(dir.path(), &zip, &pins).unwrap();
         assert_eq!(std::fs::read(&out).unwrap(), exe);
         // From a local folder holding the zip, and from an exe file.
@@ -294,7 +350,10 @@ pub(crate) mod tests {
     /// installing it from that file works (no download).
     #[test]
     fn the_pinned_exe_installs_from_a_local_copy() {
-        let real = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("bin").join(EXE_NAME);
+        let real = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("bin")
+            .join(EXE_NAME);
         if !real.exists() {
             eprintln!("skipped: no bin\\{EXE_NAME}");
             return;
@@ -310,8 +369,15 @@ pub(crate) mod tests {
     async fn real_download_matches_the_pins() {
         let dir = tempfile::tempdir().unwrap();
         let seen = std::sync::atomic::AtomicU64::new(0);
-        let out = download(dir.path(), &|n, _| seen.store(n, std::sync::atomic::Ordering::Relaxed)).await.unwrap();
+        let out = download(dir.path(), &|n, _| {
+            seen.store(n, std::sync::atomic::Ordering::Relaxed)
+        })
+        .await
+        .unwrap();
         assert_eq!(installed(dir.path()), Some(out));
-        eprintln!("downloaded {} bytes", seen.load(std::sync::atomic::Ordering::Relaxed));
+        eprintln!(
+            "downloaded {} bytes",
+            seen.load(std::sync::atomic::Ordering::Relaxed)
+        );
     }
 }

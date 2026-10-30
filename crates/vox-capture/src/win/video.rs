@@ -34,8 +34,7 @@ use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P601,
     DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P709, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P601,
-    DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709,
-    DXGI_FORMAT_NV12, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
+    DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709, DXGI_FORMAT_NV12, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     IDXGIAdapter, IDXGIDevice, DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET,
@@ -181,9 +180,15 @@ pub fn start_video(
     preview: Option<PreviewAttach>,
 ) -> Result<VideoInner> {
     let shared = Shared::new_running();
-    let (stop, thread) = spawn_capture(target, cfg, None, shared.clone(), "vox-video", preview, move |sc| {
-        Readback::new(sc.device, sc.ctx, on_frame)
-    })?;
+    let (stop, thread) = spawn_capture(
+        target,
+        cfg,
+        None,
+        shared.clone(),
+        "vox-video",
+        preview,
+        move |sc| Readback::new(sc.device, sc.ctx, on_frame),
+    )?;
     Ok(VideoInner {
         stop,
         thread: Some(thread),
@@ -555,10 +560,22 @@ impl Converter {
                 // encoders expect BT.709 limited range.
                 let input = match self.input_yuv {
                     None => DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
-                    Some(YuvSpace { bt709: false, full_range: false }) => DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P601,
-                    Some(YuvSpace { bt709: false, full_range: true }) => DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P601,
-                    Some(YuvSpace { bt709: true, full_range: false }) => DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709,
-                    Some(YuvSpace { bt709: true, full_range: true }) => DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P709,
+                    Some(YuvSpace {
+                        bt709: false,
+                        full_range: false,
+                    }) => DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P601,
+                    Some(YuvSpace {
+                        bt709: false,
+                        full_range: true,
+                    }) => DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P601,
+                    Some(YuvSpace {
+                        bt709: true,
+                        full_range: false,
+                    }) => DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709,
+                    Some(YuvSpace {
+                        bt709: true,
+                        full_range: true,
+                    }) => DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P709,
                 };
                 v1.VideoProcessorSetStreamColorSpace1(&vp, 0, input);
                 v1.VideoProcessorSetOutputColorSpace1(
@@ -571,10 +588,12 @@ impl Converter {
                 let input = D3D11_VIDEO_PROCESSOR_COLOR_SPACE {
                     _bitfield: match self.input_yuv {
                         None => 0,
-                        Some(y) => ((y.bt709 as u32) << 2) | (if y.full_range { 2 } else { 1 } << 4),
+                        Some(y) => {
+                            ((y.bt709 as u32) << 2) | (if y.full_range { 2 } else { 1 } << 4)
+                        }
                     },
                 };
-                                                                                // YCbCr_Matrix=1 (BT.709) | Nominal_Range=1 (16-235)
+                // YCbCr_Matrix=1 (BT.709) | Nominal_Range=1 (16-235)
                 let output = D3D11_VIDEO_PROCESSOR_COLOR_SPACE {
                     _bitfield: (1 << 2) | (1 << 4),
                 };
@@ -584,7 +603,9 @@ impl Converter {
             tracing::debug!(in_w, in_h, out_w, out_h, "video processor (re)created");
             let mut caps = D3D11_VIDEO_PROCESSOR_CAPS::default();
             if enumerator.GetVideoProcessorCaps(&mut caps).is_ok() {
-                let need = (D3D11_VIDEO_PROCESSOR_FEATURE_CAPS_MIRROR.0 | D3D11_VIDEO_PROCESSOR_FEATURE_CAPS_ROTATION.0) as u32;
+                let need = (D3D11_VIDEO_PROCESSOR_FEATURE_CAPS_MIRROR.0
+                    | D3D11_VIDEO_PROCESSOR_FEATURE_CAPS_ROTATION.0)
+                    as u32;
                 let ok = caps.FeatureCaps & need == need && self.vctx1.is_some();
                 if ok != self.xform_ok {
                     tracing::warn!(feature_caps = caps.FeatureCaps, "GPU video processor cannot mirror / rotate: the camera picture is left as it is");
@@ -772,7 +793,11 @@ impl Sink for Readback {
 }
 
 impl Readback {
-    pub(crate) fn new(device: &ID3D11Device, ctx: &ID3D11DeviceContext, cb: FrameCallback) -> Result<Self> {
+    pub(crate) fn new(
+        device: &ID3D11Device,
+        ctx: &ID3D11DeviceContext,
+        cb: FrameCallback,
+    ) -> Result<Self> {
         let fence = (|| -> windows_core::Result<(ID3D11Fence, ID3D11DeviceContext4)> {
             let dev5: ID3D11Device5 = device.cast()?;
             let ctx4: ID3D11DeviceContext4 = ctx.cast()?;
@@ -1028,9 +1053,17 @@ impl<S: Sink> Capture<S> {
         // one scanning out the monitor and copies each frame across (hybrid laptops: panel on
         // the iGPU, encoder on the dGPU).
         let mon_adapter = adapter_for_monitor(hmon);
-        let mon_luid = mon_adapter.as_ref().and_then(|a| unsafe { a.GetDesc() }.ok()).map(|d| luid_u64(d.AdapterLuid));
-        let pick = crate::gpu::capture_adapter(adapter_req, mon_luid, &|l| adapter_by_luid(l).is_some());
-        let adapter = if pick.cross { pick.luid.and_then(adapter_by_luid) } else { mon_adapter };
+        let mon_luid = mon_adapter
+            .as_ref()
+            .and_then(|a| unsafe { a.GetDesc() }.ok())
+            .map(|d| luid_u64(d.AdapterLuid));
+        let pick =
+            crate::gpu::capture_adapter(adapter_req, mon_luid, &|l| adapter_by_luid(l).is_some());
+        let adapter = if pick.cross {
+            pick.luid.and_then(adapter_by_luid)
+        } else {
+            mon_adapter
+        };
         let (device, ctx, adapter_info) = create_device(adapter.as_ref())?;
         if pick.cross && pick.luid != Some(luid_u64(adapter_info.luid)) {
             return Err(CaptureError::Unsupported(format!(
@@ -1231,7 +1264,9 @@ impl<S: Sink> Capture<S> {
                     Ok(())
                 }
                 _ if r == WAIT_TIMEOUT => {
-                    if let Some(h) = self.hwnd.filter(|_| self.last_window_check.elapsed().as_millis() >= WINDOW_CHECK_MS as u128) {
+                    if let Some(h) = self.hwnd.filter(|_| {
+                        self.last_window_check.elapsed().as_millis() >= WINDOW_CHECK_MS as u128
+                    }) {
                         self.last_window_check = Instant::now();
                         if !unsafe { IsWindow(Some(h)) }.as_bool() {
                             break "target window no longer exists".into();
@@ -1246,7 +1281,13 @@ impl<S: Sink> Capture<S> {
                     )
                 }
             };
-            let res = res.and_then(|()| if refreshes { self.maybe_refresh() } else { Ok(()) });
+            let res = res.and_then(|()| {
+                if refreshes {
+                    self.maybe_refresh()
+                } else {
+                    Ok(())
+                }
+            });
             if let Err(e) = res {
                 if let Some(fatal) = self.handle_error(e) {
                     break fatal;
@@ -1270,13 +1311,17 @@ impl<S: Sink> Capture<S> {
     /// picture again, with a fresh timestamp. Without this, a viewer who starts watching a static
     /// window waits for the next change on screen for its first keyframe (a black tile).
     fn maybe_refresh(&mut self) -> Result<()> {
-        let Some(after) = self.sink.as_ref().and_then(|s| s.refresh_after()) else { return Ok(()) };
+        let Some(after) = self.sink.as_ref().and_then(|s| s.refresh_after()) else {
+            return Ok(());
+        };
         // A frame held back by the pacer is on its way (the timer); nothing sent yet: nothing to repeat.
         if self.deferred.is_some() || self.last_submit.is_none_or(|t| t.elapsed() < after) {
             return Ok(());
         }
         let (w, h) = self.out_size;
-        let Some(out) = self.conv.output().cloned().filter(|_| w > 0 && h > 0) else { return Ok(()) };
+        let Some(out) = self.conv.output().cloned().filter(|_| w > 0 && h > 0) else {
+            return Ok(());
+        };
         if !self.sink().has_free() {
             return Ok(());
         }
@@ -1294,8 +1339,14 @@ impl<S: Sink> Capture<S> {
     /// A preview handle fired (index into `PreviewTap::handles`, offset by 5). Preview trouble
     /// never reaches the capture loop's error handling.
     fn preview_event(&mut self, idx: u32) {
-        let Some(p) = self.preview.as_mut() else { return };
-        let main = self.conv.output().map(|t| Main { tex: t, w: self.out_size.0, h: self.out_size.1 });
+        let Some(p) = self.preview.as_mut() else {
+            return;
+        };
+        let main = self.conv.output().map(|t| Main {
+            tex: t,
+            w: self.out_size.0,
+            h: self.out_size.1,
+        });
         match idx {
             5 => p.on_readback(&self.ctx),
             6 => p.on_wake(&self.device, &self.ctx, main),
@@ -1461,8 +1512,23 @@ impl<S: Sink> Capture<S> {
         self.consecutive_errors = 0;
         if let Some(p) = self.preview.as_mut() {
             // After the encoder got its frame, and never able to fail it.
-            let bgra = Bgra { tex: &tex, tex_w: desc.Width, tex_h: desc.Height, w: src_w, h: src_h };
-            p.on_frame(&self.device, &self.ctx, Main { tex: &out, w: ow, h: oh }, bgra);
+            let bgra = Bgra {
+                tex: &tex,
+                tex_w: desc.Width,
+                tex_h: desc.Height,
+                w: src_w,
+                h: src_h,
+            };
+            p.on_frame(
+                &self.device,
+                &self.ctx,
+                Main {
+                    tex: &out,
+                    w: ow,
+                    h: oh,
+                },
+                bgra,
+            );
         }
         Ok(())
     }

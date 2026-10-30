@@ -1,4 +1,4 @@
-//! Chat images ("Imagens no chat"): upload, checks, quotas, storage and serving. The wire
+//! Chat images ("Images no chat"): upload, checks, quotas, storage and serving. The wire
 //! contract is in `vox_proto::attachment`; the checks of a file are in [`validate`].
 //!
 //! **Storage.** Files live on disk under `<data-dir>/attachments/<aa>/<sha256>.<ext>`, content
@@ -82,7 +82,11 @@ impl AttachmentState {
     }
 
     fn policy(&self) -> Policy {
-        Policy { storage_cap: self.storage_cap, daily_bytes: self.daily_bytes, may_evict: self.retention_days > 0 }
+        Policy {
+            storage_cap: self.storage_cap,
+            daily_bytes: self.daily_bytes,
+            may_evict: self.retention_days > 0,
+        }
     }
 }
 
@@ -163,7 +167,11 @@ pub fn init_links(conn: &Connection) -> rusqlite::Result<()> {
         [],
     )?;
     if channel + dm > 0 {
-        tracing::warn!(channel, dm, "images left behind by deleted messages were dropped");
+        tracing::warn!(
+            channel,
+            dm,
+            "images left behind by deleted messages were dropped"
+        );
     }
     Ok(())
 }
@@ -190,7 +198,9 @@ pub struct Row {
 const COLS: &str = "id, uploader_id, blob_hash, thumb_hash, mime, size, width, height, thumb_w, thumb_h, animated, message_id, dm_message_id, created_at_ms";
 
 fn row(r: &rusqlite::Row) -> rusqlite::Result<Row> {
-    let n = |i: usize| -> rusqlite::Result<u32> { Ok(r.get::<_, i64>(i)?.clamp(0, i64::from(u32::MAX)) as u32) };
+    let n = |i: usize| -> rusqlite::Result<u32> {
+        Ok(r.get::<_, i64>(i)?.clamp(0, i64::from(u32::MAX)) as u32)
+    };
     Ok(Row {
         id: r.get(0)?,
         uploader: r.get(1)?,
@@ -230,11 +240,20 @@ impl Row {
 }
 
 pub fn get(conn: &Connection, id: AttachmentId) -> rusqlite::Result<Option<Row>> {
-    conn.query_row(&format!("SELECT {COLS} FROM attachments WHERE id = ?"), [id], row).optional()
+    conn.query_row(
+        &format!("SELECT {COLS} FROM attachments WHERE id = ?"),
+        [id],
+        row,
+    )
+    .optional()
 }
 
 /// The images of these messages (`dm`: DM lines instead of channel messages), in order.
-fn for_owners(conn: &Connection, ids: &[i64], dm: bool) -> rusqlite::Result<HashMap<i64, Vec<Attachment>>> {
+fn for_owners(
+    conn: &Connection,
+    ids: &[i64],
+    dm: bool,
+) -> rusqlite::Result<HashMap<i64, Vec<Attachment>>> {
     let mut out: HashMap<i64, Vec<Attachment>> = HashMap::new();
     if ids.is_empty() {
         return Ok(out);
@@ -298,7 +317,11 @@ pub enum Owner {
 
 /// Check that `ids` are `me`'s pending attachments (distinct, at most four). Run it in the same
 /// transaction as [`link`].
-pub fn check_pending(conn: &Connection, me: UserId, ids: &[AttachmentId]) -> rusqlite::Result<Result<(), LinkError>> {
+pub fn check_pending(
+    conn: &Connection,
+    me: UserId,
+    ids: &[AttachmentId],
+) -> rusqlite::Result<Result<(), LinkError>> {
     if ids.len() > ATTACHMENT_MAX_PER_MESSAGE {
         return Ok(Err(LinkError::TooMany));
     }
@@ -315,12 +338,22 @@ pub fn check_pending(conn: &Connection, me: UserId, ids: &[AttachmentId]) -> rus
 }
 
 /// Put checked pending attachments on a message, in the order given; returns them.
-pub fn link(conn: &Connection, ids: &[AttachmentId], owner: Owner) -> rusqlite::Result<Vec<Attachment>> {
+pub fn link(
+    conn: &Connection,
+    ids: &[AttachmentId],
+    owner: Owner,
+) -> rusqlite::Result<Vec<Attachment>> {
     let mut out = Vec::with_capacity(ids.len());
     for (pos, id) in ids.iter().enumerate() {
         match owner {
-            Owner::Channel(m) => conn.execute("UPDATE attachments SET message_id = ?, position = ? WHERE id = ?", params![m, pos as i64, id])?,
-            Owner::Dm(m) => conn.execute("UPDATE attachments SET dm_message_id = ?, position = ? WHERE id = ?", params![m, pos as i64, id])?,
+            Owner::Channel(m) => conn.execute(
+                "UPDATE attachments SET message_id = ?, position = ? WHERE id = ?",
+                params![m, pos as i64, id],
+            )?,
+            Owner::Dm(m) => conn.execute(
+                "UPDATE attachments SET dm_message_id = ?, position = ? WHERE id = ?",
+                params![m, pos as i64, id],
+            )?,
         };
         if let Some(r) = get(conn, *id)? {
             out.push(r.to_wire());
@@ -336,7 +369,10 @@ pub fn unlink_message(conn: &Connection, message_id: MessageId) -> rusqlite::Res
 
 /// Drop the attachment rows of a DM line.
 pub fn unlink_dm_message(conn: &Connection, dm_message_id: DmMessageId) -> rusqlite::Result<usize> {
-    conn.execute("DELETE FROM attachments WHERE dm_message_id = ?", [dm_message_id])
+    conn.execute(
+        "DELETE FROM attachments WHERE dm_message_id = ?",
+        [dm_message_id],
+    )
 }
 
 /// Drop the attachment rows of every message of a channel (it is being deleted).
@@ -346,7 +382,8 @@ pub fn unlink_channel(conn: &Connection, channel_id: ChannelId) -> rusqlite::Res
 
 fn blob_path(dir: &Path, hash: &str, mime: &str) -> PathBuf {
     let ext = Kind::from_mime(mime).map_or("bin", Kind::ext);
-    dir.join(&hash[..2.min(hash.len())]).join(format!("{hash}.{ext}"))
+    dir.join(&hash[..2.min(hash.len())])
+        .join(format!("{hash}.{ext}"))
 }
 
 /// Delete every stored file no attachment points at any more (rows and files). Returns how many.
@@ -356,7 +393,9 @@ pub fn collect_garbage(conn: &Connection, dir: &Path) -> rusqlite::Result<usize>
          WHERE NOT EXISTS (SELECT 1 FROM attachments a WHERE a.blob_hash = b.hash)
            AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.thumb_hash = b.hash)",
     )?;
-    let dead = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let dead = st
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     for (hash, mime) in &dead {
         conn.execute("DELETE FROM attachment_blobs WHERE hash = ?", [hash])?;
         let p = blob_path(dir, hash, mime);
@@ -371,7 +410,13 @@ pub fn collect_garbage(conn: &Connection, dir: &Path) -> rusqlite::Result<usize>
 
 /// Bytes of every stored file.
 pub fn usage(conn: &Connection) -> rusqlite::Result<u64> {
-    Ok(conn.query_row("SELECT COALESCE(SUM(size), 0) FROM attachment_blobs", [], |r| r.get::<_, i64>(0))?.max(0) as u64)
+    Ok(conn
+        .query_row(
+            "SELECT COALESCE(SUM(size), 0) FROM attachment_blobs",
+            [],
+            |r| r.get::<_, i64>(0),
+        )?
+        .max(0) as u64)
 }
 
 fn day_of(ms: i64) -> i64 {
@@ -380,7 +425,13 @@ fn day_of(ms: i64) -> i64 {
 
 /// Bytes `user` uploaded on the UTC day of `now_ms`.
 pub fn uploaded_today(conn: &Connection, user: UserId, now_ms: i64) -> rusqlite::Result<u64> {
-    let n: Option<i64> = conn.query_row("SELECT bytes FROM attachment_uploads WHERE user_id = ? AND day = ?", params![user, day_of(now_ms)], |r| r.get(0)).optional()?;
+    let n: Option<i64> = conn
+        .query_row(
+            "SELECT bytes FROM attachment_uploads WHERE user_id = ? AND day = ?",
+            params![user, day_of(now_ms)],
+            |r| r.get(0),
+        )
+        .optional()?;
     Ok(n.unwrap_or(0).max(0) as u64)
 }
 
@@ -418,9 +469,22 @@ fn sha256(b: &[u8]) -> String {
 }
 
 /// Write a file (unless it is already stored) and its blob row. Returns whether it was new.
-fn put_blob(conn: &Connection, dir: &Path, bytes: &[u8], mime: &str, now: i64) -> Result<(String, bool), StoreError> {
+fn put_blob(
+    conn: &Connection,
+    dir: &Path,
+    bytes: &[u8],
+    mime: &str,
+    now: i64,
+) -> Result<(String, bool), StoreError> {
     let hash = sha256(bytes);
-    let exists = conn.query_row("SELECT 1 FROM attachment_blobs WHERE hash = ?", [&hash], |_| Ok(())).optional()?.is_some();
+    let exists = conn
+        .query_row(
+            "SELECT 1 FROM attachment_blobs WHERE hash = ?",
+            [&hash],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
     if exists {
         return Ok((hash, false));
     }
@@ -434,13 +498,22 @@ fn put_blob(conn: &Connection, dir: &Path, bytes: &[u8], mime: &str, now: i64) -
         let _ = std::fs::remove_file(&tmp);
         StoreError::Io(e)
     })?;
-    conn.execute("INSERT INTO attachment_blobs (hash, size, mime, created_at_ms) VALUES (?, ?, ?, ?)", params![hash, bytes.len() as i64, mime, now])?;
+    conn.execute(
+        "INSERT INTO attachment_blobs (hash, size, mime, created_at_ms) VALUES (?, ?, ?, ?)",
+        params![hash, bytes.len() as i64, mime, now],
+    )?;
     Ok((hash, true))
 }
 
 /// Make room for `needed` more bytes by deleting the oldest images older than a day. Returns
 /// whether there is room now.
-fn evict_for(conn: &Connection, dir: &Path, needed: u64, cap: u64, now: i64) -> rusqlite::Result<bool> {
+fn evict_for(
+    conn: &Connection,
+    dir: &Path,
+    needed: u64,
+    cap: u64,
+    now: i64,
+) -> rusqlite::Result<bool> {
     loop {
         if usage(conn)?.saturating_add(needed) <= cap {
             return Ok(true);
@@ -451,13 +524,24 @@ fn evict_for(conn: &Connection, dir: &Path, needed: u64, cap: u64, now: i64) -> 
         let Some(id) = oldest else { return Ok(false) };
         conn.execute("DELETE FROM attachments WHERE id = ?", [id])?;
         let freed = collect_garbage(conn, dir)?;
-        tracing::info!(attachment = id, files_freed = freed, "image storage full: deleted the oldest image");
+        tracing::info!(
+            attachment = id,
+            files_freed = freed,
+            "image storage full: deleted the oldest image"
+        );
     }
 }
 
 /// Store a checked upload of `user` as a pending attachment, enforcing the daily allowance, the
 /// pending limit and the storage cap (all under the database lock, with the files).
-pub fn store_upload(conn: &mut Connection, dir: &Path, user: UserId, up: &Upload, policy: Policy, now: i64) -> Result<Row, StoreError> {
+pub fn store_upload(
+    conn: &mut Connection,
+    dir: &Path,
+    user: UserId,
+    up: &Upload,
+    policy: Policy,
+    now: i64,
+) -> Result<Row, StoreError> {
     let tx = conn.transaction()?;
     let bytes = up.bytes();
     if uploaded_today(&tx, user, now)?.saturating_add(bytes) > policy.daily_bytes {
@@ -473,13 +557,23 @@ pub fn store_upload(conn: &mut Connection, dir: &Path, user: UserId, up: &Upload
         .flatten()
         .map(|c| {
             let h = sha256(&c.bytes);
-            let exists = tx.query_row("SELECT 1 FROM attachment_blobs WHERE hash = ?", [&h], |_| Ok(())).optional()?.is_some();
+            let exists = tx
+                .query_row(
+                    "SELECT 1 FROM attachment_blobs WHERE hash = ?",
+                    [&h],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
             Ok(if exists { 0 } else { c.bytes.len() as u64 })
         })
         .collect::<rusqlite::Result<Vec<u64>>>()?
         .into_iter()
         .sum();
-    if new_bytes > 0 && usage(&tx)?.saturating_add(new_bytes) > policy.storage_cap && !(policy.may_evict && evict_for(&tx, dir, new_bytes, policy.storage_cap, now)?) {
+    if new_bytes > 0
+        && usage(&tx)?.saturating_add(new_bytes) > policy.storage_cap
+        && !(policy.may_evict && evict_for(&tx, dir, new_bytes, policy.storage_cap, now)?)
+    {
         return Err(StoreError::Full);
     }
     let mut written = Vec::new();
@@ -513,7 +607,10 @@ pub fn store_upload(conn: &mut Connection, dir: &Path, user: UserId, up: &Upload
             params![user, day_of(now), bytes as i64],
         )?;
         // Old days of the allowance are of no use.
-        tx.execute("DELETE FROM attachment_uploads WHERE day < ?", [day_of(now) - 2])?;
+        tx.execute(
+            "DELETE FROM attachment_uploads WHERE day < ?",
+            [day_of(now) - 2],
+        )?;
         Ok(get(&tx, id)?.expect("just inserted"))
     })();
     match result {
@@ -533,21 +630,46 @@ pub fn store_upload(conn: &mut Connection, dir: &Path, user: UserId, up: &Upload
 
 /// Housekeeping: pending uploads older than their lifetime, images past the retention, unused
 /// files, and files on disk the database does not know (a crash between writing and committing).
-pub fn sweep(conn: &Connection, dir: &Path, now: i64, retention_days: u32) -> rusqlite::Result<(usize, usize, usize)> {
+pub fn sweep(
+    conn: &Connection,
+    dir: &Path,
+    now: i64,
+    retention_days: u32,
+) -> rusqlite::Result<(usize, usize, usize)> {
     let expired = conn.execute(
         "DELETE FROM attachments WHERE message_id IS NULL AND dm_message_id IS NULL AND created_at_ms < ?",
         [now - ATTACHMENT_PENDING_SECS as i64 * 1000],
     )?;
-    let old = if retention_days > 0 { conn.execute("DELETE FROM attachments WHERE created_at_ms < ?", [now - i64::from(retention_days) * DAY_MS])? } else { 0 };
+    let old = if retention_days > 0 {
+        conn.execute(
+            "DELETE FROM attachments WHERE created_at_ms < ?",
+            [now - i64::from(retention_days) * DAY_MS],
+        )?
+    } else {
+        0
+    };
     let mut files = collect_garbage(conn, dir)?;
     // Stray files: not in `attachment_blobs` (or a leftover `.part`).
     if let Ok(subdirs) = std::fs::read_dir(dir) {
-        for sub in subdirs.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())) {
-            let Ok(entries) = std::fs::read_dir(sub.path()) else { continue };
+        for sub in subdirs
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        {
+            let Ok(entries) = std::fs::read_dir(sub.path()) else {
+                continue;
+            };
             for f in entries.flatten() {
                 let name = f.file_name().to_string_lossy().into_owned();
                 let hash = name.split('.').next().unwrap_or_default().to_string();
-                let known = !name.ends_with(".part") && conn.query_row("SELECT 1 FROM attachment_blobs WHERE hash = ?", [&hash], |_| Ok(())).optional()?.is_some();
+                let known = !name.ends_with(".part")
+                    && conn
+                        .query_row(
+                            "SELECT 1 FROM attachment_blobs WHERE hash = ?",
+                            [&hash],
+                            |_| Ok(()),
+                        )
+                        .optional()?
+                        .is_some();
                 if !known && std::fs::remove_file(f.path()).is_ok() {
                     files += 1;
                 }
@@ -561,7 +683,11 @@ pub fn sweep(conn: &Connection, dir: &Path, now: i64, retention_days: u32) -> ru
 pub async fn watch(s: AppState, mut shutdown: watch::Receiver<bool>) {
     let mut first = true;
     loop {
-        let wait = if first { Duration::from_secs(5) } else { SWEEP_EVERY };
+        let wait = if first {
+            Duration::from_secs(5)
+        } else {
+            SWEEP_EVERY
+        };
         first = false;
         tokio::select! {
             _ = tokio::time::sleep(wait) => {}
@@ -581,31 +707,66 @@ pub async fn watch(s: AppState, mut shutdown: watch::Receiver<bool>) {
 fn refusal(r: Refusal) -> ApiErr {
     let mb = |n: usize| n / (1024 * 1024);
     match r {
-        Refusal::Unsupported => ApiErr::new(StatusCode::BAD_REQUEST, "not a supported image (use PNG, JPEG, WebP or GIF)"),
-        Refusal::Damaged => ApiErr::new(StatusCode::BAD_REQUEST, "could not read the image (damaged file?)"),
-        Refusal::Dimensions => ApiErr::new(StatusCode::BAD_REQUEST, format!("image dimensions are too large (at most {ATTACHMENT_MAX_SIDE} px)")),
-        Refusal::TooManyFrames => ApiErr::new(StatusCode::PAYLOAD_TOO_LARGE, "the animation has too many frames"),
-        Refusal::TooBig { animated: false } => ApiErr::new(StatusCode::PAYLOAD_TOO_LARGE, format!("image too large (at most {} MB)", mb(ATTACHMENT_MAX_BYTES))),
-        Refusal::TooBig { animated: true } => ApiErr::new(StatusCode::PAYLOAD_TOO_LARGE, format!("animation too large (at most {} MB)", mb(ATTACHMENT_MAX_ANIMATED_BYTES))),
-        Refusal::BadThumb => ApiErr::new(StatusCode::BAD_REQUEST, "the thumbnail does not match the image"),
+        Refusal::Unsupported => ApiErr::new(
+            StatusCode::BAD_REQUEST,
+            "not a supported image (use PNG, JPEG, WebP or GIF)",
+        ),
+        Refusal::Damaged => ApiErr::new(
+            StatusCode::BAD_REQUEST,
+            "could not read the image (damaged file?)",
+        ),
+        Refusal::Dimensions => ApiErr::new(
+            StatusCode::BAD_REQUEST,
+            format!("image dimensions are too large (at most {ATTACHMENT_MAX_SIDE} px)"),
+        ),
+        Refusal::TooManyFrames => ApiErr::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "the animation has too many frames",
+        ),
+        Refusal::TooBig { animated: false } => ApiErr::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("image too large (at most {} MB)", mb(ATTACHMENT_MAX_BYTES)),
+        ),
+        Refusal::TooBig { animated: true } => ApiErr::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "animation too large (at most {} MB)",
+                mb(ATTACHMENT_MAX_ANIMATED_BYTES)
+            ),
+        ),
+        Refusal::BadThumb => ApiErr::new(
+            StatusCode::BAD_REQUEST,
+            "the thumbnail does not match the image",
+        ),
     }
 }
 
 fn store_err(e: StoreError) -> ApiErr {
     match e {
         StoreError::Daily => ApiErr::new(StatusCode::TOO_MANY_REQUESTS, ERR_ATTACHMENT_DAILY),
-        StoreError::Full => ApiErr::new(StatusCode::INSUFFICIENT_STORAGE, ERR_ATTACHMENT_STORAGE_FULL),
-        StoreError::TooManyPending => ApiErr::new(StatusCode::TOO_MANY_REQUESTS, "too many images waiting to be sent"),
+        StoreError::Full => ApiErr::new(
+            StatusCode::INSUFFICIENT_STORAGE,
+            ERR_ATTACHMENT_STORAGE_FULL,
+        ),
+        StoreError::TooManyPending => ApiErr::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many images waiting to be sent",
+        ),
         StoreError::Db(e) => anyhow::Error::from(e).into(),
         StoreError::Io(e) => anyhow::anyhow!("writing an image file: {e}").into(),
     }
 }
 
 /// `GET /api/attachments/limits`
-pub async fn limits(State(s): State<AppState>, AuthUser(me): AuthUser) -> ApiResult<AttachmentLimits> {
+pub async fn limits(
+    State(s): State<AppState>,
+    AuthUser(me): AuthUser,
+) -> ApiResult<AttachmentLimits> {
     let a = &s.attachments;
     let (cap, daily, evict) = (a.storage_cap, a.daily_bytes, a.retention_days > 0);
-    let (used_today, used) = s.db.call(move |c| Ok((uploaded_today(c, me.id, now_ms())?, usage(c)?))).await?;
+    let (used_today, used) =
+        s.db.call(move |c| Ok((uploaded_today(c, me.id, now_ms())?, usage(c)?)))
+            .await?;
     Ok(Json(AttachmentLimits {
         max_per_message: ATTACHMENT_MAX_PER_MESSAGE as u32,
         max_bytes: ATTACHMENT_MAX_BYTES as u64,
@@ -630,7 +791,10 @@ pub fn check_upload(body: &[u8], thumb_len: usize) -> Result<Upload, Refusal> {
     let (main, first) = validate::image(main_raw)?;
     let thumb = if thumb_len > 0 {
         Some(validate::thumb(thumb_raw, main.width, main.height)?)
-    } else if main.width > ATTACHMENT_THUMB_BOX || main.height > ATTACHMENT_THUMB_BOX || main.animated {
+    } else if main.width > ATTACHMENT_THUMB_BOX
+        || main.height > ATTACHMENT_THUMB_BOX
+        || main.animated
+    {
         validate::make_thumb(&first)
     } else {
         None
@@ -647,10 +811,18 @@ fn body_rejection(e: BytesRejection) -> ApiErr {
 }
 
 /// `POST /api/attachments?thumb_len=`
-pub async fn upload(State(s): State<AppState>, AuthUser(me): AuthUser, Query(q): Query<UploadQuery>, body: Result<Bytes, BytesRejection>) -> ApiResult<Attachment> {
+pub async fn upload(
+    State(s): State<AppState>,
+    AuthUser(me): AuthUser,
+    Query(q): Query<UploadQuery>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<Attachment> {
     let body = body.map_err(body_rejection)?;
     if body.is_empty() || q.thumb_len >= body.len() || q.thumb_len > ATTACHMENT_MAX_THUMB_BYTES {
-        return Err(ApiErr::new(StatusCode::BAD_REQUEST, "expected an image (and a thumbnail no bigger than 256 KB)"));
+        return Err(ApiErr::new(
+            StatusCode::BAD_REQUEST,
+            "expected an image (and a thumbnail no bigger than 256 KB)",
+        ));
     }
     let a = &s.attachments;
     if let Err(wait) = a.uploads.allow(me.id, Instant::now()) {
@@ -658,7 +830,9 @@ pub async fn upload(State(s): State<AppState>, AuthUser(me): AuthUser, Query(q):
     }
     // Cheap early answers before any decoding (the authoritative checks come with the write).
     let (id, len, policy) = (me.id, body.len() as u64, a.policy());
-    let (today, used) = s.db.call(move |c| Ok((uploaded_today(c, id, now_ms())?, usage(c)?))).await?;
+    let (today, used) =
+        s.db.call(move |c| Ok((uploaded_today(c, id, now_ms())?, usage(c)?)))
+            .await?;
     if today.saturating_add(len) > policy.daily_bytes {
         return Err(store_err(StoreError::Daily));
     }
@@ -667,19 +841,41 @@ pub async fn upload(State(s): State<AppState>, AuthUser(me): AuthUser, Query(q):
     }
     // The decode slot goes with the blocking decode: a client that hangs up mid-decode cannot
     // free it while the decode still runs.
-    let slot = a.uploads.decodes.clone().acquire_owned().await.map_err(|e| anyhow::anyhow!("{e}"))?;
+    let slot = a
+        .uploads
+        .decodes
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     let thumb_len = q.thumb_len;
-    let checked = crate::util::spawn_blocking_with(slot, move || check_upload(&body, thumb_len)).await.map_err(|_| refusal(Refusal::Damaged))?;
+    let checked = crate::util::spawn_blocking_with(slot, move || check_upload(&body, thumb_len))
+        .await
+        .map_err(|_| refusal(Refusal::Damaged))?;
     let up = checked.map_err(|r| {
         tracing::info!(user = %me.username, len, ?r, "image refused");
         refusal(r)
     })?;
-    let (dir, sizes) = (a.dir.clone(), (up.main.bytes.len(), up.thumb.as_ref().map_or(0, |t| t.bytes.len())));
-    let (w, h, mime, animated) = (up.main.width, up.main.height, up.main.kind.mime(), up.main.animated);
-    let stored = s.db.call(move |c| Ok(store_upload(c, &dir, id, &up, policy, now_ms()))).await?.map_err(|e| {
-        tracing::info!(user = %me.username, ?e, "image not stored");
-        store_err(e)
-    })?;
+    let (dir, sizes) = (
+        a.dir.clone(),
+        (
+            up.main.bytes.len(),
+            up.thumb.as_ref().map_or(0, |t| t.bytes.len()),
+        ),
+    );
+    let (w, h, mime, animated) = (
+        up.main.width,
+        up.main.height,
+        up.main.kind.mime(),
+        up.main.animated,
+    );
+    let stored =
+        s.db.call(move |c| Ok(store_upload(c, &dir, id, &up, policy, now_ms())))
+            .await?
+            .map_err(|e| {
+                tracing::info!(user = %me.username, ?e, "image not stored");
+                store_err(e)
+            })?;
     tracing::info!(user = %me.username, id = stored.id, received = len, stored = sizes.0, thumb = sizes.1, w, h, mime, animated, "image uploaded");
     Ok(Json(stored.to_wire()))
 }
@@ -687,10 +883,21 @@ pub async fn upload(State(s): State<AppState>, AuthUser(me): AuthUser, Query(q):
 /// May `me` see this attachment? Channel images: anybody who may see the channel (v0.9: a private
 /// channel's images are `404` without access, like an unknown id). DM images: the two people of
 /// the conversation. Pending: the uploader.
-fn visible_to(conn: &Connection, r: &Row, me: UserId, rules: &crate::access::Rules) -> rusqlite::Result<bool> {
+fn visible_to(
+    conn: &Connection,
+    r: &Row,
+    me: UserId,
+    rules: &crate::access::Rules,
+) -> rusqlite::Result<bool> {
     // The message must exist and be the uploader's own (an id reused after a deletion is not).
     if let Some(m) = r.message_id {
-        let channel: Option<ChannelId> = conn.query_row("SELECT channel_id FROM messages WHERE id = ? AND user_id = ?", [m, r.uploader], |x| x.get(0)).optional()?;
+        let channel: Option<ChannelId> = conn
+            .query_row(
+                "SELECT channel_id FROM messages WHERE id = ? AND user_id = ?",
+                [m, r.uploader],
+                |x| x.get(0),
+            )
+            .optional()?;
         return Ok(channel.is_some_and(|ch| rules.can_see(me, ch)));
     }
     if let Some(line) = r.dm_message_id {
@@ -706,18 +913,29 @@ fn visible_to(conn: &Connection, r: &Row, me: UserId, rules: &crate::access::Rul
     Ok(r.uploader == me)
 }
 
-async fn serve(s: AppState, me: UserId, id: AttachmentId, thumb: bool, headers: HeaderMap) -> Result<Response, ApiErr> {
+async fn serve(
+    s: AppState,
+    me: UserId,
+    id: AttachmentId,
+    thumb: bool,
+    headers: HeaderMap,
+) -> Result<Response, ApiErr> {
     let rules = s.access.rules();
-    let found = s
-        .db
-        .call(move |c| {
-            let Some(r) = get(c, id)? else { return Ok(None) };
+    let found =
+        s.db.call(move |c| {
+            let Some(r) = get(c, id)? else {
+                return Ok(None);
+            };
             if !visible_to(c, &r, me, &rules)? {
                 return Ok(None);
             }
             let (hash, mime) = match (thumb, &r.thumb_hash) {
                 (true, Some(h)) => {
-                    let mime: String = c.query_row("SELECT mime FROM attachment_blobs WHERE hash = ?", [h], |x| x.get(0))?;
+                    let mime: String = c.query_row(
+                        "SELECT mime FROM attachment_blobs WHERE hash = ?",
+                        [h],
+                        |x| x.get(0),
+                    )?;
                     (h.clone(), mime)
                 }
                 _ => (r.blob_hash.clone(), r.mime.clone()),
@@ -730,40 +948,72 @@ async fn serve(s: AppState, me: UserId, id: AttachmentId, thumb: bool, headers: 
         return Err(ApiErr::new(StatusCode::NOT_FOUND, "attachment not found"));
     };
     let etag = format!("\"{}\"", &hash[..SHORT_HASH.min(hash.len())]);
-    let mut resp = if headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()).is_some_and(|v| v.split(',').any(|t| t.trim() == etag)) {
+    let mut resp = if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.split(',').any(|t| t.trim() == etag))
+    {
         StatusCode::NOT_MODIFIED.into_response()
     } else {
         let path = blob_path(&s.attachments.dir, &hash, &mime);
         let read = path.clone();
-        let bytes = tokio::task::spawn_blocking(move || std::fs::read(read)).await.map_err(|e| anyhow::anyhow!("{e}"))?.map_err(|e| {
-            tracing::warn!(path = %path.display(), "image file missing: {e}");
-            ApiErr::new(StatusCode::NOT_FOUND, "attachment not found")
-        })?;
+        let bytes = tokio::task::spawn_blocking(move || std::fs::read(read))
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .map_err(|e| {
+                tracing::warn!(path = %path.display(), "image file missing: {e}");
+                ApiErr::new(StatusCode::NOT_FOUND, "attachment not found")
+            })?;
         let mut r = bytes.into_response();
-        r.headers_mut().insert(header::CONTENT_TYPE, mime.parse().map_err(|_| anyhow::anyhow!("bad mime"))?);
+        r.headers_mut().insert(
+            header::CONTENT_TYPE,
+            mime.parse().map_err(|_| anyhow::anyhow!("bad mime"))?,
+        );
         r
     };
     let h = resp.headers_mut();
-    h.insert(header::CACHE_CONTROL, header::HeaderValue::from_static("private, max-age=31536000, immutable"));
-    h.insert(header::ETAG, etag.parse().map_err(|_| anyhow::anyhow!("bad etag"))?);
-    h.insert(header::X_CONTENT_TYPE_OPTIONS, header::HeaderValue::from_static("nosniff"));
+    h.insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("private, max-age=31536000, immutable"),
+    );
+    h.insert(
+        header::ETAG,
+        etag.parse().map_err(|_| anyhow::anyhow!("bad etag"))?,
+    );
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        header::HeaderValue::from_static("nosniff"),
+    );
     Ok(resp)
 }
 
 /// `GET /api/attachments/{id}`
-pub async fn get_file(State(s): State<AppState>, AuthUser(me): AuthUser, UrlPath(id): UrlPath<AttachmentId>, headers: HeaderMap) -> Result<Response, ApiErr> {
+pub async fn get_file(
+    State(s): State<AppState>,
+    AuthUser(me): AuthUser,
+    UrlPath(id): UrlPath<AttachmentId>,
+    headers: HeaderMap,
+) -> Result<Response, ApiErr> {
     serve(s, me.id, id, false, headers).await
 }
 
 /// `GET /api/attachments/{id}/thumb`
-pub async fn get_thumb(State(s): State<AppState>, AuthUser(me): AuthUser, UrlPath(id): UrlPath<AttachmentId>, headers: HeaderMap) -> Result<Response, ApiErr> {
+pub async fn get_thumb(
+    State(s): State<AppState>,
+    AuthUser(me): AuthUser,
+    UrlPath(id): UrlPath<AttachmentId>,
+    headers: HeaderMap,
+) -> Result<Response, ApiErr> {
     serve(s, me.id, id, true, headers).await
 }
 
 /// The `400` of a message whose images cannot be used.
 pub fn link_err(e: LinkError) -> ApiErr {
     match e {
-        LinkError::TooMany => ApiErr::new(StatusCode::BAD_REQUEST, format!("at most {ATTACHMENT_MAX_PER_MESSAGE} images per message")),
+        LinkError::TooMany => ApiErr::new(
+            StatusCode::BAD_REQUEST,
+            format!("at most {ATTACHMENT_MAX_PER_MESSAGE} images per message"),
+        ),
         LinkError::Invalid => ApiErr::new(StatusCode::BAD_REQUEST, "unknown or already used image"),
     }
 }
@@ -785,10 +1035,23 @@ mod tests {
     }
 
     fn upload_of(bytes: Vec<u8>) -> Upload {
-        Upload { main: validate::Clean { bytes, kind: Kind::Jpeg, width: 10, height: 10, animated: false }, thumb: None }
+        Upload {
+            main: validate::Clean {
+                bytes,
+                kind: Kind::Jpeg,
+                width: 10,
+                height: 10,
+                animated: false,
+            },
+            thumb: None,
+        }
     }
 
-    const BIG: Policy = Policy { storage_cap: 1 << 40, daily_bytes: 1 << 40, may_evict: false };
+    const BIG: Policy = Policy {
+        storage_cap: 1 << 40,
+        daily_bytes: 1 << 40,
+        may_evict: false,
+    };
 
     #[test]
     fn identical_files_are_stored_once_and_go_with_the_last_reference() {
@@ -801,10 +1064,12 @@ mod tests {
         assert_eq!(usage(&c).unwrap(), 100, "one file");
         let path = blob_path(dir.path(), &a.blob_hash, &a.mime);
         assert!(path.exists());
-        c.execute("DELETE FROM attachments WHERE id = ?", [a.id]).unwrap();
+        c.execute("DELETE FROM attachments WHERE id = ?", [a.id])
+            .unwrap();
         assert_eq!(collect_garbage(&c, dir.path()).unwrap(), 0);
         assert!(path.exists(), "still used by the other");
-        c.execute("DELETE FROM attachments WHERE id = ?", [b.id]).unwrap();
+        c.execute("DELETE FROM attachments WHERE id = ?", [b.id])
+            .unwrap();
         assert_eq!(collect_garbage(&c, dir.path()).unwrap(), 1);
         assert!(!path.exists());
         assert_eq!(usage(&c).unwrap(), 0);
@@ -814,19 +1079,44 @@ mod tests {
     fn the_daily_allowance_and_the_cap_are_enforced() {
         let dir = tempfile::tempdir().unwrap();
         let mut c = mem();
-        let p = Policy { storage_cap: 1 << 30, daily_bytes: 250, may_evict: false };
+        let p = Policy {
+            storage_cap: 1 << 30,
+            daily_bytes: 250,
+            may_evict: false,
+        };
         store_upload(&mut c, dir.path(), 1, &upload_of(vec![1; 200]), p, 1000).unwrap();
-        assert!(matches!(store_upload(&mut c, dir.path(), 1, &upload_of(vec![2; 100]), p, 1000), Err(StoreError::Daily)));
+        assert!(matches!(
+            store_upload(&mut c, dir.path(), 1, &upload_of(vec![2; 100]), p, 1000),
+            Err(StoreError::Daily)
+        ));
         // Another person, and the next day, are fine.
         store_upload(&mut c, dir.path(), 2, &upload_of(vec![2; 100]), p, 1000).unwrap();
-        store_upload(&mut c, dir.path(), 1, &upload_of(vec![3; 100]), p, 1000 + DAY_MS).unwrap();
+        store_upload(
+            &mut c,
+            dir.path(),
+            1,
+            &upload_of(vec![3; 100]),
+            p,
+            1000 + DAY_MS,
+        )
+        .unwrap();
         // Total cap: 400 bytes stored now.
-        let cap = Policy { storage_cap: 450, daily_bytes: 1 << 30, may_evict: false };
-        assert!(matches!(store_upload(&mut c, dir.path(), 2, &upload_of(vec![4; 100]), cap, 2000), Err(StoreError::Full)));
+        let cap = Policy {
+            storage_cap: 450,
+            daily_bytes: 1 << 30,
+            may_evict: false,
+        };
+        assert!(matches!(
+            store_upload(&mut c, dir.path(), 2, &upload_of(vec![4; 100]), cap, 2000),
+            Err(StoreError::Full)
+        ));
         // A file that is already stored takes no new space.
         store_upload(&mut c, dir.path(), 2, &upload_of(vec![1; 200]), cap, 2000).unwrap();
         // With retention on, the oldest images (older than a day) make room.
-        let evict = Policy { may_evict: true, ..cap };
+        let evict = Policy {
+            may_evict: true,
+            ..cap
+        };
         let now = 1000 + 3 * DAY_MS;
         let r = store_upload(&mut c, dir.path(), 2, &upload_of(vec![5; 100]), evict, now).unwrap();
         assert!(usage(&c).unwrap() <= 450);
@@ -841,8 +1131,18 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("zz")).unwrap();
         std::fs::write(dir.path().join("zz").join("zzzz.webp"), b"stray").unwrap();
         let (expired, old, files) = sweep(&c, dir.path(), 1000 + 10_000, 0).unwrap();
-        assert_eq!((expired, old, files), (0, 0, 1), "fresh pending stays, the stray file goes");
-        let (expired, _, files) = sweep(&c, dir.path(), 1000 + ATTACHMENT_PENDING_SECS as i64 * 1000 + 1, 0).unwrap();
+        assert_eq!(
+            (expired, old, files),
+            (0, 0, 1),
+            "fresh pending stays, the stray file goes"
+        );
+        let (expired, _, files) = sweep(
+            &c,
+            dir.path(),
+            1000 + ATTACHMENT_PENDING_SECS as i64 * 1000 + 1,
+            0,
+        )
+        .unwrap();
         assert_eq!((expired, files), (1, 1));
         assert!(get(&c, r.id).unwrap().is_none());
     }
@@ -854,14 +1154,41 @@ mod tests {
         let a = store_upload(&mut c, dir.path(), 1, &upload_of(vec![1; 10]), BIG, 1).unwrap();
         let b = store_upload(&mut c, dir.path(), 2, &upload_of(vec![2; 10]), BIG, 1).unwrap();
         assert_eq!(check_pending(&c, 1, &[a.id]).unwrap(), Ok(()));
-        assert_eq!(check_pending(&c, 1, &[b.id]).unwrap(), Err(LinkError::Invalid), "not mine");
-        assert_eq!(check_pending(&c, 1, &[a.id, a.id]).unwrap(), Err(LinkError::Invalid), "twice");
-        assert_eq!(check_pending(&c, 1, &[1, 2, 3, 4, 5]).unwrap(), Err(LinkError::TooMany));
-        c.execute("INSERT INTO messages VALUES (77, 1, 1, '', 0)", []).unwrap();
+        assert_eq!(
+            check_pending(&c, 1, &[b.id]).unwrap(),
+            Err(LinkError::Invalid),
+            "not mine"
+        );
+        assert_eq!(
+            check_pending(&c, 1, &[a.id, a.id]).unwrap(),
+            Err(LinkError::Invalid),
+            "twice"
+        );
+        assert_eq!(
+            check_pending(&c, 1, &[1, 2, 3, 4, 5]).unwrap(),
+            Err(LinkError::TooMany)
+        );
+        c.execute("INSERT INTO messages VALUES (77, 1, 1, '', 0)", [])
+            .unwrap();
         let linked = link(&c, &[a.id], Owner::Channel(77)).unwrap();
         assert_eq!(linked[0].id, a.id);
-        assert_eq!(check_pending(&c, 1, &[a.id]).unwrap(), Err(LinkError::Invalid), "already used");
-        let mut m = vec![Message { id: 77, channel_id: 1, author: User::new(1, "a"), content: String::new(), created_at_ms: 0, attachments: vec![], mentions: vec![], mention_everyone: false, reply: None, reactions: vec![] }];
+        assert_eq!(
+            check_pending(&c, 1, &[a.id]).unwrap(),
+            Err(LinkError::Invalid),
+            "already used"
+        );
+        let mut m = vec![Message {
+            id: 77,
+            channel_id: 1,
+            author: User::new(1, "a"),
+            content: String::new(),
+            created_at_ms: 0,
+            attachments: vec![],
+            mentions: vec![],
+            mention_everyone: false,
+            reply: None,
+            reactions: vec![],
+        }];
         fill_messages(&c, &mut m).unwrap();
         assert_eq!(m[0].attachments.len(), 1);
         assert_eq!(unlink_message(&c, 77).unwrap(), 1);
@@ -874,7 +1201,11 @@ mod tests {
     fn images_do_not_follow_a_reused_message_id() {
         use crate::dms;
         // An older hub's insert: no id named, so SQLite hands out `MAX(id) + 1`.
-        let old_insert = |c: &Connection, conv: &dms::ConvRow, author: UserId, body: &str| -> rusqlite::Result<DmMessage> {
+        let old_insert = |c: &Connection,
+                          conv: &dms::ConvRow,
+                          author: UserId,
+                          body: &str|
+         -> rusqlite::Result<DmMessage> {
             c.execute("INSERT INTO dm_messages (dm_id, author_id, kind, format, body, call_secs, created_at_ms) VALUES (?, ?, 'text', 'plain', ?, 0, 1)", params![conv.id, author, body])?;
             Ok(dms::list_lines(c, conv, None, 1, "")?.remove(0))
         };
@@ -882,7 +1213,9 @@ mod tests {
         let db = crate::db::Db::open(&dir.path().join("voxhub.db")).unwrap();
         let files = dir.path().join("attachments");
         db.call_now(|c| {
-            let id = |c: &mut Connection, n: &str| crate::db::login(c, n, &format!("t-{n}")).map(|r| r.id);
+            let id = |c: &mut Connection, n: &str| {
+                crate::db::login(c, n, &format!("t-{n}")).map(|r| r.id)
+            };
             let (a, b, cc, d) = (id(c, "a")?, id(c, "b")?, id(c, "c")?, id(c, "d")?);
             let ab = dms::open_conv(c, a, b, a)?;
             let cd = dms::open_conv(c, cc, d, cc)?;
@@ -893,7 +1226,10 @@ mod tests {
             c.execute("DELETE FROM dm_messages WHERE id = ?", [line.id])?; // v0.6.0's SQL
             let reused = old_insert(c, &cd, cc, "oi")?;
             assert_eq!(reused.id, line.id, "SQLite reuses the id (the scenario)");
-            assert!(get(c, img.id)?.is_none(), "the image row went with its line");
+            assert!(
+                get(c, img.id)?.is_none(),
+                "the image row went with its line"
+            );
             let mut lines = vec![reused.clone()];
             fill_dm_messages(c, &mut lines)?;
             assert!(lines[0].attachments.is_empty());
@@ -914,9 +1250,15 @@ mod tests {
             let row = get(c, img2.id)?.expect("left behind");
             let mut lines = vec![reused2];
             fill_dm_messages(c, &mut lines)?;
-            assert!(lines[0].attachments.is_empty(), "not the author's image: not shown");
+            assert!(
+                lines[0].attachments.is_empty(),
+                "not the author's image: not shown"
+            );
             let rules = crate::access::Rules::default();
-            assert!(!visible_to(c, &row, cc, &rules)? && !visible_to(c, &row, d, &rules)?, "and not served");
+            assert!(
+                !visible_to(c, &row, cc, &rules)? && !visible_to(c, &row, d, &rules)?,
+                "and not served"
+            );
             Ok(())
         })
         .unwrap();

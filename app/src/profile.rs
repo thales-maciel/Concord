@@ -1,11 +1,6 @@
-//! User profiles in the app (v0.6): display name, "Sobre mim", profile colour, custom status and
-//! presence, the Discord-style card that opens on a left click ("popout"), and the "Perfil"
-//! section of the settings. The wire contract is `vox_proto::profile`; the hub enforces every
-//! limit and everything about invisibility, this module only shows and sends.
-//!
-//! On a hub that predates profiles (`GET /api/users/{id}/profile` answers `404`) the popout still
-//! opens, with what the app already knows (name, picture, role), and the settings section is not
-//! shown.
+//! Profile editor, presence and popouts; wire contract: `vox_proto::profile`.
+//! The hub enforces limits and visibility. A 404 falls back to known user data and hides
+//! unsupported profile settings.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -27,7 +22,7 @@ const IDLE_CHECK: Duration = Duration::from_secs(20);
 const POPOUT_WIDTH: f32 = 320.0;
 const BANNER_H: f32 = 72.0;
 const AVATAR_R: f32 = 34.0;
-/// Default minutes of inactivity before "Ausente" (0 = never).
+/// Default minutes of inactivity before "Away" (0 = never).
 pub const DEFAULT_IDLE_AWAY_MINUTES: u32 = 10;
 pub const OFFLINE_COLOR: Color32 = theme::DESLIGADO;
 
@@ -46,7 +41,9 @@ const SWATCHES: [[u8; 3]; 10] = [
 ];
 
 /// A few emoji to pick from for a status (the font has no picker; any emoji can be typed or pasted).
-const QUICK_EMOJI: [&str; 12] = ["🎮", "💤", "📚", "🎧", "📺", "🔥", "❤", "😀", "😴", "🏠", "✈", "🎵"];
+const QUICK_EMOJI: [&str; 12] = [
+    "🎮", "💤", "📚", "🎧", "📺", "🔥", "❤", "😀", "😴", "🏠", "✈", "🎵",
+];
 
 // ---------------------------------------------------------------- settings
 
@@ -54,13 +51,15 @@ const QUICK_EMOJI: [&str; 12] = ["🎮", "💤", "📚", "🎧", "📺", "🔥",
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ProfileSettings {
-    /// Minutes without keyboard or mouse before "Ausente" (0 = never automatically).
+    /// Minutes without keyboard or mouse before "Away" (0 = never automatically).
     pub idle_away_minutes: u32,
 }
 
 impl Default for ProfileSettings {
     fn default() -> Self {
-        ProfileSettings { idle_away_minutes: DEFAULT_IDLE_AWAY_MINUTES }
+        ProfileSettings {
+            idle_away_minutes: DEFAULT_IDLE_AWAY_MINUTES,
+        }
     }
 }
 
@@ -84,18 +83,20 @@ pub fn hit(resp: egui::Response, user: &User) -> bool {
 pub fn presence_label(p: Presence) -> &'static str {
     match p {
         Presence::Online => "Online",
-        Presence::Away => "Ausente",
-        Presence::Dnd => "Não perturbe",
-        Presence::Invisible => "Invisível",
+        Presence::Away => "Away",
+        Presence::Dnd => "Do not disturb",
+        Presence::Invisible => "Invisible",
     }
 }
 
 pub fn presence_hint(p: Presence) -> &'static str {
     match p {
-        Presence::Online => "As pessoas veem você online.",
-        Presence::Away => "As pessoas veem que você está ausente.",
-        Presence::Dnd => "Sons de alerta e avisos de mensagens diretas ficam em silêncio neste computador.",
-        Presence::Invisible => "As pessoas veem você offline, mas tudo continua funcionando.",
+        Presence::Online => "Others see you online.",
+        Presence::Away => "Others see you as away.",
+        Presence::Dnd => {
+            "Alert sounds and direct-message notifications are muted on this computer."
+        }
+        Presence::Invisible => "Others see you offline, but everything still works.",
     }
 }
 
@@ -122,7 +123,7 @@ pub fn status_line(s: &CustomStatus) -> String {
     }
 }
 
-/// "Limpar em": when a status clears itself.
+/// "Clear after": when a status clears itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ClearAfter {
     Min30,
@@ -134,19 +135,25 @@ pub enum ClearAfter {
 }
 
 impl ClearAfter {
-    pub const ALL: [ClearAfter; 5] = [ClearAfter::Min30, ClearAfter::Hour1, ClearAfter::Hours4, ClearAfter::Today, ClearAfter::Never];
+    pub const ALL: [ClearAfter; 5] = [
+        ClearAfter::Min30,
+        ClearAfter::Hour1,
+        ClearAfter::Hours4,
+        ClearAfter::Today,
+        ClearAfter::Never,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
-            ClearAfter::Min30 => "30 minutos",
-            ClearAfter::Hour1 => "1 hora",
-            ClearAfter::Hours4 => "4 horas",
-            ClearAfter::Today => "Hoje",
-            ClearAfter::Never => "Nunca",
+            ClearAfter::Min30 => "30 minutes",
+            ClearAfter::Hour1 => "1 hour",
+            ClearAfter::Hours4 => "4 hours",
+            ClearAfter::Today => "Today",
+            ClearAfter::Never => "Never",
         }
     }
 
-    /// Seconds from now (`None` = never). "Hoje" is until local midnight (at least a minute).
+    /// Seconds from now (`None` = never). "Today" is until local midnight (at least a minute).
     pub fn secs(self, now_ms: i64, offset_min: i32) -> Option<u64> {
         match self {
             ClearAfter::Min30 => Some(30 * 60),
@@ -180,25 +187,46 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 
 /// "12 de outubro de 2026".
 pub fn format_date_pt(ms: i64, offset_min: i32) -> String {
-    const MONTHS: [&str; 12] = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+    const MONTHS: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
     let local = ms.div_euclid(1000) + i64::from(offset_min) * 60;
     let (y, m, d) = civil_from_days(local.div_euclid(86_400));
-    format!("{d} de {} de {y}", MONTHS[(m - 1) as usize])
+    format!("{d} {} {y}", MONTHS[(m - 1) as usize])
 }
 
 /// The profile colour as an egui colour.
 pub fn accent_color(accent: Option<&str>) -> Option<Color32> {
-    accent.and_then(accent_rgb).map(|[r, g, b]| Color32::from_rgb(r, g, b))
+    accent
+        .and_then(accent_rgb)
+        .map(|[r, g, b]| Color32::from_rgb(r, g, b))
 }
 
 pub fn hex_of(rgb: [u8; 3]) -> String {
     format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])
 }
 
-/// What to do about "Ausente" now: `Some(true)` = tell the hub I am idle, `Some(false)` = tell it
+/// What to do about "Away" now: `Some(true)` = tell the hub I am idle, `Some(false)` = tell it
 /// I am back, `None` = nothing. Idle detection only ever moves between Online and Away: a
 /// presence the person chose is left alone, and so is a call (someone talking is not away).
-pub fn idle_action(idle_secs: u64, threshold_min: u32, in_voice: bool, my_presence: Presence, auto_sent: bool) -> Option<bool> {
+pub fn idle_action(
+    idle_secs: u64,
+    threshold_min: u32,
+    in_voice: bool,
+    my_presence: Presence,
+    auto_sent: bool,
+) -> Option<bool> {
     let want_away = threshold_min > 0 && !in_voice && idle_secs >= u64::from(threshold_min) * 60;
     match (auto_sent, want_away) {
         (false, true) if my_presence == Presence::Online => Some(true),
@@ -210,7 +238,7 @@ pub fn idle_action(idle_secs: u64, threshold_min: u32, in_voice: bool, my_presen
 static FAKE_IDLE: AtomicI64 = AtomicI64::new(-1);
 
 /// Pretend the keyboard and mouse have been idle for this long (`None`: the real thing). The
-/// autotest uses it to see "Ausente" without waiting ten minutes.
+/// autotest uses it to see "Away" without waiting ten minutes.
 pub fn set_fake_idle(secs: Option<u64>) {
     FAKE_IDLE.store(secs.map(|s| s as i64).unwrap_or(-1), Ordering::Relaxed);
 }
@@ -227,7 +255,10 @@ pub fn system_idle_secs() -> u64 {
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
         // SAFETY: plain query into a zeroed out-struct with its size set.
         unsafe {
-            let mut info = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+            let mut info = LASTINPUTINFO {
+                cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+                dwTime: 0,
+            };
             if GetLastInputInfo(&mut info) == 0 {
                 return 0;
             }
@@ -245,72 +276,138 @@ pub fn system_idle_secs() -> u64 {
 /// The profile calls the backend runs ([`Cmd::Profile`]); the answer is a [`ProfileEv`].
 #[derive(Debug, Clone)]
 pub enum ProfileCmd {
-    Fetch { user: UserId },
+    Fetch {
+        user: UserId,
+    },
     Update(ProfileUpdate),
-    SetPresence { presence: Presence, auto: bool },
+    SetPresence {
+        presence: Presence,
+        auto: bool,
+    },
     SetStatus(StatusUpdate),
     /// A moderator clears parts of somebody else's profile.
-    ModClear { user: UserId, what: ModClearProfileRequest },
+    ModClear {
+        user: UserId,
+        what: ModClearProfileRequest,
+    },
 }
 
 #[derive(Debug)]
 pub enum ProfileEv {
-    Fetched { user: UserId, reply: ProfileReply },
+    Fetched {
+        user: UserId,
+        reply: ProfileReply,
+    },
     Updated(Result<UserProfile, String>),
-    PresenceSet { asked: Presence, auto: bool, result: Result<Presence, String> },
+    PresenceSet {
+        asked: Presence,
+        auto: bool,
+        result: Result<Presence, String>,
+    },
     StatusSet(Result<Option<CustomStatus>, String>),
-    ModCleared { user: UserId, result: Result<(), String> },
+    ModCleared {
+        user: UserId,
+        result: Result<(), String>,
+    },
 }
 
 impl ProfileCmd {
     /// The event for a command that cannot run (no hub connection).
     pub fn offline(self) -> ProfileEv {
-        let msg = "Sem conexão com o servidor.".to_string();
+        let msg = "Not connected to the server.".to_string();
         match self {
-            ProfileCmd::Fetch { user } => ProfileEv::Fetched { user, reply: ProfileReply::Failed("offline".into()) },
+            ProfileCmd::Fetch { user } => ProfileEv::Fetched {
+                user,
+                reply: ProfileReply::Failed("offline".into()),
+            },
             ProfileCmd::Update(_) => ProfileEv::Updated(Err(msg)),
-            ProfileCmd::SetPresence { presence, auto } => ProfileEv::PresenceSet { asked: presence, auto, result: Err(msg) },
+            ProfileCmd::SetPresence { presence, auto } => ProfileEv::PresenceSet {
+                asked: presence,
+                auto,
+                result: Err(msg),
+            },
             ProfileCmd::SetStatus(_) => ProfileEv::StatusSet(Err(msg)),
-            ProfileCmd::ModClear { user, .. } => ProfileEv::ModCleared { user, result: Err(msg) },
+            ProfileCmd::ModClear { user, .. } => ProfileEv::ModCleared {
+                user,
+                result: Err(msg),
+            },
         }
     }
 }
 
 pub async fn run(hub: &HubClient, cmd: ProfileCmd) -> ProfileEv {
     match cmd {
-        ProfileCmd::Fetch { user } => ProfileEv::Fetched { user, reply: hub.profile(user).await },
-        ProfileCmd::Update(u) => ProfileEv::Updated(hub.update_profile(&u).await.map_err(|e| error_text(&e))),
-        ProfileCmd::SetPresence { presence, auto } => {
-            ProfileEv::PresenceSet { asked: presence, auto, result: hub.set_presence(presence, auto).await.map_err(|e| error_text(&e)) }
+        ProfileCmd::Fetch { user } => ProfileEv::Fetched {
+            user,
+            reply: hub.profile(user).await,
+        },
+        ProfileCmd::Update(u) => {
+            ProfileEv::Updated(hub.update_profile(&u).await.map_err(|e| error_text(&e)))
         }
-        ProfileCmd::SetStatus(u) => ProfileEv::StatusSet(hub.set_status(&u).await.map_err(|e| error_text(&e))),
-        ProfileCmd::ModClear { user, what } => ProfileEv::ModCleared { user, result: hub.mod_clear_profile(user, what).await.map_err(|e| error_text(&e)) },
+        ProfileCmd::SetPresence { presence, auto } => ProfileEv::PresenceSet {
+            asked: presence,
+            auto,
+            result: hub
+                .set_presence(presence, auto)
+                .await
+                .map_err(|e| error_text(&e)),
+        },
+        ProfileCmd::SetStatus(u) => {
+            ProfileEv::StatusSet(hub.set_status(&u).await.map_err(|e| error_text(&e)))
+        }
+        ProfileCmd::ModClear { user, what } => ProfileEv::ModCleared {
+            user,
+            result: hub
+                .mod_clear_profile(user, what)
+                .await
+                .map_err(|e| error_text(&e)),
+        },
     }
 }
 
 /// The hub's refusals, for the people.
 pub fn error_text(e: &anyhow::Error) -> String {
     tracing::warn!(error = %format!("{e:#}"), "profile call failed");
-    let Some(st) = e.downcast_ref::<HttpStatusError>() else { return crate::backend::friendly(e) };
+    let Some(st) = e.downcast_ref::<HttpStatusError>() else {
+        return crate::backend::friendly(e);
+    };
     let m = st.message.to_lowercase();
     match st.status {
-        429 => match m.split("wait ").nth(1).and_then(|r| r.split_whitespace().next()).and_then(|n| n.parse::<u64>().ok()) {
-            Some(s) if s >= 60 => format!("Muitas alterações seguidas. Tente de novo em {} min.", s.div_ceil(60)),
-            Some(s) => format!("Muitas alterações seguidas. Tente de novo em {s} s."),
-            None => "Muitas alterações seguidas. Tente de novo daqui a pouco.".into(),
+        429 => match m
+            .split("wait ")
+            .nth(1)
+            .and_then(|r| r.split_whitespace().next())
+            .and_then(|n| n.parse::<u64>().ok())
+        {
+            Some(s) if s >= 60 => format!(
+                "Too many changes in a row. Try again in {} min.",
+                s.div_ceil(60)
+            ),
+            Some(s) => format!("Too many changes in a row. Try again in {s} s."),
+            None => "Too many changes in a row. Try again shortly.".into(),
         },
-        400 if m.contains("display name must be") => format!("O nome de exibição precisa ter de 1 a {DISPLAY_NAME_MAX} caracteres."),
-        400 if m.contains("display name has") => "O nome de exibição tem caracteres que não são permitidos.".into(),
-        400 if m.contains("bio must be") => format!("O \"Sobre mim\" pode ter até {BIO_MAX} caracteres e {BIO_MAX_LINES} quebras de linha."),
-        400 if m.contains("bio has") => "O \"Sobre mim\" tem caracteres que não são permitidos.".into(),
-        400 if m.contains("colour") => "A cor precisa ser no formato #rrggbb.".into(),
-        400 if m.contains("status text must") => format!("O texto do status pode ter até {STATUS_TEXT_MAX} caracteres."),
-        400 if m.contains("status text has") => "O texto do status tem caracteres que não são permitidos.".into(),
-        400 if m.contains("status emoji") => "O emoji do status precisa ser um único emoji.".into(),
-        400 if m.contains("a status can clear") => "O status pode se apagar sozinho em até 7 dias.".into(),
-        409 => "Esse nome é o nome de usuário de outra pessoa. Escolha outro.".into(),
-        403 => "Seu cargo não permite isso.".into(),
-        404 | 405 => "Este servidor é de uma versão antiga e ainda não tem perfis.".into(),
+        400 if m.contains("display name must be") => {
+            format!("Display names must contain 1 to {DISPLAY_NAME_MAX} characters.")
+        }
+        400 if m.contains("display name has") => {
+            "The display name contains forbidden characters.".into()
+        }
+        400 if m.contains("bio must be") => format!(
+            "\"About me\" allows up to {BIO_MAX} characters and {BIO_MAX_LINES} line breaks."
+        ),
+        400 if m.contains("bio has") => "\"About me\" contains forbidden characters.".into(),
+        400 if m.contains("colour") => "The color must use #rrggbb format.".into(),
+        400 if m.contains("status text must") => {
+            format!("Status text allows up to {STATUS_TEXT_MAX} characters.")
+        }
+        400 if m.contains("status text has") => "Status text contains forbidden characters.".into(),
+        400 if m.contains("status emoji") => "The status emoji must be a single emoji.".into(),
+        400 if m.contains("a status can clear") => {
+            "The status can automatically clear within 7 days.".into()
+        }
+        409 => "This name is someone else's username. Choose another.".into(),
+        403 => "Your role does not allow this.".into(),
+        404 | 405 => "This server is an older version without profiles.".into(),
         _ => crate::backend::friendly(e),
     }
 }
@@ -399,7 +496,7 @@ pub struct ProfileUi {
     /// The card was drawn for this person, with their loaded profile or without (the autotest).
     pub popout_drawn: Option<(UserId, bool)>,
     pub form: Form,
-    /// "Ausente" was set by idle detection (and so is undone by it).
+    /// "Away" was set by idle detection (and so is undone by it).
     pub auto_away_sent: bool,
     last_idle_check: Option<Instant>,
 }
@@ -415,23 +512,37 @@ impl App {
 
     /// My presence as the hub has it.
     pub fn my_presence(&self) -> Presence {
-        self.my_id().and_then(|id| self.profile.presence.get(&id)).map(|i| i.presence).unwrap_or_default()
+        self.my_id()
+            .and_then(|id| self.profile.presence.get(&id))
+            .map(|i| i.presence)
+            .unwrap_or_default()
     }
 
-    /// "Não perturbe": alert sounds and direct-message notifications are silent on this computer.
+    /// "Do not disturb": alert sounds and direct-message notifications are silent on this computer.
     pub fn notifications_muted(&self) -> bool {
         self.my_presence() == Presence::Dnd
     }
 
     /// The presence to draw next to someone in a list (only called for people listed as online).
     pub fn presence_of(&self, id: UserId) -> Presence {
-        self.profile.presence.get(&id).map(|i| i.presence).unwrap_or_default()
+        self.profile
+            .presence
+            .get(&id)
+            .map(|i| i.presence)
+            .unwrap_or_default()
     }
 
     /// Their live custom status, if they have one.
     pub fn status_of(&self, id: UserId) -> Option<CustomStatus> {
         let now = now_ms();
-        live_status(self.profile.presence.get(&id).and_then(|i| i.status.as_ref()), now).cloned()
+        live_status(
+            self.profile
+                .presence
+                .get(&id)
+                .and_then(|i| i.status.as_ref()),
+            now,
+        )
+        .cloned()
     }
 
     /// The freshest `User` the app has for `id`.
@@ -444,7 +555,13 @@ impl App {
             .find(|u| u.id == id)
             .cloned()
             .or_else(|| self.voice_members.get(&id).map(|m| m.user.clone()))
-            .or_else(|| self.logs.values().flat_map(|l| l.msgs.iter().rev()).find(|m| m.author.id == id).map(|m| m.author.clone()))
+            .or_else(|| {
+                self.logs
+                    .values()
+                    .flat_map(|l| l.msgs.iter().rev())
+                    .find(|m| m.author.id == id)
+                    .map(|m| m.author.clone())
+            })
     }
 
     /// The profile the hub last gave for this person.
@@ -460,11 +577,17 @@ impl App {
     /// May I clear parts of this person's profile (a moderator above their role)?
     /// (has an "about me", has a status) of a person's cached card; `None` while not loaded.
     pub fn profile_clear_parts(&self, user: &User) -> Option<(bool, bool)> {
-        self.profile.cache.get(&user.id).map(|c| (!c.profile.bio.is_empty(), c.profile.status.is_some()))
+        self.profile
+            .cache
+            .get(&user.id)
+            .map(|c| (!c.profile.bio.is_empty(), c.profile.status.is_some()))
     }
 
     pub fn can_clear_profile_of(&self, id: UserId) -> bool {
-        self.roles.supported && self.profile.supported == Some(true) && Some(id) != self.my_id() && self.my_role().outranks(self.role_of(id))
+        self.roles.supported
+            && self.profile.supported == Some(true)
+            && Some(id) != self.my_id()
+            && self.my_role().outranks(self.role_of(id))
     }
 
     // ------------------------------------------------------------ hub events
@@ -472,23 +595,41 @@ impl App {
     /// A fresh `Ready`: forget presence, check whether this hub knows profiles, load mine.
     pub fn profile_on_ready(&mut self) {
         let popout = self.profile.popout.take();
-        let (supported, form) = (self.profile.supported, std::mem::take(&mut self.profile.form));
+        let (supported, form) = (
+            self.profile.supported,
+            std::mem::take(&mut self.profile.form),
+        );
         self.profile.reset();
         // A reconnect to the same hub keeps what was learnt about it and what is being edited.
         self.profile.supported = supported;
-        self.profile.form = Form { busy: false, status_busy: false, ..form };
+        self.profile.form = Form {
+            busy: false,
+            status_busy: false,
+            ..form
+        };
         self.profile.popout = popout;
         if let Some(id) = self.my_id() {
             self.fetch_profile(id);
         }
     }
 
-    pub fn on_presence_changed(&mut self, user_id: UserId, presence: Presence, status: Option<CustomStatus>) {
+    pub fn on_presence_changed(
+        &mut self,
+        user_id: UserId,
+        presence: Presence,
+        status: Option<CustomStatus>,
+    ) {
         self.profile.supported.get_or_insert(true);
         if presence == Presence::Online && status.is_none() {
             self.profile.presence.remove(&user_id);
         } else {
-            self.profile.presence.insert(user_id, PresenceInfo { presence, status: status.clone() });
+            self.profile.presence.insert(
+                user_id,
+                PresenceInfo {
+                    presence,
+                    status: status.clone(),
+                },
+            );
         }
         if let Some(c) = self.profile.cache.get_mut(&user_id) {
             c.profile.presence = presence;
@@ -520,7 +661,9 @@ impl App {
                         self.profile.cache.insert(user, Cached { profile: *p });
                     }
                     ProfileReply::Unsupported => {
-                        tracing::info!("this hub has no profiles (older server): profile features are hidden");
+                        tracing::info!(
+                            "this hub has no profiles (older server): profile features are hidden"
+                        );
                         self.profile.supported = Some(false);
                     }
                     ProfileReply::Failed(e) => {
@@ -537,7 +680,7 @@ impl App {
                 match result {
                     Ok(p) => {
                         f.fill(&p);
-                        f.msg = Some((true, "Perfil salvo.".into()));
+                        f.msg = Some((true, "Profile saved.".into()));
                         if let Some(me) = self.me.as_mut() {
                             me.display_name = p.user.display_name.clone();
                         }
@@ -546,12 +689,20 @@ impl App {
                     Err(e) => f.msg = Some((false, e)),
                 }
             }
-            ProfileEv::PresenceSet { asked, auto, result } => match result {
+            ProfileEv::PresenceSet {
+                asked,
+                auto,
+                result,
+            } => match result {
                 Ok(p) => {
                     tracing::info!(?asked, auto, now = ?p, "presence set");
                     if let Some(id) = self.my_id() {
                         // The hub's PresenceChanged says the same; this keeps my own screen right if it is late.
-                        let status = self.profile.presence.get(&id).and_then(|i| i.status.clone());
+                        let status = self
+                            .profile
+                            .presence
+                            .get(&id)
+                            .and_then(|i| i.status.clone());
                         self.on_presence_changed(id, p, status);
                     }
                 }
@@ -568,7 +719,15 @@ impl App {
                 f.status_busy = false;
                 match result {
                     Ok(status) => {
-                        f.status_msg = Some((true, if status.is_some() { "Status definido." } else { "Status limpo." }.into()));
+                        f.status_msg = Some((
+                            true,
+                            if status.is_some() {
+                                "Status set."
+                            } else {
+                                "Status cleared."
+                            }
+                            .into(),
+                        ));
                         if status.is_none() {
                             f.status_emoji.clear();
                             f.status_text.clear();
@@ -583,7 +742,7 @@ impl App {
             }
             ProfileEv::ModCleared { user, result } => match result {
                 Ok(()) => {
-                    self.toast("Perfil limpo (fica no registro de moderação).");
+                    self.toast("Profile cleared (recorded in the moderation log).");
                     self.fetch_profile(user);
                 }
                 Err(e) => self.notice = Some(e),
@@ -604,13 +763,18 @@ impl App {
     /// Choose my presence (what the buttons do). The hub persists it.
     pub fn set_presence(&mut self, presence: Presence) {
         self.profile.auto_away_sent = false;
-        self.backend.send(Cmd::Profile(ProfileCmd::SetPresence { presence, auto: false }));
+        self.backend.send(Cmd::Profile(ProfileCmd::SetPresence {
+            presence,
+            auto: false,
+        }));
     }
 
-    /// "Salvar perfil": send what changed.
+    /// "Save profile": send what changed.
     pub fn save_profile(&mut self) {
         let f = &mut self.profile.form;
-        let Some(update) = f.changes().filter(|_| !f.busy) else { return };
+        let Some(update) = f.changes().filter(|_| !f.busy) else {
+            return;
+        };
         // The same rules as the hub, so the mistake is explained before the round trip.
         let checked = update
             .display_name
@@ -619,9 +783,22 @@ impl App {
             .transpose()
             .map(|_| ())
             .and(update.bio.as_deref().map(clean_bio).transpose().map(|_| ()))
-            .and(update.accent.as_deref().map(clean_accent).transpose().map(|_| ()));
+            .and(
+                update
+                    .accent
+                    .as_deref()
+                    .map(clean_accent)
+                    .transpose()
+                    .map(|_| ()),
+            );
         if let Err(e) = checked {
-            f.msg = Some((false, error_text(&anyhow::Error::new(HttpStatusError { status: 400, message: e.to_string() }))));
+            f.msg = Some((
+                false,
+                error_text(&anyhow::Error::new(HttpStatusError {
+                    status: 400,
+                    message: e.to_string(),
+                })),
+            ));
             return;
         }
         f.busy = true;
@@ -629,7 +806,7 @@ impl App {
         self.backend.send(Cmd::Profile(ProfileCmd::Update(update)));
     }
 
-    /// "Definir status" with the form's fields.
+    /// "Set status" with the form's fields.
     pub fn save_status(&mut self) {
         let (offset, now) = (local_offset_min(), now_ms());
         let f = &mut self.profile.form;
@@ -637,14 +814,25 @@ impl App {
             return;
         }
         let expires_in_secs = f.clear_after.secs(now, offset);
-        let update = StatusUpdate { emoji: f.status_emoji.trim().to_string(), text: f.status_text.trim().to_string(), expires_in_secs };
+        let update = StatusUpdate {
+            emoji: f.status_emoji.trim().to_string(),
+            text: f.status_text.trim().to_string(),
+            expires_in_secs,
+        };
         if let Err(e) = clean_status(&update.emoji, &update.text, update.expires_in_secs, now) {
-            f.status_msg = Some((false, error_text(&anyhow::Error::new(HttpStatusError { status: 400, message: e.to_string() }))));
+            f.status_msg = Some((
+                false,
+                error_text(&anyhow::Error::new(HttpStatusError {
+                    status: 400,
+                    message: e.to_string(),
+                })),
+            ));
             return;
         }
         f.status_busy = true;
         f.status_msg = None;
-        self.backend.send(Cmd::Profile(ProfileCmd::SetStatus(update)));
+        self.backend
+            .send(Cmd::Profile(ProfileCmd::SetStatus(update)));
     }
 
     pub fn clear_status(&mut self) {
@@ -654,12 +842,13 @@ impl App {
         }
         f.status_busy = true;
         f.status_msg = None;
-        self.backend.send(Cmd::Profile(ProfileCmd::SetStatus(StatusUpdate::default())));
+        self.backend
+            .send(Cmd::Profile(ProfileCmd::SetStatus(StatusUpdate::default())));
     }
 
-    // ------------------------------------------------------------ idle -> "Ausente"
+    // ------------------------------------------------------------ idle -> "Away"
 
-    /// Called every frame: after the configured idle time the hub is told "Ausente" (unless I
+    /// Called every frame: after the configured idle time the hub is told "Away" (unless I
     /// chose another presence or I am in a call), and told I am back at the first input.
     pub fn profile_tick(&mut self, ctx: &egui::Context) {
         if !self.ready || self.profile.supported != Some(true) {
@@ -670,17 +859,34 @@ impl App {
             return;
         }
         let now = Instant::now();
-        if self.profile.last_idle_check.is_some_and(|t| now.duration_since(t) < Duration::from_secs(5)) {
+        if self
+            .profile
+            .last_idle_check
+            .is_some_and(|t| now.duration_since(t) < Duration::from_secs(5))
+        {
             ctx.request_repaint_after(IDLE_CHECK);
             return;
         }
         self.profile.last_idle_check = Some(now);
         let in_voice = self.voice.channel.is_some() || self.voice.joining.is_some();
-        if let Some(away) = idle_action(system_idle_secs(), minutes, in_voice, self.my_presence(), self.profile.auto_away_sent) {
+        if let Some(away) = idle_action(
+            system_idle_secs(),
+            minutes,
+            in_voice,
+            self.my_presence(),
+            self.profile.auto_away_sent,
+        ) {
             tracing::info!(away, "idle detection: presence");
             self.profile.auto_away_sent = away;
-            let presence = if away { Presence::Away } else { Presence::Online };
-            self.backend.send(Cmd::Profile(ProfileCmd::SetPresence { presence, auto: true }));
+            let presence = if away {
+                Presence::Away
+            } else {
+                Presence::Online
+            };
+            self.backend.send(Cmd::Profile(ProfileCmd::SetPresence {
+                presence,
+                auto: true,
+            }));
         }
         ctx.request_repaint_after(IDLE_CHECK);
     }
@@ -689,7 +895,9 @@ impl App {
 
     /// Left click on a person: open their card next to the pointer.
     pub fn open_profile(&mut self, ctx: &egui::Context, user: &User) {
-        let anchor = ctx.input(|i| i.pointer.interact_pos().or(i.pointer.latest_pos())).unwrap_or(Pos2::new(320.0, 180.0));
+        let anchor = ctx
+            .input(|i| i.pointer.interact_pos().or(i.pointer.latest_pos()))
+            .unwrap_or(Pos2::new(320.0, 180.0));
         self.open_profile_at(user, anchor);
     }
 
@@ -697,7 +905,12 @@ impl App {
         if self.screen != crate::app::Screen::Main {
             return;
         }
-        self.profile.popout = Some(Popout { user: user.clone(), anchor, just_opened: true, volume: false });
+        self.profile.popout = Some(Popout {
+            user: user.clone(),
+            anchor,
+            just_opened: true,
+            volume: false,
+        });
         self.fetch_profile(user.id);
     }
 
@@ -705,11 +918,16 @@ impl App {
         self.profile.popout = None;
     }
 
-    // "Enviar mensagem" of the card calls `App::open_dm` (direct messages, `dms.rs`).
+    // "Send message" of the card calls `App::open_dm` (direct messages, `dms.rs`).
 
     /// A clickable hit on a person's name or picture: pointer cursor, "@username" on hover, and
     /// the card on click.
-    pub fn profile_hit(&mut self, ui: &egui::Ui, resp: egui::Response, user: &User) -> egui::Response {
+    pub fn profile_hit(
+        &mut self,
+        ui: &egui::Ui,
+        resp: egui::Response,
+        user: &User,
+    ) -> egui::Response {
         let resp = decorate_hit(resp, user);
         if resp.clicked() {
             self.open_profile(ui.ctx(), user);
@@ -719,16 +937,20 @@ impl App {
 
     /// The person's card (Discord-like, v1.0): a banner in their profile colour, the picture over
     /// its edge with the presence dot, the name (in the role's colour) and badge, the username,
-    /// presence and status; then "Sobre mim", the role and "Membro desde" on an inner card; and
-    /// the actions: "Mensagem", "Ligar" and "Volume" (somebody in my room), or "Editar perfil" on
+    /// presence and status; then "About me", the role and "Member since" on an inner card; and
+    /// the actions: "Message", "Call" and "Volume" (somebody in my room), or "Edit profile" on
     /// my own; "⋯" opens the right-click menu.
     pub fn profile_popout(&mut self, ctx: &egui::Context) {
-        let Some(pop) = self.profile.popout.clone() else { return };
+        let Some(pop) = self.profile.popout.clone() else {
+            return;
+        };
         if self.screen != crate::app::Screen::Main {
             self.profile.popout = None;
             return;
         }
-        let user = self.known_user(pop.user.id).unwrap_or_else(|| pop.user.clone());
+        let user = self
+            .known_user(pop.user.id)
+            .unwrap_or_else(|| pop.user.clone());
         let me = self.my_id() == Some(user.id);
         let now = now_ms();
         let supported = self.profile.supported != Some(false);
@@ -736,21 +958,37 @@ impl App {
         let loading = supported && cached.is_none() && !self.profile.failed.contains(&user.id);
         let failed = supported && cached.is_none() && self.profile.failed.contains(&user.id);
         let online = me || self.online.iter().any(|u| u.id == user.id);
-        let presence = if me { self.my_presence() } else { self.presence_of(user.id) };
+        let presence = if me {
+            self.my_presence()
+        } else {
+            self.presence_of(user.id)
+        };
         // An online person's live status; an offline one's is whatever the hub last served.
-        let status = if online { self.status_of(user.id) } else { cached.as_ref().and_then(|c| live_status(c.status.as_ref(), now).cloned()) };
-        let accent = cached.as_ref().and_then(|c| accent_color(c.accent.as_deref()));
+        let status = if online {
+            self.status_of(user.id)
+        } else {
+            cached
+                .as_ref()
+                .and_then(|c| live_status(c.status.as_ref(), now).cloned())
+        };
+        let accent = cached
+            .as_ref()
+            .and_then(|c| accent_color(c.accent.as_deref()));
         let banner_color = accent.unwrap_or_else(|| name_color(user.id).gamma_multiply(0.55));
         let roles_on = self.roles.supported;
         let role = if roles_on { user.role } else { Role::Member };
         let can_clear = self.can_clear_profile_of(user.id);
         let offset = local_offset_min();
-        let facts = self.menu_facts(&user, crate::context_menu::Origin::Popout, crate::context_menu::Lead::None);
+        let facts = self.menu_facts(
+            &user,
+            crate::context_menu::Origin::Popout,
+            crate::context_menu::Lead::None,
+        );
         let can_call = facts.dms_ok && !facts.in_call_with;
         let call_why = if !facts.hub_up {
-            Some("Sem conexão com o servidor")
+            Some("Not connected to the server")
         } else if facts.blocked {
-            Some("Você bloqueou esta pessoa: desbloqueie para ligar")
+            Some("You blocked this person: unblock them to call")
         } else {
             None
         };
@@ -791,151 +1029,289 @@ impl App {
                 ui.spacing_mut().item_spacing.y = 4.0;
                 // Banner, and the picture overlapping its lower edge (a ring in the card's colour).
                 let r = theme::radius::POPUP;
-                let (banner, _) = ui.allocate_exact_size(Vec2::new(POPOUT_WIDTH, BANNER_H), Sense::hover());
-                ui.painter().rect_filled(banner, egui::CornerRadius { nw: r, ne: r, sw: 0, se: 0 }, banner_color);
+                let (banner, _) =
+                    ui.allocate_exact_size(Vec2::new(POPOUT_WIDTH, BANNER_H), Sense::hover());
+                ui.painter().rect_filled(
+                    banner,
+                    egui::CornerRadius {
+                        nw: r,
+                        ne: r,
+                        sw: 0,
+                        se: 0,
+                    },
+                    banner_color,
+                );
                 let center = Pos2::new(banner.left() + 18.0 + AVATAR_R, banner.bottom());
-                ui.painter().circle_filled(center, AVATAR_R + 5.0, theme::PAREDE);
-                crate::avatars::draw_avatar(&mut self.avatars.store, ui.painter(), ui.ctx(), center, AVATAR_R, &user, Surface::Popout);
+                ui.painter()
+                    .circle_filled(center, AVATAR_R + 5.0, theme::PAREDE);
+                crate::avatars::draw_avatar(
+                    &mut self.avatars.store,
+                    ui.painter(),
+                    ui.ctx(),
+                    center,
+                    AVATAR_R,
+                    &user,
+                    Surface::Popout,
+                );
                 let dot = center + Vec2::new(AVATAR_R * 0.72, AVATAR_R * 0.72);
-                let dot_color = if online { presence_color(presence) } else { OFFLINE_COLOR };
+                let dot_color = if online {
+                    presence_color(presence)
+                } else {
+                    OFFLINE_COLOR
+                };
                 ui.painter().circle_filled(dot, 10.0, theme::PAREDE);
                 ui.painter().circle_filled(dot, 7.0, dot_color);
                 // "⋯" on the banner: the same menu as a right click anywhere else.
-                let more_rect = egui::Rect::from_min_size(Pos2::new(banner.right() - 38.0, banner.top() + 8.0), Vec2::splat(30.0));
+                let more_rect = egui::Rect::from_min_size(
+                    Pos2::new(banner.right() - 38.0, banner.top() + 8.0),
+                    Vec2::splat(30.0),
+                );
                 // (In a child: `put` would move the layout's cursor back up to the banner.)
                 let mut corner = ui.new_child(egui::UiBuilder::new().max_rect(more_rect));
-                let more = ui_kit::icon_button(&mut corner, ph::DOTS_THREE, "Mais opções (o mesmo menu do botão direito)", ui_kit::IconState::Normal);
+                let more = ui_kit::icon_button(
+                    &mut corner,
+                    ph::DOTS_THREE,
+                    "More options (same as the right-click menu)",
+                    ui_kit::IconState::Normal,
+                );
                 if !more.hovered() {
                     // Readable over any banner colour.
-                    ui.painter().rect_filled(more.rect, theme::radius::ROW, theme::ETIQUETA);
-                    ui.painter().text(more.rect.center(), egui::Align2::CENTER_CENTER, ph::DOTS_THREE, theme::body(18.0), theme::GIZ);
+                    ui.painter()
+                        .rect_filled(more.rect, theme::radius::ROW, theme::ETIQUETA);
+                    ui.painter().text(
+                        more.rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        ph::DOTS_THREE,
+                        theme::body(18.0),
+                        theme::GIZ,
+                    );
                 }
                 if more.clicked() {
                     menu_at = Some(more.rect.left_bottom());
                 }
                 ui.add_space(AVATAR_R + 8.0);
-                egui::Frame::new().inner_margin(egui::Margin { left: 16, right: 16, top: 0, bottom: 14 }).show(ui, |ui| {
-                    ui.set_width(POPOUT_WIDTH - 32.0);
-                    // Name, badge, username.
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        ui.label(crate::roles::role_name(user.shown_name(), role, Some(theme::GIZ)).font(theme::display(19.0)));
-                        crate::roles::role_badge(ui, role);
-                    });
-                    ui.label(RichText::new(format!("@{}", user.username)).font(theme::body(13.0)).color(theme::NEVOA));
-                    // Presence, then the custom status.
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        let (r, _) = ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
-                        ui.painter().circle_filled(r.center(), 4.0, dot_color);
-                        let text = match (online, me, presence) {
-                            (false, _, _) => "Offline".to_string(),
-                            (true, true, Presence::Invisible) => "Invisível (só você sabe)".to_string(),
-                            (true, _, p) => presence_label(p).to_string(),
-                        };
-                        ui.label(RichText::new(text).font(theme::body(12.5)).color(theme::NEVOA));
-                    });
-                    if let Some(s) = &status {
-                        ui.add_space(2.0);
-                        egui::Frame::new().fill(theme::MOVEL).corner_radius(theme::radius::BUTTON).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.add(egui::Label::new(RichText::new(status_line(s)).color(theme::TEXTO)).wrap());
+                egui::Frame::new()
+                    .inner_margin(egui::Margin {
+                        left: 16,
+                        right: 16,
+                        top: 0,
+                        bottom: 14,
+                    })
+                    .show(ui, |ui| {
+                        ui.set_width(POPOUT_WIDTH - 32.0);
+                        // Name, badge, username.
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            ui.label(
+                                crate::roles::role_name(user.shown_name(), role, Some(theme::GIZ))
+                                    .font(theme::display(19.0)),
+                            );
+                            crate::roles::role_badge(ui, role);
                         });
-                    }
-                    ui.add_space(space::M);
-                    // The inner card: about, role, member since.
-                    egui::Frame::new().fill(theme::NOITE).corner_radius(theme::radius::BUTTON).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.spacing_mut().item_spacing.y = 4.0;
-                        let heading = |ui: &mut egui::Ui, t: &str| {
-                            ui.label(RichText::new(t).font(theme::semibold(12.0)).color(theme::NEVOA));
-                        };
-                        if loading {
-                            ui_kit::hint(ui, "Carregando perfil...");
-                        } else if failed {
-                            ui.label(RichText::new("Não foi possível carregar o perfil.").font(theme::body(12.5)).color(theme::AVISO));
-                        }
-                        if let Some(p) = &cached {
-                            if !p.bio.is_empty() {
-                                heading(ui, "Sobre mim");
-                                crate::links::message(ui, &p.bio);
-                                ui.add_space(space::S);
-                            } else if me {
-                                heading(ui, "Sobre mim");
-                                ui_kit::hint(ui, "Você ainda não escreveu nada em \"Sobre mim\".");
-                                ui.add_space(space::S);
-                            }
-                        }
-                        if roles_on {
-                            heading(ui, "Cargo");
-                            ui.horizontal(|ui| {
-                                let color = crate::roles::role_color(role).unwrap_or(theme::NEVOA);
-                                let icon = crate::roles::role_icon(role).map(|i| format!("{i}  ")).unwrap_or_default();
-                                ui_kit::pill(ui, &format!("{icon}{}", crate::roles::role_label(role)), theme::MOVEL, color);
-                            });
-                            ui.add_space(space::S);
-                        }
-                        if let Some(p) = cached.as_ref().filter(|p| p.member_since_ms > 0) {
-                            heading(ui, "Membro desde");
-                            ui.label(RichText::new(format_date_pt(p.member_since_ms, offset)).font(theme::body(13.0)).color(theme::TEXTO));
-                        }
-                    });
-                    ui.add_space(space::L);
-                    // The actions.
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
-                        if me {
-                            if ui_kit::button(ui, Kind::Primary, Some(ph::PENCIL_SIMPLE), "Editar perfil").clicked() {
-                                edit = true;
-                            }
-                            return;
-                        }
-                        if facts.dms_ok && ui_kit::button(ui, Kind::Primary, Some(ph::CHAT_CIRCLE), "Mensagem").on_hover_text("Enviar uma mensagem direta").clicked() {
-                            dm = true;
-                        }
-                        if can_call {
-                            let r = ui.add_enabled_ui(call_why.is_none(), |ui| ui_kit::button(ui, Kind::Secondary, Some(ph::PHONE), "Ligar")).inner;
-                            let r = match call_why {
-                                Some(w) => r.on_disabled_hover_text(w),
-                                None => r.on_hover_text("Uma chamada só entre vocês dois"),
+                        ui.label(
+                            RichText::new(format!("@{}", user.username))
+                                .font(theme::body(13.0))
+                                .color(theme::NEVOA),
+                        );
+                        // Presence, then the custom status.
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            let (r, _) = ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
+                            ui.painter().circle_filled(r.center(), 4.0, dot_color);
+                            let text = match (online, me, presence) {
+                                (false, _, _) => "Offline".to_string(),
+                                (true, true, Presence::Invisible) => {
+                                    "Invisible (only you know)".to_string()
+                                }
+                                (true, _, p) => presence_label(p).to_string(),
                             };
-                            if r.clicked() {
-                                call = true;
-                            }
+                            ui.label(
+                                RichText::new(text)
+                                    .font(theme::body(12.5))
+                                    .color(theme::NEVOA),
+                            );
+                        });
+                        if let Some(s) = &status {
+                            ui.add_space(2.0);
+                            egui::Frame::new()
+                                .fill(theme::MOVEL)
+                                .corner_radius(theme::radius::BUTTON)
+                                .inner_margin(egui::Margin::symmetric(10, 6))
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(status_line(s)).color(theme::TEXTO),
+                                        )
+                                        .wrap(),
+                                    );
+                                });
                         }
-                        if facts.same_room {
-                            let kind = if volume_open { Kind::Secondary } else { Kind::Ghost };
-                            if ui_kit::button(ui, kind, Some(ph::SPEAKER_HIGH), "Volume").on_hover_text("O volume desta pessoa, só para você").clicked() {
-                                volume_open = !volume_open;
+                        ui.add_space(space::M);
+                        // The inner card: about, role, member since.
+                        egui::Frame::new()
+                            .fill(theme::NOITE)
+                            .corner_radius(theme::radius::BUTTON)
+                            .inner_margin(egui::Margin::symmetric(12, 10))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.spacing_mut().item_spacing.y = 4.0;
+                                let heading = |ui: &mut egui::Ui, t: &str| {
+                                    ui.label(
+                                        RichText::new(t)
+                                            .font(theme::semibold(12.0))
+                                            .color(theme::NEVOA),
+                                    );
+                                };
+                                if loading {
+                                    ui_kit::hint(ui, "Loading profile...");
+                                } else if failed {
+                                    ui.label(
+                                        RichText::new("Could not load the profile.")
+                                            .font(theme::body(12.5))
+                                            .color(theme::AVISO),
+                                    );
+                                }
+                                if let Some(p) = &cached {
+                                    if !p.bio.is_empty() {
+                                        heading(ui, "About me");
+                                        crate::links::message(ui, &p.bio);
+                                        ui.add_space(space::S);
+                                    } else if me {
+                                        heading(ui, "About me");
+                                        ui_kit::hint(
+                                            ui,
+                                            "You have not written anything in \"About me\" yet.",
+                                        );
+                                        ui.add_space(space::S);
+                                    }
+                                }
+                                if roles_on {
+                                    heading(ui, "Role");
+                                    ui.horizontal(|ui| {
+                                        let color =
+                                            crate::roles::role_color(role).unwrap_or(theme::NEVOA);
+                                        let icon = crate::roles::role_icon(role)
+                                            .map(|i| format!("{i}  "))
+                                            .unwrap_or_default();
+                                        ui_kit::pill(
+                                            ui,
+                                            &format!("{icon}{}", crate::roles::role_label(role)),
+                                            theme::MOVEL,
+                                            color,
+                                        );
+                                    });
+                                    ui.add_space(space::S);
+                                }
+                                if let Some(p) = cached.as_ref().filter(|p| p.member_since_ms > 0) {
+                                    heading(ui, "Member since");
+                                    ui.label(
+                                        RichText::new(format_date_pt(p.member_since_ms, offset))
+                                            .font(theme::body(13.0))
+                                            .color(theme::TEXTO),
+                                    );
+                                }
+                            });
+                        ui.add_space(space::L);
+                        // The actions.
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
+                            if me {
+                                if ui_kit::button(
+                                    ui,
+                                    Kind::Primary,
+                                    Some(ph::PENCIL_SIMPLE),
+                                    "Edit profile",
+                                )
+                                .clicked()
+                                {
+                                    edit = true;
+                                }
+                                return;
+                            }
+                            if facts.dms_ok
+                                && ui_kit::button(
+                                    ui,
+                                    Kind::Primary,
+                                    Some(ph::CHAT_CIRCLE),
+                                    "Message",
+                                )
+                                .on_hover_text("Send a direct message")
+                                .clicked()
+                            {
+                                dm = true;
+                            }
+                            if can_call {
+                                let r = ui
+                                    .add_enabled_ui(call_why.is_none(), |ui| {
+                                        ui_kit::button(ui, Kind::Secondary, Some(ph::PHONE), "Call")
+                                    })
+                                    .inner;
+                                let r = match call_why {
+                                    Some(w) => r.on_disabled_hover_text(w),
+                                    None => r.on_hover_text("A call between the two of you"),
+                                };
+                                if r.clicked() {
+                                    call = true;
+                                }
+                            }
+                            if facts.same_room {
+                                let kind = if volume_open {
+                                    Kind::Secondary
+                                } else {
+                                    Kind::Ghost
+                                };
+                                if ui_kit::button(ui, kind, Some(ph::SPEAKER_HIGH), "Volume")
+                                    .on_hover_text("This person's volume, only for you")
+                                    .clicked()
+                                {
+                                    volume_open = !volume_open;
+                                }
+                            }
+                        });
+                        if volume_open && facts.same_room {
+                            self.popout_volume(ui, &user);
+                        }
+                        if can_clear {
+                            if let Some(p) = &cached {
+                                let (has_bio, has_status, has_name) = (
+                                    !p.bio.is_empty(),
+                                    status.is_some(),
+                                    user.display_name.is_some(),
+                                );
+                                if has_bio || has_status || has_name {
+                                    ui.add_space(space::M);
+                                    ui.label(
+                                        RichText::new("Moderation")
+                                            .font(theme::semibold(12.0))
+                                            .color(theme::NEVOA),
+                                    );
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
+                                        let b = |ui: &mut egui::Ui, text: &str| {
+                                            ui_kit::button_sized(
+                                                ui,
+                                                Kind::Ghost,
+                                                ui_kit::Size::Small,
+                                                Some(ph::TRASH),
+                                                text,
+                                            )
+                                            .clicked()
+                                        };
+                                        if has_bio && b(ui, "Clear about me") {
+                                            clear.bio = true;
+                                        }
+                                        if has_status && b(ui, "Clear status") {
+                                            clear.status = true;
+                                        }
+                                        if has_name && b(ui, "Clear name") {
+                                            clear.display_name = true;
+                                        }
+                                    });
+                                }
                             }
                         }
                     });
-                    if volume_open && facts.same_room {
-                        self.popout_volume(ui, &user);
-                    }
-                    if can_clear {
-                        if let Some(p) = &cached {
-                            let (has_bio, has_status, has_name) = (!p.bio.is_empty(), status.is_some(), user.display_name.is_some());
-                            if has_bio || has_status || has_name {
-                                ui.add_space(space::M);
-                                ui.label(RichText::new("Moderação").font(theme::semibold(12.0)).color(theme::NEVOA));
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
-                                    let b = |ui: &mut egui::Ui, text: &str| ui_kit::button_sized(ui, Kind::Ghost, ui_kit::Size::Small, Some(ph::TRASH), text).clicked();
-                                    if has_bio && b(ui, "Limpar sobre mim") {
-                                        clear.bio = true;
-                                    }
-                                    if has_status && b(ui, "Limpar status") {
-                                        clear.status = true;
-                                    }
-                                    if has_name && b(ui, "Limpar nome") {
-                                        clear.display_name = true;
-                                    }
-                                });
-                            }
-                        }
-                    }
-                });
                 // The height the card wants: everything laid out, also what the window clips.
                 let natural = ui.min_rect().height();
                 if ui.ctx().data(|d| d.get_temp::<f32>(natural_id)) != Some(natural) {
@@ -949,15 +1325,30 @@ impl App {
             let p = self.profile.popout.as_mut().expect("open");
             p.volume = volume_open;
             let just_opened = std::mem::take(&mut p.just_opened);
-            if !just_opened && self.cmenu.open.is_none() && ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !rect.contains(p))) {
+            if !just_opened
+                && self.cmenu.open.is_none()
+                && ctx.input(|i| {
+                    i.pointer.any_pressed()
+                        && i.pointer.interact_pos().is_some_and(|p| !rect.contains(p))
+                })
+            {
                 close = true;
             }
         }
         if let Some(p) = menu_at {
-            self.open_person_menu(ctx, &user, crate::context_menu::Origin::Popout, crate::context_menu::Lead::None, p);
+            self.open_person_menu(
+                ctx,
+                &user,
+                crate::context_menu::Origin::Popout,
+                crate::context_menu::Lead::None,
+                p,
+            );
         }
         if !clear.is_empty() {
-            self.backend.send(Cmd::Profile(ProfileCmd::ModClear { user: user.id, what: clear }));
+            self.backend.send(Cmd::Profile(ProfileCmd::ModClear {
+                user: user.id,
+                what: clear,
+            }));
         }
         if dm {
             close = true;
@@ -976,19 +1367,26 @@ impl App {
         }
     }
 
-    /// The card's "Volume": the person's volume for me (0-200%) and "Silenciar para mim".
+    /// The card's "Volume": the person's volume for me (0-200%) and "Mute for me".
     fn popout_volume(&mut self, ui: &mut egui::Ui, user: &User) {
         let before = self.settings.user_audio(&user.username);
         let mut pref = before;
         ui.add_space(space::S);
         let slider = ui
             .horizontal(|ui| {
-                ui.label(RichText::new(ph::SPEAKER_HIGH).font(theme::body(16.0)).color(theme::NEVOA));
+                ui.label(
+                    RichText::new(ph::SPEAKER_HIGH)
+                        .font(theme::body(16.0))
+                        .color(theme::NEVOA),
+                );
                 ui.spacing_mut().slider_width = (ui.available_width() - 64.0).max(100.0);
                 ui.add(egui::Slider::new(&mut pref.volume_pct, 0..=200).suffix("%"))
             })
             .inner;
-        let muted = ui.checkbox(&mut pref.muted, "Silenciar para mim").on_hover_text("Só você deixa de ouvir esta pessoa").changed();
+        let muted = ui
+            .checkbox(&mut pref.muted, "Mute for me")
+            .on_hover_text("Mute this person only for you")
+            .changed();
         if pref != before {
             self.set_user_pref(user, pref, muted || !slider.dragged());
         }
@@ -999,7 +1397,7 @@ impl App {
 
     // ------------------------------------------------------------ the settings section
 
-    /// "Perfil" in the settings ("Conta e perfil"), in the forms' rows: the display name, "Sobre
+    /// "Profile" in the settings ("Account and profile"), in the forms' rows: the display name, "About
     /// mim", the profile colour, the custom status and the presence. Returns whether it was shown
     /// (an older hub has no profiles).
     pub fn profile_section(&mut self, ui: &mut egui::Ui) -> bool {
@@ -1008,9 +1406,16 @@ impl App {
             return false;
         }
         let me = self.me.clone();
-        forms::group(ui, "Perfil");
+        forms::group(ui, "Profile");
         if let Some(me) = &me {
-            forms::note(ui, format!("Seu nome de usuário (para entrar) é @{}. O resto só muda o que as pessoas veem.", me.username), false);
+            forms::note(
+                ui,
+                format!(
+                    "Your username (for signing in) is @{}. The rest only changes what others see.",
+                    me.username
+                ),
+                false,
+            );
             ui.add_space(space::S);
         }
         let dirty = self.profile.form.changes().is_some();
@@ -1020,10 +1425,15 @@ impl App {
         let field_w = 300.0;
         {
             let f = &mut self.profile.form;
-            forms::row(ui, "Nome de exibição", |ui| {
-                ui.add(ui_kit::field(&mut f.display_name).char_limit(DISPLAY_NAME_MAX).hint_text("opcional").desired_width(field_w));
+            forms::row(ui, "Display name", |ui| {
+                ui.add(
+                    ui_kit::field(&mut f.display_name)
+                        .char_limit(DISPLAY_NAME_MAX)
+                        .hint_text("opcional")
+                        .desired_width(field_w),
+                );
             });
-            forms::row(ui, "Sobre mim", |ui| {
+            forms::row(ui, "About me", |ui| {
                 ui.vertical(|ui| {
                     ui.add(
                         egui::TextEdit::multiline(&mut f.bio)
@@ -1031,40 +1441,71 @@ impl App {
                             .desired_rows(3)
                             .desired_width(field_w)
                             .margin(egui::Margin::symmetric(10, 7))
-                            .hint_text("conte algo sobre você (links funcionam)"),
+                            .hint_text("tell us about yourself (links work)"),
                     );
-                    ui.label(RichText::new(format!("{}/{BIO_MAX}", f.bio.chars().count())).font(theme::body(12.0)).color(theme::NEVOA));
+                    ui.label(
+                        RichText::new(format!("{}/{BIO_MAX}", f.bio.chars().count()))
+                            .font(theme::body(12.0))
+                            .color(theme::NEVOA),
+                    );
                 });
             });
-            forms::row(ui, "Cor do perfil", |ui| {
+            forms::row(ui, "Profile color", |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     let mut rgb = f.accent.unwrap_or([88, 101, 242]);
-                    if ui.color_edit_button_srgb(&mut rgb).on_hover_text("Outra cor").changed() {
+                    if ui
+                        .color_edit_button_srgb(&mut rgb)
+                        .on_hover_text("Another color")
+                        .changed()
+                    {
                         f.accent = Some(rgb);
                     }
                     for s in SWATCHES {
                         let (r, resp) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::click());
-                        ui.painter().rect_filled(r, theme::radius::TAG, Color32::from_rgb(s[0], s[1], s[2]));
+                        ui.painter().rect_filled(
+                            r,
+                            theme::radius::TAG,
+                            Color32::from_rgb(s[0], s[1], s[2]),
+                        );
                         if f.accent == Some(s) {
-                            ui.painter().rect_stroke(r.expand(1.5), theme::radius::TAG, egui::Stroke::new(2.0, theme::GIZ), egui::StrokeKind::Outside);
+                            ui.painter().rect_stroke(
+                                r.expand(1.5),
+                                theme::radius::TAG,
+                                egui::Stroke::new(2.0, theme::GIZ),
+                                egui::StrokeKind::Outside,
+                            );
                         }
-                        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                        if resp
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .clicked()
+                        {
                             f.accent = Some(s);
                         }
                     }
-                    if ui_kit::button_sized(ui, Kind::Ghost, ui_kit::Size::Small, None, "Sem cor").clicked() {
+                    if ui_kit::button_sized(ui, Kind::Ghost, ui_kit::Size::Small, None, "No color")
+                        .clicked()
+                    {
                         f.accent = None;
                     }
                 });
             });
         }
         forms::indented(ui, |ui| {
-            let label = if busy { "Salvando..." } else { "Salvar perfil" };
-            save = ui.add_enabled_ui(dirty && !busy, |ui| ui_kit::button(ui, Kind::Primary, None, label)).inner.clicked();
-            see = ui_kit::button(ui, Kind::Secondary, Some(ph::USER), "Ver meu cartão").clicked();
+            let label = if busy { "Saving..." } else { "Save profile" };
+            save = ui
+                .add_enabled_ui(dirty && !busy, |ui| {
+                    ui_kit::button(ui, Kind::Primary, None, label)
+                })
+                .inner
+                .clicked();
+            see = ui_kit::button(ui, Kind::Secondary, Some(ph::USER), "View my card").clicked();
             if dirty && !busy {
-                ui.label(RichText::new("há mudanças não salvas").font(theme::body(12.5)).color(theme::AVISO));
+                ui.label(
+                    RichText::new("unsaved changes")
+                        .font(theme::body(12.5))
+                        .color(theme::AVISO),
+                );
             }
         });
         if let Some((ok, text)) = &self.profile.form.msg {
@@ -1072,46 +1513,79 @@ impl App {
         }
         if let Some(p) = self.profile.cache.get(&self.my_id().unwrap_or_default()) {
             if p.profile.member_since_ms > 0 {
-                forms::note(ui, format!("Membro desde {}", format_date_pt(p.profile.member_since_ms, local_offset_min())), true);
+                forms::note(
+                    ui,
+                    format!(
+                        "Member since {}",
+                        format_date_pt(p.profile.member_since_ms, local_offset_min())
+                    ),
+                    true,
+                );
             }
         }
 
         // Custom status.
         forms::divider(ui);
-        forms::group(ui, "Status personalizado");
+        forms::group(ui, "Custom status");
         let current = self.my_id().and_then(|id| self.status_of(id));
         if let Some(s) = &current {
-            forms::note(ui, format!("No ar agora: {}", status_line(s)), false);
+            forms::note(ui, format!("Live now: {}", status_line(s)), false);
             ui.add_space(space::S);
         }
         let (mut set, mut clear) = (false, false);
         {
             let f = &mut self.profile.form;
             forms::row(ui, "Status", |ui| {
-                ui.add(ui_kit::field(&mut f.status_emoji).char_limit(STATUS_EMOJI_MAX_CHARS).hint_text("emoji").desired_width(56.0));
-                ui.add(ui_kit::field(&mut f.status_text).char_limit(STATUS_TEXT_MAX).hint_text("o que você está fazendo").desired_width(field_w - 64.0));
+                ui.add(
+                    ui_kit::field(&mut f.status_emoji)
+                        .char_limit(STATUS_EMOJI_MAX_CHARS)
+                        .hint_text("emoji")
+                        .desired_width(56.0),
+                );
+                ui.add(
+                    ui_kit::field(&mut f.status_text)
+                        .char_limit(STATUS_TEXT_MAX)
+                        .hint_text("what you are doing")
+                        .desired_width(field_w - 64.0),
+                );
             });
             forms::indented(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     for e in QUICK_EMOJI {
-                        if ui_kit::button_sized(ui, Kind::Ghost, ui_kit::Size::Small, None, e).clicked() {
+                        if ui_kit::button_sized(ui, Kind::Ghost, ui_kit::Size::Small, None, e)
+                            .clicked()
+                        {
                             f.status_emoji = e.to_string();
                         }
                     }
                 });
             });
-            forms::row(ui, "Limpar em", |ui| {
-                egui::ComboBox::from_id_salt("status_clear_after").width(180.0).selected_text(f.clear_after.label()).show_ui(ui, |ui| {
-                    for c in ClearAfter::ALL {
-                        ui.selectable_value(&mut f.clear_after, c, c.label());
-                    }
-                });
+            forms::row(ui, "Clear after", |ui| {
+                egui::ComboBox::from_id_salt("status_clear_after")
+                    .width(180.0)
+                    .selected_text(f.clear_after.label())
+                    .show_ui(ui, |ui| {
+                        for c in ClearAfter::ALL {
+                            ui.selectable_value(&mut f.clear_after, c, c.label());
+                        }
+                    });
             });
             forms::indented(ui, |ui| {
-                let can = !f.status_busy && !(f.status_emoji.trim().is_empty() && f.status_text.trim().is_empty());
-                set = ui.add_enabled_ui(can, |ui| ui_kit::button(ui, Kind::Secondary, None, "Definir status")).inner.clicked();
-                clear = ui.add_enabled_ui(!f.status_busy && current.is_some(), |ui| ui_kit::button(ui, Kind::Ghost, None, "Limpar status")).inner.clicked();
+                let can = !f.status_busy
+                    && !(f.status_emoji.trim().is_empty() && f.status_text.trim().is_empty());
+                set = ui
+                    .add_enabled_ui(can, |ui| {
+                        ui_kit::button(ui, Kind::Secondary, None, "Set status")
+                    })
+                    .inner
+                    .clicked();
+                clear = ui
+                    .add_enabled_ui(!f.status_busy && current.is_some(), |ui| {
+                        ui_kit::button(ui, Kind::Ghost, None, "Clear status")
+                    })
+                    .inner
+                    .clicked();
             });
             if let Some((ok, text)) = &f.status_msg {
                 forms::indented(ui, |ui| ui_kit::result_text(ui, *ok, text));
@@ -1120,10 +1594,10 @@ impl App {
 
         // Presence.
         forms::divider(ui);
-        forms::group(ui, "Presença");
+        forms::group(ui, "Presence");
         let current = self.my_presence();
         let mut choose = None;
-        forms::row(ui, "Aparecer como", |ui| {
+        forms::row(ui, "Appear as", |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = space::S;
                 for p in Presence::ALL {
@@ -1136,10 +1610,18 @@ impl App {
         });
         forms::note(ui, presence_hint(current), true);
         let mut minutes = self.settings.profile.idle_away_minutes;
-        forms::row(ui, "Ausente automático", |ui| {
-            ui.add(egui::DragValue::new(&mut minutes).range(0..=240).suffix(" min"));
+        forms::row(ui, "Automatic away", |ui| {
+            ui.add(
+                egui::DragValue::new(&mut minutes)
+                    .range(0..=240)
+                    .suffix(" min"),
+            );
         });
-        forms::note(ui, "Depois desse tempo sem mexer no PC (0 = nunca; em chamada você não fica ausente).", true);
+        forms::note(
+            ui,
+            "After this long without PC activity (0 = never; not marked away during calls).",
+            true,
+        );
         if minutes != self.settings.profile.idle_away_minutes {
             self.settings.profile.idle_away_minutes = minutes;
             self.save_settings();
@@ -1172,7 +1654,11 @@ impl App {
 /// chips).
 fn presence_chip(ui: &mut egui::Ui, selected: bool, p: Presence) -> egui::Response {
     let text = presence_label(p);
-    let g = ui.painter().layout_no_wrap(text.to_owned(), theme::semibold(theme::size::BUTTON), Color32::PLACEHOLDER);
+    let g = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        theme::semibold(theme::size::BUTTON),
+        Color32::PLACEHOLDER,
+    );
     let s = Vec2::new(g.size().x + 2.0 * space::L + 14.0, 28.0);
     let (rect, resp) = ui.allocate_exact_size(s, Sense::click());
     if ui.is_rect_visible(rect) {
@@ -1184,11 +1670,30 @@ fn presence_chip(ui: &mut egui::Ui, selected: bool, p: Presence) -> egui::Respon
             (Color32::TRANSPARENT, theme::NEVOA, theme::RISCO)
         };
         let painter = ui.painter();
-        painter.rect(rect, theme::radius::PILL, fill, egui::Stroke::new(theme::stroke::HAIRLINE, line), egui::StrokeKind::Inside);
-        painter.circle_filled(Pos2::new(rect.left() + space::L + 3.0, rect.center().y), 4.0, presence_color(p));
-        painter.galley(Pos2::new(rect.left() + space::L + 14.0, rect.center().y - g.size().y / 2.0), g, fg);
+        painter.rect(
+            rect,
+            theme::radius::PILL,
+            fill,
+            egui::Stroke::new(theme::stroke::HAIRLINE, line),
+            egui::StrokeKind::Inside,
+        );
+        painter.circle_filled(
+            Pos2::new(rect.left() + space::L + 3.0, rect.center().y),
+            4.0,
+            presence_color(p),
+        );
+        painter.galley(
+            Pos2::new(
+                rect.left() + space::L + 14.0,
+                rect.center().y - g.size().y / 2.0,
+            ),
+            g,
+            fg,
+        );
     }
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, text));
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, text)
+    });
     resp
 }
 
@@ -1197,31 +1702,57 @@ mod tests {
     use super::*;
 
     fn user(id: i64, name: &str, display: Option<&str>) -> User {
-        User { display_name: display.map(Into::into), ..User::new(id, name) }
+        User {
+            display_name: display.map(Into::into),
+            ..User::new(id, name)
+        }
     }
 
     #[test]
     fn people_are_named_by_display_name_with_the_username_as_fallback() {
         assert_eq!(user(1, "ana", Some("Ana Maria")).shown_name(), "Ana Maria");
         assert_eq!(user(1, "ana", None).shown_name(), "ana");
-        assert_eq!(user(1, "ana", Some("  ")).shown_name(), "ana", "a blank display name is no name");
-        assert!(user(1, "ana", Some("Ana")).has_display_name() && !user(1, "ana", None).has_display_name());
+        assert_eq!(
+            user(1, "ana", Some("  ")).shown_name(),
+            "ana",
+            "a blank display name is no name"
+        );
+        assert!(
+            user(1, "ana", Some("Ana")).has_display_name()
+                && !user(1, "ana", None).has_display_name()
+        );
         // The username is what the hover and the card's "@" show, whatever the display name is.
         assert_eq!(format!("@{}", user(1, "ana", Some("Ana")).username), "@ana");
     }
 
     #[test]
     fn statuses_expire_on_the_clock() {
-        let s = CustomStatus { emoji: "🎮".into(), text: "jogando".into(), expires_at_ms: Some(10_000) };
+        let s = CustomStatus {
+            emoji: "🎮".into(),
+            text: "jogando".into(),
+            expires_at_ms: Some(10_000),
+        };
         assert!(live_status(Some(&s), 9_999).is_some());
         assert!(live_status(Some(&s), 10_000).is_none(), "gone at its time");
         assert!(live_status(Some(&s), 99_999).is_none());
-        let forever = CustomStatus { text: "x".into(), ..Default::default() };
+        let forever = CustomStatus {
+            text: "x".into(),
+            ..Default::default()
+        };
         assert!(live_status(Some(&forever), i64::MAX).is_some());
-        assert!(live_status(Some(&CustomStatus::default()), 0).is_none(), "an empty status is none");
+        assert!(
+            live_status(Some(&CustomStatus::default()), 0).is_none(),
+            "an empty status is none"
+        );
         assert!(live_status(None, 0).is_none());
         assert_eq!(status_line(&s), "🎮 jogando");
-        assert_eq!(status_line(&CustomStatus { emoji: "🎮".into(), ..Default::default() }), "🎮");
+        assert_eq!(
+            status_line(&CustomStatus {
+                emoji: "🎮".into(),
+                ..Default::default()
+            }),
+            "🎮"
+        );
         assert_eq!(status_line(&forever), "x");
     }
 
@@ -1235,7 +1766,7 @@ mod tests {
         assert_eq!(ClearAfter::Hours4.secs(now, -180), Some(14_400));
         assert_eq!(ClearAfter::Today.secs(now, -180), Some(11 * 3600 + 30 * 60));
         assert_eq!(secs_until_local_midnight(now, 0), 8 * 3600 + 30 * 60);
-        // 23:59:30 local: "Hoje" still lasts at least a minute.
+        // 23:59:30 local: "Today" still lasts at least a minute.
         let late = 1_791_936_000_000 + 86_400_000 + (2 * 3600 + 59 * 60 + 30) * 1000; // 02:59:30 UTC on the 15th
         let left = secs_until_local_midnight(late, -180);
         assert_eq!(left, 30);
@@ -1244,35 +1775,62 @@ mod tests {
     }
 
     #[test]
-    fn dates_are_written_in_portuguese() {
-        assert_eq!(format_date_pt(0, 0), "1 de janeiro de 1970");
-        assert_eq!(format_date_pt(1_791_991_800_000, 0), "14 de outubro de 2026");
+    fn dates_are_written_in_english() {
+        assert_eq!(format_date_pt(0, 0), "1 January 1970");
+        assert_eq!(format_date_pt(1_791_991_800_000, 0), "14 October 2026");
         // Local time can be the day before UTC.
-        assert_eq!(format_date_pt(1_791_936_000_000 + 60_000, -180), "13 de outubro de 2026");
-        assert_eq!(format_date_pt(1_791_936_000_000 + 60_000, 0), "14 de outubro de 2026");
-        assert_eq!(format_date_pt(951_782_400_000, 0), "29 de fevereiro de 2000");
+        assert_eq!(
+            format_date_pt(1_791_936_000_000 + 60_000, -180),
+            "13 October 2026"
+        );
+        assert_eq!(
+            format_date_pt(1_791_936_000_000 + 60_000, 0),
+            "14 October 2026"
+        );
+        assert_eq!(format_date_pt(951_782_400_000, 0), "29 February 2000");
     }
 
     #[test]
     fn idle_makes_you_away_and_activity_brings_you_back() {
         let min10 = 10 * 60;
         // Below the threshold: nothing. At it: away.
-        assert_eq!(idle_action(min10 - 1, 10, false, Presence::Online, false), None);
-        assert_eq!(idle_action(min10, 10, false, Presence::Online, false), Some(true));
+        assert_eq!(
+            idle_action(min10 - 1, 10, false, Presence::Online, false),
+            None
+        );
+        assert_eq!(
+            idle_action(min10, 10, false, Presence::Online, false),
+            Some(true)
+        );
         // Already sent: nothing more, until activity.
-        assert_eq!(idle_action(min10 * 3, 10, false, Presence::Away, true), None);
+        assert_eq!(
+            idle_action(min10 * 3, 10, false, Presence::Away, true),
+            None
+        );
         assert_eq!(idle_action(2, 10, false, Presence::Away, true), Some(false));
         // Never away: setting 0, or a call.
-        assert_eq!(idle_action(100_000, 0, false, Presence::Online, false), None);
-        assert_eq!(idle_action(100_000, 10, true, Presence::Online, false), None);
+        assert_eq!(
+            idle_action(100_000, 0, false, Presence::Online, false),
+            None
+        );
+        assert_eq!(
+            idle_action(100_000, 10, true, Presence::Online, false),
+            None
+        );
         // Joining a call while auto-away brings you back at once.
-        assert_eq!(idle_action(100_000, 10, true, Presence::Away, true), Some(false));
+        assert_eq!(
+            idle_action(100_000, 10, true, Presence::Away, true),
+            Some(false)
+        );
         // A presence I chose is never overridden: not dnd, not invisible, not a manual away.
         for p in [Presence::Dnd, Presence::Invisible, Presence::Away] {
             assert_eq!(idle_action(100_000, 10, false, p, false), None, "{p:?}");
         }
         // Turning the feature off while away undoes it.
-        assert_eq!(idle_action(100_000, 0, false, Presence::Away, true), Some(false));
+        assert_eq!(
+            idle_action(100_000, 0, false, Presence::Away, true),
+            Some(false)
+        );
     }
 
     #[test]
@@ -1289,24 +1847,47 @@ mod tests {
             member_since_ms: 5,
         };
         f.fill(&base);
-        assert_eq!((f.display_name.as_str(), f.bio.as_str(), f.accent), ("Ana", "oi", Some([0x11, 0x22, 0x33])));
+        assert_eq!(
+            (f.display_name.as_str(), f.bio.as_str(), f.accent),
+            ("Ana", "oi", Some([0x11, 0x22, 0x33]))
+        );
         assert!(f.changes().is_none());
         f.display_name = "  Aninha ".into();
-        assert_eq!(f.changes(), Some(ProfileUpdate { display_name: Some("Aninha".into()), ..Default::default() }));
+        assert_eq!(
+            f.changes(),
+            Some(ProfileUpdate {
+                display_name: Some("Aninha".into()),
+                ..Default::default()
+            })
+        );
         f.bio.clear();
         f.accent = None;
         f.display_name = "Ana".into();
-        assert_eq!(f.changes(), Some(ProfileUpdate { bio: Some(String::new()), accent: Some(String::new()), ..Default::default() }));
+        assert_eq!(
+            f.changes(),
+            Some(ProfileUpdate {
+                bio: Some(String::new()),
+                accent: Some(String::new()),
+                ..Default::default()
+            })
+        );
         f.accent = Some([255, 128, 0]);
         f.bio = "oi".into();
         assert_eq!(f.changes().unwrap().accent.as_deref(), Some("#ff8000"));
         f.display_name.clear();
-        assert_eq!(f.changes().unwrap().display_name, Some(String::new()), "clearing the display name is a change");
+        assert_eq!(
+            f.changes().unwrap().display_name,
+            Some(String::new()),
+            "clearing the display name is a change"
+        );
     }
 
     #[test]
     fn colours() {
-        assert_eq!(accent_color(Some("#ff8800")), Some(Color32::from_rgb(255, 136, 0)));
+        assert_eq!(
+            accent_color(Some("#ff8800")),
+            Some(Color32::from_rgb(255, 136, 0))
+        );
         assert_eq!(accent_color(Some("nope")), None);
         assert_eq!(accent_color(None), None);
         assert_eq!(hex_of([1, 2, 255]), "#0102ff");
@@ -1314,24 +1895,33 @@ mod tests {
     }
 
     #[test]
-    fn hub_refusals_are_explained_in_portuguese() {
-        let err = |status: u16, message: &str| error_text(&anyhow::Error::new(HttpStatusError { status, message: message.into() }));
-        assert!(err(400, "display name must be 1-32 characters").contains("1 a 32"));
+    fn hub_refusals_are_explained_in_english() {
+        let err = |status: u16, message: &str| {
+            error_text(&anyhow::Error::new(HttpStatusError {
+                status,
+                message: message.into(),
+            }))
+        };
+        assert!(err(400, "display name must be 1-32 characters").contains("1 to 32"));
         assert!(err(400, "bio must be at most 190 characters and 8 lines").contains("190"));
         assert!(err(400, "colour must look like #rrggbb").contains("#rrggbb"));
         assert!(err(400, "status emoji must be a single emoji").contains("emoji"));
-        assert!(err(409, "that name is somebody else's username").contains("outra pessoa"));
+        assert!(err(409, "that name is somebody else's username").contains("someone else's"));
         assert!(err(429, "too many profile changes, wait 20 s").contains("20 s"));
         assert!(err(429, "too many profile changes, wait 90 s").contains("2 min"));
-        assert!(err(404, "").contains("versão antiga"));
-        assert!(err(403, "").contains("cargo"));
+        assert!(err(404, "").contains("older version"));
+        assert!(err(403, "").contains("role"));
     }
 
     #[test]
     fn every_presence_has_a_label_and_a_distinct_colour() {
-        let colours: std::collections::HashSet<_> = Presence::ALL.iter().map(|p| presence_color(*p)).collect();
+        let colours: std::collections::HashSet<_> =
+            Presence::ALL.iter().map(|p| presence_color(*p)).collect();
         assert_eq!(colours.len(), 4);
-        assert_eq!(Presence::ALL.map(presence_label), ["Online", "Ausente", "Não perturbe", "Invisível"]);
+        assert_eq!(
+            Presence::ALL.map(presence_label),
+            ["Online", "Away", "Do not disturb", "Invisible"]
+        );
         assert!(Presence::ALL.iter().all(|p| !presence_hint(*p).is_empty()));
     }
 

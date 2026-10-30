@@ -1,11 +1,11 @@
-//! Invites ("Convidar amigos", v0.8.0, no protocol bump): the wire types of the invite endpoints
+//! Invites ("Invite amigos", v0.8.0, no protocol bump): the wire types of the invite endpoints
 //! and the `vox1-...` invite code the apps exchange.
 //!
 //! **What protects a server.** An invite is a random 128-bit token the hub stores (as a hash)
 //! with an expiry, a use limit and a "revoked" mark. Logging in with a valid token
 //! ([`crate::LoginRequest::invite`]) replaces the server password, once per use; after that the
 //! person keeps getting in with the device token the hub hands out on that login (a remembered
-//! device skips the server password, see `LoginRequest`). Only Admin and Dono create, list and
+//! device skips the server password, see `LoginRequest`). Only Admin and Owner create, list and
 //! revoke invites ([`Role::can_admin`](crate::Role::can_admin)). Wrong tokens are slowed down like
 //! wrong server passwords.
 //!
@@ -59,7 +59,7 @@ pub const ERR_INVITE_INVALID: &str = "invite not valid";
 pub const ERR_INVITE_EXPIRED: &str = "invite expired";
 /// Login / redeem answer: the invite was used as many times as it allows.
 pub const ERR_INVITE_USED_UP: &str = "invite used up";
-/// Login / redeem answer: an Admin or the Dono cancelled the invite.
+/// Login / redeem answer: an Admin or the Owner cancelled the invite.
 pub const ERR_INVITE_REVOKED: &str = "invite revoked";
 /// Login answer (v1.0.1): an invite only makes new accounts. This name already has one, so the
 /// login needs the server password, or the account's own personal password / remembered device.
@@ -296,7 +296,12 @@ impl InviteCode {
             return Err(InviteCodeError::Typo);
         }
         let split = bytes.len() - 4;
-        let crc = u32::from_be_bytes([bytes[split], bytes[split + 1], bytes[split + 2], bytes[split + 3]]);
+        let crc = u32::from_be_bytes([
+            bytes[split],
+            bytes[split + 1],
+            bytes[split + 2],
+            bytes[split + 3],
+        ]);
         bytes.truncate(split);
         if crc32(&bytes) != crc {
             return Err(InviteCodeError::Typo);
@@ -344,7 +349,10 @@ impl InviteCode {
                 TAG_HOST => {
                     let n = take(&mut at, 1)?[0] as usize;
                     let name = take(&mut at, n)?;
-                    let ok = n > 0 && name.iter().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'-' | b'_'));
+                    let ok = n > 0
+                        && name
+                            .iter()
+                            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'-' | b'_'));
                     if !ok {
                         return Err(InviteCodeError::Damaged);
                     }
@@ -357,7 +365,11 @@ impl InviteCode {
         if addrs.is_empty() {
             return Err(InviteCodeError::Damaged);
         }
-        Ok(InviteCode { token, hub_port, addrs })
+        Ok(InviteCode {
+            token,
+            hub_port,
+            addrs,
+        })
     }
 
     pub fn token_hex(&self) -> String {
@@ -381,8 +393,14 @@ impl InviteCode {
         for a in &self.addrs {
             match a {
                 InviteAddr::Lan(ip, prefix) => {
-                    let here = local.iter().any(|(mine, _)| matches!(mine, IpAddr::V4(m) if same_subnet(*m, *ip, *prefix)));
-                    if here { near.push(url(IpAddr::V4(*ip))) } else { far_lan.push(url(IpAddr::V4(*ip))) }
+                    let here = local.iter().any(
+                        |(mine, _)| matches!(mine, IpAddr::V4(m) if same_subnet(*m, *ip, *prefix)),
+                    );
+                    if here {
+                        near.push(url(IpAddr::V4(*ip)))
+                    } else {
+                        far_lan.push(url(IpAddr::V4(*ip)))
+                    }
                 }
                 InviteAddr::Public(ip @ IpAddr::V4(_)) => v4.push(url(*ip)),
                 InviteAddr::Public(ip) => v6.push(url(*ip)),
@@ -439,7 +457,9 @@ fn tail_nonce(token: &[u8]) -> [u8; 12] {
 
 /// ChaCha20 (RFC 8439) keystream XORed into `data`, starting at block `counter`.
 fn chacha20_xor(key: &[u8; 32], nonce: &[u8; 12], counter: u32, data: &mut [u8]) {
-    let word = |b: &[u8], i: usize| u32::from_le_bytes([b[i * 4], b[i * 4 + 1], b[i * 4 + 2], b[i * 4 + 3]]);
+    let word = |b: &[u8], i: usize| {
+        u32::from_le_bytes([b[i * 4], b[i * 4 + 1], b[i * 4 + 2], b[i * 4 + 3]])
+    };
     let mut state = [0u32; 16];
     state[..4].copy_from_slice(&[0x6170_7865, 0x3320_646e, 0x7962_2d32, 0x6b20_6574]);
     for i in 0..8 {
@@ -452,7 +472,16 @@ fn chacha20_xor(key: &[u8; 32], nonce: &[u8; 12], counter: u32, data: &mut [u8])
         state[12] = counter.wrapping_add(n as u32);
         let mut x = state;
         for _ in 0..10 {
-            for (a, b, c, d) in [(0, 4, 8, 12), (1, 5, 9, 13), (2, 6, 10, 14), (3, 7, 11, 15), (0, 5, 10, 15), (1, 6, 11, 12), (2, 7, 8, 13), (3, 4, 9, 14)] {
+            for (a, b, c, d) in [
+                (0, 4, 8, 12),
+                (1, 5, 9, 13),
+                (2, 6, 10, 14),
+                (3, 7, 11, 15),
+                (0, 5, 10, 15),
+                (1, 6, 11, 12),
+                (2, 7, 8, 13),
+                (3, 4, 9, 14),
+            ] {
                 x[a] = x[a].wrapping_add(x[b]);
                 x[d] = (x[d] ^ x[a]).rotate_left(16);
                 x[c] = x[c].wrapping_add(x[d]);
@@ -479,7 +508,11 @@ fn crc32(data: &[u8]) -> u32 {
     for &b in data {
         crc ^= b as u32;
         for _ in 0..8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
         }
     }
     !crc
@@ -540,7 +573,10 @@ mod tests {
         InviteCode {
             token: [0x5a; INVITE_TOKEN_LEN],
             hub_port: 7990,
-            addrs: vec![InviteAddr::Public("203.0.113.7".parse().unwrap()), InviteAddr::Lan(Ipv4Addr::new(192, 168, 0, 20), 24)],
+            addrs: vec![
+                InviteAddr::Public("203.0.113.7".parse().unwrap()),
+                InviteAddr::Lan(Ipv4Addr::new(192, 168, 0, 20), 24),
+            ],
         }
     }
 
@@ -551,7 +587,13 @@ mod tests {
         let nonce = [0, 0, 0, 0, 0, 0, 0, 0x4a, 0, 0, 0, 0];
         let mut text = *b"Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.";
         chacha20_xor(&key, &nonce, 1, &mut text);
-        assert_eq!(&text[..16], &[0x6e, 0x2e, 0x35, 0x9a, 0x25, 0x68, 0xf9, 0x80, 0x41, 0xba, 0x07, 0x28, 0xdd, 0x0d, 0x69, 0x81]);
+        assert_eq!(
+            &text[..16],
+            &[
+                0x6e, 0x2e, 0x35, 0x9a, 0x25, 0x68, 0xf9, 0x80, 0x41, 0xba, 0x07, 0x28, 0xdd, 0x0d,
+                0x69, 0x81
+            ]
+        );
         assert_eq!(&text[text.len() - 2..], &[0x87, 0x4d]);
     }
 
@@ -565,7 +607,11 @@ mod tests {
         let c = sample();
         let text = c.encode();
         assert!(text.starts_with("vox1-"), "{text}");
-        assert!(text.len() < 64, "short enough to paste: {} chars", text.len());
+        assert!(
+            text.len() < 64,
+            "short enough to paste: {} chars",
+            text.len()
+        );
         assert_eq!(InviteCode::decode(&text), Ok(c.clone()));
         // Every kind of address, at once.
         let all = InviteCode {
@@ -585,7 +631,18 @@ mod tests {
     fn people_can_mangle_the_text() {
         let text = sample().encode();
         let body = &text[5..];
-        let messy = format!("  VOX1-{}\n", body.to_lowercase().chars().enumerate().map(|(i, c)| if i % 9 == 8 { format!("{c} ") } else { c.to_string() }).collect::<String>());
+        let messy = format!(
+            "  VOX1-{}\n",
+            body.to_lowercase()
+                .chars()
+                .enumerate()
+                .map(|(i, c)| if i % 9 == 8 {
+                    format!("{c} ")
+                } else {
+                    c.to_string()
+                })
+                .collect::<String>()
+        );
         assert_eq!(InviteCode::decode(&messy), Ok(sample()));
         // Crockford look-alikes typed by hand.
         let looks = format!("vox1-{}", body.replace('0', "O").replace('1', "l"));
@@ -608,7 +665,10 @@ mod tests {
                 let mut t = chars.clone();
                 t[i] = c;
                 let t: String = t.into_iter().collect();
-                assert!(InviteCode::decode(&t).is_err(), "typo at {i} ({c}) not caught");
+                assert!(
+                    InviteCode::decode(&t).is_err(),
+                    "typo at {i} ({c}) not caught"
+                );
             }
         }
         // Swapped neighbours, a missing character, a cut-off code, an extra one.
@@ -618,17 +678,34 @@ mod tests {
             }
             let mut t = chars.clone();
             t.swap(i, i + 1);
-            assert_eq!(InviteCode::decode(&t.into_iter().collect::<String>()), Err(InviteCodeError::Typo), "swap at {i}");
+            assert_eq!(
+                InviteCode::decode(&t.into_iter().collect::<String>()),
+                Err(InviteCodeError::Typo),
+                "swap at {i}"
+            );
         }
         let mut short = text.clone();
         short.remove(20);
         assert_eq!(InviteCode::decode(&short), Err(InviteCodeError::Typo));
-        assert_eq!(InviteCode::decode(&text[..text.len() - 6]), Err(InviteCodeError::Typo));
-        assert_eq!(InviteCode::decode(&format!("{text}0")), Err(InviteCodeError::Typo));
+        assert_eq!(
+            InviteCode::decode(&text[..text.len() - 6]),
+            Err(InviteCodeError::Typo)
+        );
+        assert_eq!(
+            InviteCode::decode(&format!("{text}0")),
+            Err(InviteCodeError::Typo)
+        );
         let mut with_u = chars.clone();
         with_u[10] = 'U';
-        assert_eq!(InviteCode::decode(&with_u.into_iter().collect::<String>()), Err(InviteCodeError::Typo), "U is not in the alphabet");
-        assert_eq!(InviteCode::decode("http://203.0.113.7:7890"), Err(InviteCodeError::NotAnInvite));
+        assert_eq!(
+            InviteCode::decode(&with_u.into_iter().collect::<String>()),
+            Err(InviteCodeError::Typo),
+            "U is not in the alphabet"
+        );
+        assert_eq!(
+            InviteCode::decode("http://203.0.113.7:7890"),
+            Err(InviteCodeError::NotAnInvite)
+        );
         assert_eq!(InviteCode::decode("vox1-"), Err(InviteCodeError::Typo));
     }
 
@@ -638,8 +715,15 @@ mod tests {
         let text = c.encode();
         let raw = base32_decode(&text[5..]).unwrap();
         // Neither the IP bytes nor the port appear as such in the bytes of the code.
-        for needle in [&[203u8, 0, 113, 7][..], &[192, 168, 0, 20], &7990u16.to_be_bytes()] {
-            assert!(!raw.windows(needle.len()).any(|w| w == needle), "{needle:?} visible");
+        for needle in [
+            &[203u8, 0, 113, 7][..],
+            &[192, 168, 0, 20],
+            &7990u16.to_be_bytes(),
+        ] {
+            assert!(
+                !raw.windows(needle.len()).any(|w| w == needle),
+                "{needle:?} visible"
+            );
         }
         // Obfuscation round trip on its own.
         let mut buf: Vec<u8> = (0u8..60).collect();
@@ -663,22 +747,54 @@ mod tests {
         scramble(&mut plain);
         let crc = crc32(&plain);
         plain.extend_from_slice(&crc.to_be_bytes());
-        assert_eq!(InviteCode::decode(&format!("vox1-{}", base32_encode(&plain))), Err(InviteCodeError::NewerVersion));
+        assert_eq!(
+            InviteCode::decode(&format!("vox1-{}", base32_encode(&plain))),
+            Err(InviteCodeError::NewerVersion)
+        );
     }
 
     #[test]
     fn lan_first_only_on_the_same_network() {
         let c = sample();
         let at_home = [("192.168.0.33".parse().unwrap(), 24u8)];
-        assert_eq!(c.candidate_urls(&at_home), ["http://192.168.0.20:7990", "http://203.0.113.7:7990"]);
-        let elsewhere = [("192.168.1.33".parse().unwrap(), 24u8), ("2001:db8::9".parse().unwrap(), 64)];
+        assert_eq!(
+            c.candidate_urls(&at_home),
+            ["http://192.168.0.20:7990", "http://203.0.113.7:7990"]
+        );
+        let elsewhere = [
+            ("192.168.1.33".parse().unwrap(), 24u8),
+            ("2001:db8::9".parse().unwrap(), 64),
+        ];
         assert_eq!(c.candidate_urls(&elsewhere), ["http://203.0.113.7:7990"]);
-        let lan_only = InviteCode { addrs: vec![InviteAddr::Lan(Ipv4Addr::new(192, 168, 0, 20), 24)], ..c.clone() };
-        assert_eq!(lan_only.candidate_urls(&elsewhere), ["http://192.168.0.20:7990"]);
-        let v6 = InviteCode { addrs: vec![InviteAddr::Public("2001:db8::7".parse().unwrap()), InviteAddr::Host("a.example.org".into())], ..c };
-        assert_eq!(v6.candidate_urls(&[]), ["http://a.example.org:7990", "http://[2001:db8::7]:7990"]);
-        assert!(same_subnet(Ipv4Addr::new(10, 1, 2, 3), Ipv4Addr::new(10, 9, 9, 9), 8));
-        assert!(!same_subnet(Ipv4Addr::new(10, 1, 2, 3), Ipv4Addr::new(11, 1, 2, 3), 8));
+        let lan_only = InviteCode {
+            addrs: vec![InviteAddr::Lan(Ipv4Addr::new(192, 168, 0, 20), 24)],
+            ..c.clone()
+        };
+        assert_eq!(
+            lan_only.candidate_urls(&elsewhere),
+            ["http://192.168.0.20:7990"]
+        );
+        let v6 = InviteCode {
+            addrs: vec![
+                InviteAddr::Public("2001:db8::7".parse().unwrap()),
+                InviteAddr::Host("a.example.org".into()),
+            ],
+            ..c
+        };
+        assert_eq!(
+            v6.candidate_urls(&[]),
+            ["http://a.example.org:7990", "http://[2001:db8::7]:7990"]
+        );
+        assert!(same_subnet(
+            Ipv4Addr::new(10, 1, 2, 3),
+            Ipv4Addr::new(10, 9, 9, 9),
+            8
+        ));
+        assert!(!same_subnet(
+            Ipv4Addr::new(10, 1, 2, 3),
+            Ipv4Addr::new(11, 1, 2, 3),
+            8
+        ));
     }
 
     /// The login request exactly as the v0.7.0 app sends it.
@@ -698,15 +814,31 @@ mod tests {
     #[test]
     fn the_invite_field_is_compatible_both_ways() {
         // An old app's login parses on a new hub, without an invite.
-        let old = LoginV070 { username: "Tati".into(), server_password: "x".into(), protocol_version: 1, password: None, device_token: Some("d".into()), remember_device: true };
-        let new: crate::LoginRequest = serde_json::from_str(&serde_json::to_string(&old).unwrap()).unwrap();
+        let old = LoginV070 {
+            username: "Tati".into(),
+            server_password: "x".into(),
+            protocol_version: 1,
+            password: None,
+            device_token: Some("d".into()),
+            remember_device: true,
+        };
+        let new: crate::LoginRequest =
+            serde_json::from_str(&serde_json::to_string(&old).unwrap()).unwrap();
         assert_eq!(new.invite, None);
         assert_eq!(new.device_token.as_deref(), Some("d"));
         // Without an invite a new app sends exactly what the old one did.
-        let plain = crate::LoginRequest { username: "Tati".into(), server_password: "x".into(), protocol_version: 1, ..Default::default() };
+        let plain = crate::LoginRequest {
+            username: "Tati".into(),
+            server_password: "x".into(),
+            protocol_version: 1,
+            ..Default::default()
+        };
         assert!(!serde_json::to_string(&plain).unwrap().contains("invite"));
         // With one, an old hub still reads the request (and ignores the invite).
-        let with = crate::LoginRequest { invite: Some("ab".repeat(16)), ..plain };
+        let with = crate::LoginRequest {
+            invite: Some("ab".repeat(16)),
+            ..plain
+        };
         let json = serde_json::to_string(&with).unwrap();
         assert!(json.contains("\"invite\":\""), "{json}");
         let seen: LoginV070 = serde_json::from_str(&json).unwrap();
@@ -715,7 +847,16 @@ mod tests {
 
     #[test]
     fn invite_states() {
-        let mut i = Invite { id: 1, created_by: 1, created_by_name: "dono".into(), created_at_ms: 0, expires_at_ms: Some(100), max_uses: Some(2), uses: 0, revoked: false };
+        let mut i = Invite {
+            id: 1,
+            created_by: 1,
+            created_by_name: "dono".into(),
+            created_at_ms: 0,
+            expires_at_ms: Some(100),
+            max_uses: Some(2),
+            uses: 0,
+            revoked: false,
+        };
         assert_eq!(i.state(50), InviteState::Active);
         assert_eq!(i.state(100), InviteState::Expired);
         i.uses = 2;

@@ -21,28 +21,71 @@ async fn a_client_on_ipv6_logs_in_and_gets_an_ipv6_livekit_url() {
         ),
     )
     .unwrap();
-    let server = start(Options { data_dir: dir.path().to_path_buf(), no_livekit: true, livekit_bin: "unused".into(), bind_override: Some("[::1]:0".into()) })
-        .await
-        .unwrap();
-    assert!(server.addr.is_ipv6() && server.addr.ip().is_loopback(), "{}", server.addr);
+    let server = start(Options {
+        data_dir: dir.path().to_path_buf(),
+        no_livekit: true,
+        livekit_bin: "unused".into(),
+        bind_override: Some("[::1]:0".into()),
+    })
+    .await
+    .unwrap();
+    assert!(
+        server.addr.is_ipv6() && server.addr.ip().is_loopback(),
+        "{}",
+        server.addr
+    );
     assert_eq!(server.addrs, [server.addr]);
     let base = format!("http://[::1]:{}", server.addr.port());
     let http = reqwest::Client::new();
 
-    let health: HealthResponse = http.get(format!("{base}/api/health")).send().await.unwrap().json().await.unwrap();
+    let health: HealthResponse = http
+        .get(format!("{base}/api/health"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert!(health.ok);
     assert_eq!(health.version, env!("CARGO_PKG_VERSION"));
 
     // The first login from the server PC over IPv6 loopback: the host's own app, so the owner.
-    let req = LoginRequest { username: "anfitriao".into(), server_password: PASSWORD.into(), protocol_version: PROTOCOL_VERSION, ..Default::default() };
-    let r = http.post(format!("{base}/api/login")).json(&req).send().await.unwrap();
+    let req = LoginRequest {
+        username: "anfitriao".into(),
+        server_password: PASSWORD.into(),
+        protocol_version: PROTOCOL_VERSION,
+        ..Default::default()
+    };
+    let r = http
+        .post(format!("{base}/api/login"))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
     let me: LoginResponse = r.json().await.unwrap();
     assert_eq!(me.user.role, Role::Owner, "[::1] is the server PC too");
 
-    let chs: Vec<Channel> = http.get(format!("{base}/api/channels")).bearer_auth(&me.token).send().await.unwrap().json().await.unwrap();
-    let voice = chs.iter().find(|c| c.kind == ChannelKind::Voice).expect("a voice channel").id;
-    let r = http.post(format!("{base}/api/voice/{voice}/join")).bearer_auth(&me.token).send().await.unwrap();
+    let chs: Vec<Channel> = http
+        .get(format!("{base}/api/channels"))
+        .bearer_auth(&me.token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let voice = chs
+        .iter()
+        .find(|c| c.kind == ChannelKind::Voice)
+        .expect("a voice channel")
+        .id;
+    let r = http
+        .post(format!("{base}/api/voice/{voice}/join"))
+        .bearer_auth(&me.token)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
     let join: VoiceJoinResponse = r.json().await.unwrap();
     assert_eq!(join.livekit_url, "ws://[::1]:7970");
@@ -51,8 +94,19 @@ async fn a_client_on_ipv6_logs_in_and_gets_an_ipv6_livekit_url() {
     assert_eq!((u.host_str(), u.port()), (Some("[::1]"), Some(7970)));
 
     // A second person, not on the server PC, over the same IPv6 socket.
-    let req = LoginRequest { username: "bia".into(), server_password: PASSWORD.into(), protocol_version: PROTOCOL_VERSION, ..Default::default() };
-    let r = http.post(format!("{base}/api/login")).header("x-forwarded-for", "203.0.113.9").json(&req).send().await.unwrap();
+    let req = LoginRequest {
+        username: "bia".into(),
+        server_password: PASSWORD.into(),
+        protocol_version: PROTOCOL_VERSION,
+        ..Default::default()
+    };
+    let r = http
+        .post(format!("{base}/api/login"))
+        .header("x-forwarded-for", "203.0.113.9")
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
     let bia: LoginResponse = r.json().await.unwrap();
     assert_eq!(bia.user.role, Role::Member);

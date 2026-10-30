@@ -37,8 +37,14 @@ pub fn is_shared_range(ip: IpAddr) -> bool {
 
 fn is_private(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => v4.is_private() || v4.is_link_local() || v4.is_loopback() || v4.is_unspecified(),
-        IpAddr::V6(v6) => (v6.segments()[0] & 0xfe00) == 0xfc00 || (v6.segments()[0] & 0xffc0) == 0xfe80 || v6.is_loopback(),
+        IpAddr::V4(v4) => {
+            v4.is_private() || v4.is_link_local() || v4.is_loopback() || v4.is_unspecified()
+        }
+        IpAddr::V6(v6) => {
+            (v6.segments()[0] & 0xfe00) == 0xfc00
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+                || v6.is_loopback()
+        }
     }
 }
 
@@ -76,21 +82,50 @@ mod tests {
     #[test]
     fn cgnat_is_recognised() {
         // A normal home router: WAN = what the internet sees.
-        assert_eq!(classify(ip("203.0.113.7"), ip("203.0.113.7"), false), Reach::Open);
-        assert_eq!(classify(ip("203.0.113.7"), None, false), Reach::Open, "STUN blocked, router is enough");
+        assert_eq!(
+            classify(ip("203.0.113.7"), ip("203.0.113.7"), false),
+            Reach::Open
+        );
+        assert_eq!(
+            classify(ip("203.0.113.7"), None, false),
+            Reach::Open,
+            "STUN blocked, router is enough"
+        );
         // Provider CGNAT: the router got an address from 100.64/10.
-        assert_eq!(classify(ip("100.71.3.9"), ip("203.0.113.7"), false), Reach::Cgnat(CgnatSign::SharedRange));
-        assert_eq!(classify(ip("100.127.255.1"), None, false), Reach::Cgnat(CgnatSign::SharedRange));
-        assert_eq!(classify(ip("100.128.0.1"), ip("100.128.0.1"), false), Reach::Open, "100.128/9 is not shared");
+        assert_eq!(
+            classify(ip("100.71.3.9"), ip("203.0.113.7"), false),
+            Reach::Cgnat(CgnatSign::SharedRange)
+        );
+        assert_eq!(
+            classify(ip("100.127.255.1"), None, false),
+            Reach::Cgnat(CgnatSign::SharedRange)
+        );
+        assert_eq!(
+            classify(ip("100.128.0.1"), ip("100.128.0.1"), false),
+            Reach::Open,
+            "100.128/9 is not shared"
+        );
         // The provider's modem in front of the router.
-        assert_eq!(classify(ip("192.168.1.2"), ip("203.0.113.7"), false), Reach::Cgnat(CgnatSign::PrivateWan));
-        assert_eq!(classify(ip("10.0.0.2"), None, false), Reach::Cgnat(CgnatSign::PrivateWan));
+        assert_eq!(
+            classify(ip("192.168.1.2"), ip("203.0.113.7"), false),
+            Reach::Cgnat(CgnatSign::PrivateWan)
+        );
+        assert_eq!(
+            classify(ip("10.0.0.2"), None, false),
+            Reach::Cgnat(CgnatSign::PrivateWan)
+        );
         // A public-looking WAN that is still not what the internet sees.
-        assert_eq!(classify(ip("198.51.100.4"), ip("203.0.113.7"), false), Reach::Cgnat(CgnatSign::Mismatch));
+        assert_eq!(
+            classify(ip("198.51.100.4"), ip("203.0.113.7"), false),
+            Reach::Cgnat(CgnatSign::Mismatch)
+        );
         // No UPnP.
         assert_eq!(classify(None, ip("203.0.113.7"), false), Reach::Unknown);
         assert_eq!(classify(None, ip("203.0.113.7"), true), Reach::Direct);
-        assert_eq!(classify(None, ip("100.64.0.9"), false), Reach::Cgnat(CgnatSign::SharedRange));
+        assert_eq!(
+            classify(None, ip("100.64.0.9"), false),
+            Reach::Cgnat(CgnatSign::SharedRange)
+        );
         assert_eq!(classify(None, None, false), Reach::Offline);
     }
 }

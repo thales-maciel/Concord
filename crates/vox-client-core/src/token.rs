@@ -42,8 +42,18 @@ mod tests {
 
     #[test]
     fn minted_token_verifies_and_carries_grants() {
-        let jwt = mint_token("devkey", "secret", "test", "alice", Some("Alice"), Duration::from_secs(600)).unwrap();
-        let claims = TokenVerifier::with_api_key("devkey", "secret").verify(&jwt).unwrap();
+        let jwt = mint_token(
+            "devkey",
+            "secret",
+            "test",
+            "alice",
+            Some("Alice"),
+            Duration::from_secs(600),
+        )
+        .unwrap();
+        let claims = TokenVerifier::with_api_key("devkey", "secret")
+            .verify(&jwt)
+            .unwrap();
         assert_eq!(claims.sub, "alice");
         assert_eq!(claims.name, "Alice");
         assert_eq!(claims.iss, "devkey");
@@ -55,7 +65,17 @@ mod tests {
 
     #[test]
     fn wrong_secret_is_rejected() {
-        let jwt = mint_token("devkey", "secret", "test", "bob", None, Duration::from_secs(600)).unwrap();
-        assert!(TokenVerifier::with_api_key("devkey", "other").verify(&jwt).is_err());
+        let jwt = mint_token(
+            "devkey",
+            "secret",
+            "test",
+            "bob",
+            None,
+            Duration::from_secs(600),
+        )
+        .unwrap();
+        assert!(TokenVerifier::with_api_key("devkey", "other")
+            .verify(&jwt)
+            .is_err());
     }
 }

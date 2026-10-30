@@ -31,12 +31,18 @@ use parking_lot::Mutex;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, info, warn};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, InvalidateRect, MonitorFromWindow, ValidateRect, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+use windows_sys::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, InvalidateRect, MonitorFromWindow, ValidateRect, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST,
+};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForSystem};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use winit::dpi::PhysicalSize;
-use winit::raw_window_handle::{DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawWindowHandle, Win32WindowHandle, WindowHandle};
+use winit::raw_window_handle::{
+    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawWindowHandle,
+    Win32WindowHandle, WindowHandle,
+};
 
 use super::d3d::{D3dGpu, D3dTarget, DrawStyle, RenderError, VideoPlanes};
 use super::viewer::{draw_soft, unsupported_buffer, ViewerNotice};
@@ -47,7 +53,19 @@ pub(super) const WM_VOX_REDRAW: u32 = WM_APP + 4;
 const VK_ESCAPE: WPARAM = 0x1B;
 const VK_F11: WPARAM = 0x7A;
 
-const CLASS_NAME: &[u16] = &[b'V' as u16, b'o' as u16, b'x' as u16, b'H' as u16, b'u' as u16, b'b' as u16, b'V' as u16, b'i' as u16, b'e' as u16, b'w' as u16, 0];
+const CLASS_NAME: &[u16] = &[
+    b'V' as u16,
+    b'o' as u16,
+    b'x' as u16,
+    b'H' as u16,
+    b'u' as u16,
+    b'b' as u16,
+    b'V' as u16,
+    b'i' as u16,
+    b'e' as u16,
+    b'w' as u16,
+    0,
+];
 
 /// The viewer thread's control window, for [`super::host`] (0 until the viewer starts).
 pub(super) static CTRL: AtomicIsize = AtomicIsize::new(0);
@@ -79,7 +97,12 @@ struct Mailbox {
 
 impl Mailbox {
     fn new() -> Self {
-        Self { frame: Mutex::new(None), pending: AtomicBool::new(false), replaced: AtomicU64::new(0), spare: Mutex::new(None) }
+        Self {
+            frame: Mutex::new(None),
+            pending: AtomicBool::new(false),
+            replaced: AtomicU64::new(0),
+            spare: Mutex::new(None),
+        }
     }
 
     /// Keep a finished preview buffer for reuse (anything else is simply dropped).
@@ -112,14 +135,36 @@ struct Entry {
 }
 
 enum Cmd {
-    Open { id: u64, key: String, title: String, inline: bool, style: DrawStyle, notify: UnboundedSender<ViewerNotice>, mailbox: Arc<Mailbox>, shared: Arc<Shared> },
-    Close { key: String },
-    Retitle { key: String, title: String },
+    Open {
+        id: u64,
+        key: String,
+        title: String,
+        inline: bool,
+        style: DrawStyle,
+        notify: UnboundedSender<ViewerNotice>,
+        mailbox: Arc<Mailbox>,
+        shared: Arc<Shared>,
+    },
+    Close {
+        key: String,
+    },
+    Retitle {
+        key: String,
+        title: String,
+    },
     /// Show `key` in this app child window when it is not popped out (None: forget the host).
-    Attach { key: String, host: Option<isize> },
+    Attach {
+        key: String,
+        host: Option<isize>,
+    },
     /// Forget every use of this host window (it is about to be destroyed).
-    DropHost { host: isize },
-    PopOut { key: String, out: bool },
+    DropHost {
+        host: isize,
+    },
+    PopOut {
+        key: String,
+        out: bool,
+    },
 }
 
 /// Handle to the viewer thread (the hidden control window lives on it).
@@ -180,7 +225,10 @@ impl NativeViewer {
             .map_err(|e| e.to_string())?;
         let ctrl = rx.recv().map_err(|e| e.to_string())??;
         CTRL.store(ctrl, Ordering::Release);
-        Ok(Self { ctrl, streams: Arc::new(Mutex::new(HashMap::new())) })
+        Ok(Self {
+            ctrl,
+            streams: Arc::new(Mutex::new(HashMap::new())),
+        })
     }
 
     fn post(&self, cmd: Cmd) {
@@ -199,40 +247,92 @@ impl NativeViewer {
         // SAFETY: the viewer thread takes ownership of the box when it handles the message.
         // If the call fails before delivery (the thread is gone) the box leaks, which is fine
         // for a message sent at most once per window.
-        unsafe { SendMessageTimeoutW(self.ctrl as HWND, WM_VOX_CMD, 0, cmd as LPARAM, SMTO_NORMAL, 2000, &mut result) };
+        unsafe {
+            SendMessageTimeoutW(
+                self.ctrl as HWND,
+                WM_VOX_CMD,
+                0,
+                cmd as LPARAM,
+                SMTO_NORMAL,
+                2000,
+                &mut result,
+            )
+        };
     }
 
-    pub(super) fn open(&self, key: &str, title: &str, inline: bool, style: DrawStyle, notify: UnboundedSender<ViewerNotice>) -> NativeStream {
+    pub(super) fn open(
+        &self,
+        key: &str,
+        title: &str,
+        inline: bool,
+        style: DrawStyle,
+        notify: UnboundedSender<ViewerNotice>,
+    ) -> NativeStream {
         let mut streams = self.streams.lock();
         if let Some(e) = streams.get(key) {
-            let s = NativeStream { ctrl: self.ctrl, id: e.id, mailbox: e.mailbox.clone() };
+            let s = NativeStream {
+                ctrl: self.ctrl,
+                id: e.id,
+                mailbox: e.mailbox.clone(),
+            };
             drop(streams);
-            self.post(Cmd::Retitle { key: key.to_string(), title: title.to_string() });
+            self.post(Cmd::Retitle {
+                key: key.to_string(),
+                title: title.to_string(),
+            });
             return s;
         }
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let mailbox = Arc::new(Mailbox::new());
         let shared = Arc::new(Shared::default());
         shared.popped_out.store(!inline, Ordering::Release);
-        streams.insert(key.to_string(), Entry { id, mailbox: mailbox.clone(), shared: shared.clone() });
+        streams.insert(
+            key.to_string(),
+            Entry {
+                id,
+                mailbox: mailbox.clone(),
+                shared: shared.clone(),
+            },
+        );
         drop(streams);
-        self.post(Cmd::Open { id, key: key.to_string(), title: title.to_string(), inline, style, notify, mailbox: mailbox.clone(), shared });
-        NativeStream { ctrl: self.ctrl, id, mailbox }
+        self.post(Cmd::Open {
+            id,
+            key: key.to_string(),
+            title: title.to_string(),
+            inline,
+            style,
+            notify,
+            mailbox: mailbox.clone(),
+            shared,
+        });
+        NativeStream {
+            ctrl: self.ctrl,
+            id,
+            mailbox,
+        }
     }
 
     pub(super) fn close(&self, key: &str) {
         if let Some(e) = self.streams.lock().remove(key) {
             e.mailbox.frame.lock().take();
         }
-        self.post(Cmd::Close { key: key.to_string() });
+        self.post(Cmd::Close {
+            key: key.to_string(),
+        });
     }
 
     pub(super) fn retitle(&self, key: &str, title: &str) {
-        self.post(Cmd::Retitle { key: key.to_string(), title: title.to_string() });
+        self.post(Cmd::Retitle {
+            key: key.to_string(),
+            title: title.to_string(),
+        });
     }
 
     pub(super) fn attach(&self, key: &str, host: Option<isize>) {
-        let cmd = Cmd::Attach { key: key.to_string(), host };
+        let cmd = Cmd::Attach {
+            key: key.to_string(),
+            host,
+        };
         if host.is_none() {
             // The caller may destroy the window next: let go of it first.
             self.send(cmd);
@@ -249,7 +349,10 @@ impl NativeViewer {
         if let Some(e) = self.streams.lock().get(key) {
             e.shared.popped_out.store(out, Ordering::Release);
         }
-        self.post(Cmd::PopOut { key: key.to_string(), out });
+        self.post(Cmd::PopOut {
+            key: key.to_string(),
+            out,
+        });
     }
 
     pub(super) fn set_max_fps(&self, key: &str, fps: u32) {
@@ -292,7 +395,10 @@ impl HasDisplayHandle for Win32Handle {
 
 enum Backend {
     D3d(D3dTarget),
-    Soft { surface: softbuffer::Surface<Win32Handle, Win32Handle>, _context: softbuffer::Context<Win32Handle> },
+    Soft {
+        surface: softbuffer::Surface<Win32Handle, Win32Handle>,
+        _context: softbuffer::Context<Win32Handle>,
+    },
 }
 
 impl Backend {
@@ -409,13 +515,36 @@ fn run_thread(tx: std::sync::mpsc::Sender<Result<isize, String>>) {
             let _ = tx.send(Err("cannot register viewer window class".into()));
             return;
         }
-        let ctrl = CreateWindowExW(0, CLASS_NAME.as_ptr(), null(), 0, 0, 0, 0, 0, HWND_MESSAGE, null_mut(), hinst, null());
+        let ctrl = CreateWindowExW(
+            0,
+            CLASS_NAME.as_ptr(),
+            null(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            HWND_MESSAGE,
+            null_mut(),
+            hinst,
+            null(),
+        );
         if ctrl.is_null() {
             let _ = tx.send(Err("cannot create viewer control window".into()));
             return;
         }
-        let force_soft = std::env::var("VOX_VIEWER").map(|v| v.eq_ignore_ascii_case("soft")).unwrap_or(false);
-        STATE.with(|s| *s.borrow_mut() = Some(State { gpu: None, streams: Vec::new(), hosts: HashMap::new(), force_soft, d3d_failures: 0 }));
+        let force_soft = std::env::var("VOX_VIEWER")
+            .map(|v| v.eq_ignore_ascii_case("soft"))
+            .unwrap_or(false);
+        STATE.with(|s| {
+            *s.borrow_mut() = Some(State {
+                gpu: None,
+                streams: Vec::new(),
+                hosts: HashMap::new(),
+                force_soft,
+                d3d_failures: 0,
+            })
+        });
         let _ = tx.send(Ok(ctrl as isize));
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
@@ -468,7 +597,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             0
         }
         WM_KEYDOWN if wparam == VK_F11 || wparam == VK_ESCAPE => {
-            with_state(|s| s.popout_fullscreen(hwnd, if wparam == VK_ESCAPE { Some(false) } else { None }));
+            with_state(|s| {
+                s.popout_fullscreen(
+                    hwnd,
+                    if wparam == VK_ESCAPE {
+                        Some(false)
+                    } else {
+                        None
+                    },
+                )
+            });
             0
         }
         WM_CLOSE => {
@@ -484,17 +622,30 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 }
 
 fn client_size(hwnd: HWND) -> (u32, u32) {
-    let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    let mut r = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
     // SAFETY: `r` is a valid out-pointer; GetClientRect works on other threads' windows too.
     unsafe { GetClientRect(hwnd, &mut r) };
-    ((r.right - r.left).max(0) as u32, (r.bottom - r.top).max(0) as u32)
+    (
+        (r.right - r.left).max(0) as u32,
+        (r.bottom - r.top).max(0) as u32,
+    )
 }
 
 /// Outer window size for a client area of `w x h` physical pixels.
 fn outer_size(w: i32, h: i32) -> (i32, i32) {
     // SAFETY: plain metric queries on a stack RECT.
     unsafe {
-        let mut r = RECT { left: 0, top: 0, right: w, bottom: h };
+        let mut r = RECT {
+            left: 0,
+            top: 0,
+            right: w,
+            bottom: h,
+        };
         AdjustWindowRectExForDpi(&mut r, WS_OVERLAPPEDWINDOW, 0, 0, GetDpiForSystem());
         (r.right - r.left, r.bottom - r.top)
     }
@@ -515,7 +666,11 @@ fn create_popout(title: &str) -> Option<HWND> {
         // Background test mode: created hidden and never activating, then shown behind the rest.
         let bg = crate::testmode::background();
         CreateWindowExW(
-            if bg { WS_EX_NOACTIVATE | WS_EX_APPWINDOW } else { 0 },
+            if bg {
+                WS_EX_NOACTIVATE | WS_EX_APPWINDOW
+            } else {
+                0
+            },
             CLASS_NAME.as_ptr(),
             wide(title).as_ptr(),
             WS_OVERLAPPEDWINDOW | if bg { 0 } else { WS_VISIBLE },
@@ -579,16 +734,34 @@ impl Stream {
                 wp.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
                 let mut mi: MONITORINFO = std::mem::zeroed();
                 mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-                if GetWindowPlacement(p, &mut wp) == 0 || GetMonitorInfoW(MonitorFromWindow(p, MONITOR_DEFAULTTONEAREST), &mut mi) == 0 {
+                if GetWindowPlacement(p, &mut wp) == 0
+                    || GetMonitorInfoW(MonitorFromWindow(p, MONITOR_DEFAULTTONEAREST), &mut mi) == 0
+                {
                     warn!(key = %self.key, "pop-out fullscreen: cannot read the window / monitor");
                     return;
                 }
                 let style = GetWindowLongPtrW(p, GWL_STYLE);
-                SetWindowLongPtrW(p, GWL_STYLE, (style & !(WS_OVERLAPPEDWINDOW as isize)) | WS_POPUP as isize);
+                SetWindowLongPtrW(
+                    p,
+                    GWL_STYLE,
+                    (style & !(WS_OVERLAPPEDWINDOW as isize)) | WS_POPUP as isize,
+                );
                 let r = mi.rcMonitor;
                 // Background test mode: over the monitor, but behind everything and not activated.
-                let (after, quiet) = if crate::testmode::background() { (HWND_BOTTOM, SWP_NOACTIVATE) } else { (HWND_TOP, 0) };
-                SetWindowPos(p, after, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_FRAMECHANGED | SWP_NOOWNERZORDER | SWP_SHOWWINDOW | quiet);
+                let (after, quiet) = if crate::testmode::background() {
+                    (HWND_BOTTOM, SWP_NOACTIVATE)
+                } else {
+                    (HWND_TOP, 0)
+                };
+                SetWindowPos(
+                    p,
+                    after,
+                    r.left,
+                    r.top,
+                    r.right - r.left,
+                    r.bottom - r.top,
+                    SWP_FRAMECHANGED | SWP_NOOWNERZORDER | SWP_SHOWWINDOW | quiet,
+                );
                 self.fs_restore = Some((style, wp));
             } else if let Some((style, mut wp)) = self.fs_restore.take() {
                 SetWindowLongPtrW(p, GWL_STYLE, style);
@@ -599,7 +772,20 @@ impl Stream {
                     0
                 };
                 SetWindowPlacement(p, &wp);
-                SetWindowPos(p, null_mut(), 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | quiet);
+                SetWindowPos(
+                    p,
+                    null_mut(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_FRAMECHANGED
+                        | SWP_NOMOVE
+                        | SWP_NOSIZE
+                        | SWP_NOZORDER
+                        | SWP_NOOWNERZORDER
+                        | quiet,
+                );
             }
         }
         self.shared.fullscreen.store(on, Ordering::Release);
@@ -613,8 +799,16 @@ impl Stream {
             return;
         }
         let secs = now.duration_since(since).as_secs_f64().max(1e-3);
-        let (ww, wh) = self.surface.as_ref().map(|s| client_size(s.hwnd)).unwrap_or((0, 0));
-        let video = self.planes.as_ref().map(VideoPlanes::size).unwrap_or((0, 0));
+        let (ww, wh) = self
+            .surface
+            .as_ref()
+            .map(|s| client_size(s.hwnd))
+            .unwrap_or((0, 0));
+        let video = self
+            .planes
+            .as_ref()
+            .map(VideoPlanes::size)
+            .unwrap_or((0, 0));
         info!(
             key = %self.key,
             renderer = self.surface.as_ref().map(|s| s.backend.name()).unwrap_or("-"),
@@ -626,13 +820,22 @@ impl Stream {
             window = format!("{ww}x{wh}"),
             "viewer stats"
         );
-        self.stats = ViewStats { since: Some(now), ..Default::default() };
+        self.stats = ViewStats {
+            since: Some(now),
+            ..Default::default()
+        };
     }
 }
 
 /// Drop a surface; a D3D swapchain is fully released (flush) so the window can get a new one.
 fn release_surface(gpu: Option<&D3dGpu>, surface: Option<Surface>) {
-    let was_d3d = matches!(surface, Some(Surface { backend: Backend::D3d(_), .. }));
+    let was_d3d = matches!(
+        surface,
+        Some(Surface {
+            backend: Backend::D3d(_),
+            ..
+        })
+    );
     drop(surface);
     if was_d3d {
         if let Some(g) = gpu {
@@ -644,7 +847,16 @@ fn release_surface(gpu: Option<&D3dGpu>, surface: Option<Surface>) {
 impl State {
     fn command(&mut self, cmd: Cmd) {
         match cmd {
-            Cmd::Open { id, key, title, inline, style, notify, mailbox, shared } => {
+            Cmd::Open {
+                id,
+                key,
+                title,
+                inline,
+                style,
+                notify,
+                mailbox,
+                shared,
+            } => {
                 if let Some(i) = self.streams.iter().position(|s| s.key == key) {
                     // Re-opened under the same key: replace (the handle side already did).
                     self.remove(i);
@@ -672,7 +884,9 @@ impl State {
                 };
                 if s.popped {
                     s.popout = create_popout(&s.title);
-                    s.shared.popout_hwnd.store(s.popout.map(|h| h as isize).unwrap_or(0), Ordering::Release);
+                    s.shared
+                        .popout_hwnd
+                        .store(s.popout.map(|h| h as isize).unwrap_or(0), Ordering::Release);
                 }
                 info!(key = %s.key, inline, "viewer stream opened");
                 self.streams.push(s);
@@ -710,13 +924,19 @@ impl State {
                 let host = host as HWND;
                 self.hosts.retain(|_, h| *h != host);
                 for i in 0..self.streams.len() {
-                    if self.streams[i].surface.as_ref().is_some_and(|s| s.hwnd == host) {
+                    if self.streams[i]
+                        .surface
+                        .as_ref()
+                        .is_some_and(|s| s.hwnd == host)
+                    {
                         self.retarget(i);
                     }
                 }
             }
             Cmd::PopOut { key, out } => {
-                let Some(i) = self.streams.iter().position(|s| s.key == key) else { return };
+                let Some(i) = self.streams.iter().position(|s| s.key == key) else {
+                    return;
+                };
                 let s = &mut self.streams[i];
                 if out {
                     s.popped = true;
@@ -724,7 +944,9 @@ impl State {
                     if s.popout.is_none() {
                         s.popout = create_popout(&s.title);
                         s.sized_to_video = false;
-                        s.shared.popout_hwnd.store(s.popout.map(|h| h as isize).unwrap_or(0), Ordering::Release);
+                        s.shared
+                            .popout_hwnd
+                            .store(s.popout.map(|h| h as isize).unwrap_or(0), Ordering::Release);
                     }
                     info!(key = %s.key, "viewer popped out");
                 } else {
@@ -760,8 +982,11 @@ impl State {
 
     /// The user closed a pop-out window. Returns false for windows we do not track.
     fn popout_closed(&mut self, hwnd: HWND) -> bool {
-        let Some(i) = self.streams.iter().position(|s| s.popout == Some(hwnd)) else { return false };
-        let back_inline = self.streams[i].return_on_close && self.hosts.contains_key(&self.streams[i].key);
+        let Some(i) = self.streams.iter().position(|s| s.popout == Some(hwnd)) else {
+            return false;
+        };
+        let back_inline =
+            self.streams[i].return_on_close && self.hosts.contains_key(&self.streams[i].key);
         if back_inline {
             let s = &mut self.streams[i];
             s.popped = false;
@@ -815,7 +1040,12 @@ impl State {
             if let Some(gpu) = &self.gpu {
                 let (w, h) = client_size(hwnd);
                 match D3dTarget::new(gpu, hwnd as isize, w, h) {
-                    Ok(t) => return Some(Surface { hwnd, backend: Backend::D3d(t) }),
+                    Ok(t) => {
+                        return Some(Surface {
+                            hwnd,
+                            backend: Backend::D3d(t),
+                        })
+                    }
                     Err(e) => {
                         self.d3d_failures += 1;
                         warn!(error = %e, "D3D11 viewer swapchain failed; falling back to softbuffer");
@@ -838,14 +1068,24 @@ impl State {
                 return None;
             }
         };
-        Some(Surface { hwnd, backend: Backend::Soft { surface, _context: context } })
+        Some(Surface {
+            hwnd,
+            backend: Backend::Soft {
+                surface,
+                _context: context,
+            },
+        })
     }
 
     fn on_frame(&mut self, id: u64) {
-        let Some(i) = self.streams.iter().position(|s| s.id == id) else { return };
+        let Some(i) = self.streams.iter().position(|s| s.id == id) else {
+            return;
+        };
         let s = &mut self.streams[i];
         s.mailbox.pending.store(false, Ordering::Release);
-        let Some(frame) = s.mailbox.frame.lock().take() else { return };
+        let Some(frame) = s.mailbox.frame.lock().take() else {
+            return;
+        };
         let (fw, fh) = (frame.buffer().width(), frame.buffer().height());
         s.shared.video_w.store(fw, Ordering::Relaxed);
         s.shared.video_h.store(fh, Ordering::Relaxed);
@@ -857,7 +1097,17 @@ impl State {
             let k = (1600.0 / fw).min(900.0 / fh).min(1.0);
             let (w, h) = outer_size((fw * k).round() as i32, (fh * k).round() as i32);
             // SAFETY: our own live window.
-            unsafe { SetWindowPos(p, null_mut(), 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) };
+            unsafe {
+                SetWindowPos(
+                    p,
+                    null_mut(),
+                    0,
+                    0,
+                    w,
+                    h,
+                    SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+                )
+            };
         }
         if let Some(old) = s.last.replace(frame) {
             s.mailbox.recycle(old);
@@ -869,7 +1119,14 @@ impl State {
                 s.timer_armed = true;
                 let ms = (wait.as_millis() as u32).max(1);
                 // SAFETY: a timer on the viewer thread's own control window.
-                unsafe { SetTimer(CTRL.load(Ordering::Acquire) as HWND, s.id as usize, ms, None) };
+                unsafe {
+                    SetTimer(
+                        CTRL.load(Ordering::Acquire) as HWND,
+                        s.id as usize,
+                        ms,
+                        None,
+                    )
+                };
             }
             return;
         }
@@ -878,7 +1135,9 @@ impl State {
 
     /// A frame-rate-capped stream's timer fired: show its newest frame.
     fn on_timer(&mut self, id: u64) {
-        let Some(i) = self.streams.iter().position(|s| s.id == id) else { return };
+        let Some(i) = self.streams.iter().position(|s| s.id == id) else {
+            return;
+        };
         self.streams[i].timer_armed = false;
         if self.streams[i].last.is_some() {
             self.draw(i);
@@ -886,7 +1145,11 @@ impl State {
     }
 
     fn redraw_window(&mut self, hwnd: HWND) {
-        if let Some(i) = self.streams.iter().position(|s| s.surface.as_ref().is_some_and(|sf| sf.hwnd == hwnd)) {
+        if let Some(i) = self
+            .streams
+            .iter()
+            .position(|s| s.surface.as_ref().is_some_and(|sf| sf.hwnd == hwnd))
+        {
             self.draw(i);
         }
     }
@@ -894,7 +1157,9 @@ impl State {
     fn draw(&mut self, i: usize) {
         let gpu = self.gpu.as_ref();
         let s = &mut self.streams[i];
-        let Some(surface) = s.surface.as_mut() else { return };
+        let Some(surface) = s.surface.as_mut() else {
+            return;
+        };
         if !shown(surface.hwnd) {
             // Hidden (other tab, menu over it) or minimized: keep the newest frame, present
             // nothing, upload nothing.
@@ -943,7 +1208,14 @@ impl State {
             }
             Backend::Soft { surface: sb, .. } => {
                 s.last_upload = Some(Instant::now());
-                if NonZeroU32::new(w).is_some() && draw_soft(sb, PhysicalSize::new(w, h), s.last.as_ref().map(Picture::buffer), &mut s.scaled) {
+                if NonZeroU32::new(w).is_some()
+                    && draw_soft(
+                        sb,
+                        PhysicalSize::new(w, h),
+                        s.last.as_ref().map(Picture::buffer),
+                        &mut s.scaled,
+                    )
+                {
                     s.stats.presented += 1;
                     s.stats.uploads += 1;
                     s.shared.presented.fetch_add(1, Ordering::Relaxed);
@@ -974,7 +1246,9 @@ impl State {
                 s.popout = create_popout(&s.title);
                 s.sized_to_video = false;
                 s.shared.popped_out.store(true, Ordering::Release);
-                s.shared.popout_hwnd.store(s.popout.map(|h| h as isize).unwrap_or(0), Ordering::Release);
+                s.shared
+                    .popout_hwnd
+                    .store(s.popout.map(|h| h as isize).unwrap_or(0), Ordering::Release);
             }
             super::viewer::wake_ui();
         }

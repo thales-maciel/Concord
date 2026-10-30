@@ -121,14 +121,24 @@ impl TexStream {
 }
 
 impl TexViewer {
-    pub(super) fn open(&self, key: &str, title: &str, inline: bool, style: TileStyle, tile_only: bool, _notify: UnboundedSender<ViewerNotice>) -> TexStream {
+    pub(super) fn open(
+        &self,
+        key: &str,
+        title: &str,
+        inline: bool,
+        style: TileStyle,
+        tile_only: bool,
+        _notify: UnboundedSender<ViewerNotice>,
+    ) -> TexStream {
         let mut streams = self.streams.lock();
         if let Some(e) = streams.get(key) {
             *e.title.lock() = title.to_string();
             return TexStream(e.clone());
         }
         let shared = Arc::new(Shared::default());
-        shared.popped_out.store(!inline && !tile_only, Ordering::Release);
+        shared
+            .popped_out
+            .store(!inline && !tile_only, Ordering::Release);
         let e = Arc::new(Entry {
             frame: Mutex::new(None),
             pending: AtomicBool::new(false),
@@ -143,7 +153,12 @@ impl TexViewer {
         });
         streams.insert(key.to_string(), e.clone());
         drop(streams);
-        tracing::info!(key, inline, tile_only, "video stream opened (drawn by the app)");
+        tracing::info!(
+            key,
+            inline,
+            tile_only,
+            "video stream opened (drawn by the app)"
+        );
         super::viewer::wake_ui();
         TexStream(e)
     }
@@ -154,11 +169,23 @@ impl TexViewer {
             let received = e.received.load(Ordering::Relaxed);
             let presented = e.shared.presented.load(Ordering::Relaxed);
             let secs = e.opened.elapsed().as_secs();
-            tracing::info!(key, received, replaced = e.replaced.load(Ordering::Relaxed), presented, secs, "video stream closed");
+            tracing::info!(
+                key,
+                received,
+                replaced = e.replaced.load(Ordering::Relaxed),
+                presented,
+                secs,
+                "video stream closed"
+            );
             if received == 0 && secs >= 5 {
                 tracing::warn!(key, secs, "video stream closed without a single picture: nothing decodable arrived (no keyframe from the sharer)");
             } else if received > 0 && presented == 0 && secs >= 5 {
-                tracing::warn!(key, received, secs, "video stream closed: pictures arrived but none was drawn");
+                tracing::warn!(
+                    key,
+                    received,
+                    secs,
+                    "video stream closed: pictures arrived but none was drawn"
+                );
             }
         }
         super::viewer::wake_ui();
@@ -205,26 +232,45 @@ impl TexViewer {
     }
 
     pub(super) fn has_frame(&self, key: &str) -> bool {
-        self.get(key).is_some_and(|e| e.pending.load(Ordering::Acquire))
+        self.get(key)
+            .is_some_and(|e| e.pending.load(Ordering::Acquire))
     }
 
     pub(super) fn take_frame(&self, key: &str) -> Option<TexFrame> {
         let e = self.get(key)?;
         e.pending.store(false, Ordering::Release);
         let pic = e.frame.lock().take()?;
-        Some(TexFrame { pic: Some(pic), entry: e })
+        Some(TexFrame {
+            pic: Some(pic),
+            entry: e,
+        })
     }
 
     pub(super) fn info(&self, key: &str) -> Option<(TileStyle, String, u64)> {
-        self.get(key).map(|e| (e.style, e.title.lock().clone(), e.replaced.swap(0, Ordering::Relaxed)))
+        self.get(key).map(|e| {
+            (
+                e.style,
+                e.title.lock().clone(),
+                e.replaced.swap(0, Ordering::Relaxed),
+            )
+        })
     }
 }
 
 /// The planes of one picture, borrowed for an upload.
 #[derive(Debug)]
 pub enum Planes<'a> {
-    I420 { y: &'a [u8], u: &'a [u8], v: &'a [u8], strides: (u32, u32, u32) },
-    Nv12 { y: &'a [u8], uv: &'a [u8], strides: (u32, u32) },
+    I420 {
+        y: &'a [u8],
+        u: &'a [u8],
+        v: &'a [u8],
+        strides: (u32, u32, u32),
+    },
+    Nv12 {
+        y: &'a [u8],
+        uv: &'a [u8],
+        strides: (u32, u32),
+    },
 }
 
 /// A picture's planes and how to read them.
@@ -247,8 +293,28 @@ impl PlaneView<'_> {
         let (w, h) = (self.width as usize, self.height as usize);
         dst.resize(w * h * 4, 0);
         match self.planes {
-            Planes::I420 { y, u, v, strides: (sy, su, sv) } => yuv_helper::i420_to_abgr(y, sy, u, su, v, sv, dst, (w * 4) as u32, w as i32, h as i32),
-            Planes::Nv12 { y, uv, strides: (sy, suv) } => yuv_helper::nv12_to_abgr(y, sy, uv, suv, dst, (w * 4) as u32, w as i32, h as i32),
+            Planes::I420 {
+                y,
+                u,
+                v,
+                strides: (sy, su, sv),
+            } => yuv_helper::i420_to_abgr(
+                y,
+                sy,
+                u,
+                su,
+                v,
+                sv,
+                dst,
+                (w * 4) as u32,
+                w as i32,
+                h as i32,
+            ),
+            Planes::Nv12 {
+                y,
+                uv,
+                strides: (sy, suv),
+            } => yuv_helper::nv12_to_abgr(y, sy, uv, suv, dst, (w * 4) as u32, w as i32, h as i32),
         }
     }
 }
@@ -269,7 +335,10 @@ impl Drop for TexFrame {
 
 impl TexFrame {
     fn buffer(&self) -> &dyn VideoBuffer {
-        self.pic.as_ref().expect("picture present until drop").buffer()
+        self.pic
+            .as_ref()
+            .expect("picture present until drop")
+            .buffer()
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -311,18 +380,41 @@ impl TexFrame {
         }
         if let Some(i) = b.as_i420() {
             let (y, u, v) = i.data();
-            return Some(f(&PlaneView { width: w, height: h, full_range: false, planes: Planes::I420 { y, u, v, strides: i.strides() }, source: "i420" }));
+            return Some(f(&PlaneView {
+                width: w,
+                height: h,
+                full_range: false,
+                planes: Planes::I420 {
+                    y,
+                    u,
+                    v,
+                    strides: i.strides(),
+                },
+                source: "i420",
+            }));
         }
         if let Some(n) = b.as_nv12() {
             let (y, uv) = n.data();
-            return Some(f(&PlaneView { width: w, height: h, full_range: false, planes: Planes::Nv12 { y, uv, strides: n.strides() }, source: "nv12" }));
+            return Some(f(&PlaneView {
+                width: w,
+                height: h,
+                full_range: false,
+                planes: Planes::Nv12 {
+                    y,
+                    uv,
+                    strides: n.strides(),
+                },
+                source: "nv12",
+            }));
         }
         let n = b.as_native()?;
         let mut f = Some(f);
         let pb = n.get_cv_pixel_buffer();
         if !pb.is_null() {
             // SAFETY: the frame keeps its pixel buffer alive while we hold it.
-            if let Some(r) = unsafe { cv::with_nv12(pb, w, h, |v| (f.take().expect("called once"))(v)) } {
+            if let Some(r) =
+                unsafe { cv::with_nv12(pb, w, h, |v| (f.take().expect("called once"))(v)) }
+            {
                 return Some(r);
             }
         }
@@ -331,7 +423,18 @@ impl TexFrame {
         ONCE.call_once(|| tracing::warn!("viewer: decoded picture needs a CPU conversion to I420"));
         let i = VideoFrameBufferExt::to_i420(n);
         let (y, u, v) = i.data();
-        Some(f(&PlaneView { width: i.width(), height: i.height(), full_range: false, planes: Planes::I420 { y, u, v, strides: i.strides() }, source: "converted" }))
+        Some(f(&PlaneView {
+            width: i.width(),
+            height: i.height(),
+            full_range: false,
+            planes: Planes::I420 {
+                y,
+                u,
+                v,
+                strides: i.strides(),
+            },
+            source: "converted",
+        }))
     }
 }
 
@@ -397,7 +500,11 @@ mod cv {
     ///
     /// # Safety
     /// `pb` must be a valid `CVPixelBufferRef` that stays alive for the call.
-    pub(super) unsafe fn native_nv12(pb: CVPixelBufferRef, w: u32, h: u32) -> Option<super::NativeNv12> {
+    pub(super) unsafe fn native_nv12(
+        pb: CVPixelBufferRef,
+        w: u32,
+        h: u32,
+    ) -> Option<super::NativeNv12> {
         // SAFETY: `pb` is valid per the contract; these are plain getters.
         unsafe {
             let fmt = CVPixelBufferGetPixelFormatType(pb);
@@ -405,7 +512,12 @@ mod cv {
                 return None;
             }
             let io_surface = CVPixelBufferGetIOSurface(pb);
-            (!io_surface.is_null()).then_some(super::NativeNv12 { io_surface, width: w, height: h, full_range: fmt == NV12_FULL })
+            (!io_surface.is_null()).then_some(super::NativeNv12 {
+                io_surface,
+                width: w,
+                height: h,
+                full_range: fmt == NV12_FULL,
+            })
         }
     }
 
@@ -418,8 +530,15 @@ mod cv {
         unsafe {
             let fmt = CVPixelBufferGetPixelFormatType(pb);
             let planes = CVPixelBufferGetPlaneCount(pb);
-            let surface = if CVPixelBufferGetIOSurface(pb).is_null() { "no iosurface" } else { "iosurface" };
-            format!("cvpixelbuffer {} {planes} planes {surface} {w}x{h}", fourcc(fmt))
+            let surface = if CVPixelBufferGetIOSurface(pb).is_null() {
+                "no iosurface"
+            } else {
+                "iosurface"
+            };
+            format!(
+                "cvpixelbuffer {} {planes} planes {surface} {w}x{h}",
+                fourcc(fmt)
+            )
         }
     }
 
@@ -437,7 +556,12 @@ mod cv {
     ///
     /// # Safety
     /// `pb` must be a valid `CVPixelBufferRef` that stays alive for the call.
-    pub(super) unsafe fn with_nv12<R>(pb: CVPixelBufferRef, w: u32, h: u32, f: impl FnOnce(&PlaneView<'_>) -> R) -> Option<R> {
+    pub(super) unsafe fn with_nv12<R>(
+        pb: CVPixelBufferRef,
+        w: u32,
+        h: u32,
+        f: impl FnOnce(&PlaneView<'_>) -> R,
+    ) -> Option<R> {
         // SAFETY: (all calls) `pb` is valid per the contract; the plane pointers are only read
         // while the base address is locked, within the lengths CoreVideo reports.
         unsafe {
@@ -457,13 +581,22 @@ mod cv {
             };
             let (y, sy, ry) = plane(0);
             let (uv, suv, ruv) = plane(1);
-            let ok = !y.is_null() && !uv.is_null() && ry >= h as usize && ruv >= h.div_ceil(2) as usize && sy >= w as usize && suv >= w.div_ceil(2) as usize * 2;
+            let ok = !y.is_null()
+                && !uv.is_null()
+                && ry >= h as usize
+                && ruv >= h.div_ceil(2) as usize
+                && sy >= w as usize
+                && suv >= w.div_ceil(2) as usize * 2;
             let out = ok.then(|| {
                 let view = PlaneView {
                     width: w,
                     height: h,
                     full_range: fmt == NV12_FULL,
-                    planes: Planes::Nv12 { y: std::slice::from_raw_parts(y, sy * ry), uv: std::slice::from_raw_parts(uv, suv * ruv), strides: (sy as u32, suv as u32) },
+                    planes: Planes::Nv12 {
+                        y: std::slice::from_raw_parts(y, sy * ry),
+                        uv: std::slice::from_raw_parts(uv, suv * ruv),
+                        strides: (sy as u32, suv as u32),
+                    },
                     source: "cvpixelbuffer",
                 };
                 f(&view)
@@ -476,6 +609,11 @@ mod cv {
     fn log_format(fmt: u32) {
         static ONCE: std::sync::Once = std::sync::Once::new();
         let code = fourcc(fmt);
-        ONCE.call_once(|| tracing::warn!(format = code, "viewer: decoded CVPixelBuffer is not NV12; converting on the CPU"));
+        ONCE.call_once(|| {
+            tracing::warn!(
+                format = code,
+                "viewer: decoded CVPixelBuffer is not NV12; converting on the CPU"
+            )
+        });
     }
 }

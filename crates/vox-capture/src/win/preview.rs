@@ -28,13 +28,13 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering}
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D};
 use windows::Win32::System::Threading::{
-    CancelWaitableTimer, CreateWaitableTimerExW, SetWaitableTimer, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
-    TIMER_ALL_ACCESS,
+    CancelWaitableTimer, CreateWaitableTimerExW, SetWaitableTimer,
+    CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS,
 };
-use windows::core::PCWSTR;
 
 use super::video::{fit, Converter, Readback, Shared, Sink, YuvSpace};
 use super::{monotonic_now_us, os, Event, OwnedHandle};
@@ -60,7 +60,10 @@ pub fn gpu_holders() -> usize {
 const MAX_ERRORS: u32 = 8;
 
 /// The converter's output is BT.709 limited-range NV12 (see `Converter::ensure`).
-const NV12_OUT: YuvSpace = YuvSpace { bt709: true, full_range: false };
+const NV12_OUT: YuvSpace = YuvSpace {
+    bt709: true,
+    full_range: false,
+};
 
 /// Settings shared between the owner (any thread) and the capture thread.
 pub(crate) struct PreviewShared {
@@ -161,7 +164,10 @@ pub(crate) struct PreviewAttach {
 
 impl PreviewAttach {
     pub(crate) fn new(handle: &PreviewHandle, cb: FrameCallback) -> Self {
-        Self { sh: handle.0.clone(), cb }
+        Self {
+            sh: handle.0.clone(),
+            cb,
+        }
     }
 }
 
@@ -210,7 +216,11 @@ impl Drop for PreviewTap {
 }
 
 impl PreviewTap {
-    pub(crate) fn new(device: &ID3D11Device, ctx: &ID3D11DeviceContext, a: PreviewAttach) -> Result<Self> {
+    pub(crate) fn new(
+        device: &ID3D11Device,
+        ctx: &ID3D11DeviceContext,
+        a: PreviewAttach,
+    ) -> Result<Self> {
         let PreviewAttach { sh, mut cb } = a;
         let user_sh = sh.clone();
         // Frames still in the ring when the preview is switched off are not delivered.
@@ -224,9 +234,14 @@ impl PreviewTap {
         conv.set_cache_input(true);
         conv.set_input_yuv(NV12_OUT);
         let timer = unsafe {
-            CreateWaitableTimerExW(None, PCWSTR::null(), CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS.0)
-                .or_else(|_| CreateWaitableTimerExW(None, PCWSTR::null(), 0, TIMER_ALL_ACCESS.0))
-                .map_err(|e| os("CreateWaitableTimerExW(preview)", e))?
+            CreateWaitableTimerExW(
+                None,
+                PCWSTR::null(),
+                CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                TIMER_ALL_ACCESS.0,
+            )
+            .or_else(|_| CreateWaitableTimerExW(None, PCWSTR::null(), 0, TIMER_ALL_ACCESS.0))
+            .map_err(|e| os("CreateWaitableTimerExW(preview)", e))?
         };
         Ok(Self {
             cfg: sh.config(),
@@ -283,10 +298,16 @@ impl PreviewTap {
     }
 
     /// The settings changed (or the owner asked for a refresh).
-    pub(crate) fn on_wake(&mut self, device: &ID3D11Device, ctx: &ID3D11DeviceContext, main: Option<Main<'_>>) {
+    pub(crate) fn on_wake(
+        &mut self,
+        device: &ID3D11Device,
+        ctx: &ID3D11DeviceContext,
+        main: Option<Main<'_>>,
+    ) {
         let new = self.sh.config();
         let old = std::mem::replace(&mut self.cfg, new);
-        if new.on && (!old.on || (new.max_width, new.max_height) != (old.max_width, old.max_height)) {
+        if new.on && (!old.on || (new.max_width, new.max_height) != (old.max_width, old.max_height))
+        {
             // Shown again or resized: show the current picture now, whatever the pace.
             self.last_tap = None;
             self.dirty = true;
@@ -296,12 +317,23 @@ impl PreviewTap {
         self.service(device, ctx, main, None);
     }
 
-    pub(crate) fn on_timer(&mut self, device: &ID3D11Device, ctx: &ID3D11DeviceContext, main: Option<Main<'_>>) {
+    pub(crate) fn on_timer(
+        &mut self,
+        device: &ID3D11Device,
+        ctx: &ID3D11DeviceContext,
+        main: Option<Main<'_>>,
+    ) {
         self.service(device, ctx, main, None);
     }
 
     /// A new picture was converted for the encoder.
-    pub(crate) fn on_frame(&mut self, device: &ID3D11Device, ctx: &ID3D11DeviceContext, main: Main<'_>, bgra: Bgra<'_>) {
+    pub(crate) fn on_frame(
+        &mut self,
+        device: &ID3D11Device,
+        ctx: &ID3D11DeviceContext,
+        main: Main<'_>,
+        bgra: Bgra<'_>,
+    ) {
         self.dirty = true;
         self.service(device, ctx, Some(main), Some(bgra));
     }
@@ -326,7 +358,7 @@ impl PreviewTap {
 
     fn arm_timer(&self, after: Duration) {
         let due: i64 = -((after.as_micros() as i64).max(500) * 10); // relative, 100 ns units
-        // SAFETY: a valid timer handle owned by `self`.
+                                                                    // SAFETY: a valid timer handle owned by `self`.
         let _ = unsafe { SetWaitableTimer(self.timer.0, &due, 0, None, None, false) };
     }
 
@@ -337,7 +369,13 @@ impl PreviewTap {
 
     /// Tap now if the preview is on, something changed and the pace allows; else arrange to be
     /// called again when it does.
-    fn service(&mut self, device: &ID3D11Device, ctx: &ID3D11DeviceContext, main: Option<Main<'_>>, bgra: Option<Bgra<'_>>) {
+    fn service(
+        &mut self,
+        device: &ID3D11Device,
+        ctx: &ID3D11DeviceContext,
+        main: Option<Main<'_>>,
+        bgra: Option<Bgra<'_>>,
+    ) {
         if self.dead {
             return;
         }
@@ -375,7 +413,15 @@ impl PreviewTap {
             }
         } else {
             match main {
-                Some(m) => self.tap(device, ctx, m.tex, (m.w, m.h), (m.w, m.h), Some(NV12_OUT), ts),
+                Some(m) => self.tap(
+                    device,
+                    ctx,
+                    m.tex,
+                    (m.w, m.h),
+                    (m.w, m.h),
+                    Some(NV12_OUT),
+                    ts,
+                ),
                 None => return, // nothing converted yet
             }
         };
@@ -412,13 +458,21 @@ impl PreviewTap {
         if content.0 < 2 || content.1 < 2 {
             return Ok(());
         }
-        let (pw, ph) = fit(content.0, content.1, self.cfg.max_width, self.cfg.max_height);
+        let (pw, ph) = fit(
+            content.0,
+            content.1,
+            self.cfg.max_width,
+            self.cfg.max_height,
+        );
         match yuv {
             Some(y) => self.conv.set_input_yuv(y),
             None => self.conv.set_input_rgb(),
         }
         self.conv.ensure(device, tex_size.0, tex_size.1, pw, ph)?;
-        let out = self.conv.convert_slice(src, 0, content.0, content.1)?.clone();
+        let out = self
+            .conv
+            .convert_slice(src, 0, content.0, content.1)?
+            .clone();
         Sink::submit(&mut self.rb, ctx, &out, pw, ph, ts_us)
     }
 
@@ -446,15 +500,30 @@ mod tests {
 
     #[test]
     fn settings_are_clamped_and_shared() {
-        let c = clamp_cfg(PreviewConfig { on: true, fps: 500, max_width: 99_999, max_height: 3 });
+        let c = clamp_cfg(PreviewConfig {
+            on: true,
+            fps: 500,
+            max_width: 99_999,
+            max_height: 3,
+        });
         assert_eq!((c.fps, c.max_width, c.max_height), (30, 1920, 18));
-        let c = clamp_cfg(PreviewConfig { on: true, fps: 0, max_width: 641, max_height: 361 });
+        let c = clamp_cfg(PreviewConfig {
+            on: true,
+            fps: 0,
+            max_width: 641,
+            max_height: 361,
+        });
         assert_eq!((c.fps, c.max_width, c.max_height), (1, 640, 360));
 
         let h = PreviewHandle::new().unwrap();
         assert_eq!(h.config(), PreviewConfig::default());
         assert!(!h.config().on);
-        let want = PreviewConfig { on: true, fps: 15, max_width: 960, max_height: 540 };
+        let want = PreviewConfig {
+            on: true,
+            fps: 15,
+            max_width: 960,
+            max_height: 540,
+        };
         h.set(want);
         assert_eq!(h.clone().config(), want);
         assert_eq!(h.frames(), 0);

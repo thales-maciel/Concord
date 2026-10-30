@@ -18,7 +18,10 @@ use std::io::Cursor;
 use image::codecs::gif::GifDecoder;
 use image::codecs::webp::WebPDecoder;
 use image::{AnimationDecoder, DynamicImage, ImageDecoder, ImageEncoder, Limits};
-use vox_proto::{ATTACHMENT_MAX_ANIMATED_BYTES, ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_SIDE, ATTACHMENT_MAX_THUMB_BYTES, ATTACHMENT_THUMB_BOX};
+use vox_proto::{
+    ATTACHMENT_MAX_ANIMATED_BYTES, ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_SIDE,
+    ATTACHMENT_MAX_THUMB_BYTES, ATTACHMENT_THUMB_BOX,
+};
 
 use crate::linkpreview::thumb::{decode_untrusted, ThumbError};
 
@@ -49,7 +52,9 @@ impl Kind {
     }
 
     pub fn from_mime(m: &str) -> Option<Kind> {
-        [Kind::Jpeg, Kind::Png, Kind::Gif, Kind::WebP].into_iter().find(|k| k.mime() == m)
+        [Kind::Jpeg, Kind::Png, Kind::Gif, Kind::WebP]
+            .into_iter()
+            .find(|k| k.mime() == m)
     }
 
     pub fn ext(self) -> &'static str {
@@ -132,11 +137,24 @@ pub fn image(raw: &[u8]) -> Result<(Clean, DynamicImage), Refusal> {
         return Err(Refusal::Dimensions);
     }
     let animated = container_animated && verify_animation(kind, &bytes, width, height)? > 1;
-    let cap = if animated { ATTACHMENT_MAX_ANIMATED_BYTES } else { ATTACHMENT_MAX_BYTES };
+    let cap = if animated {
+        ATTACHMENT_MAX_ANIMATED_BYTES
+    } else {
+        ATTACHMENT_MAX_BYTES
+    };
     if bytes.len() > cap {
         return Err(Refusal::TooBig { animated });
     }
-    Ok((Clean { bytes, kind: kind_out, width, height, animated }, first))
+    Ok((
+        Clean {
+            bytes,
+            kind: kind_out,
+            width,
+            height,
+            animated,
+        },
+        first,
+    ))
 }
 
 /// Check (and clean) the thumbnail the app sent for an image of `w`x`h`: a still JPEG / PNG /
@@ -155,7 +173,13 @@ pub fn thumb(raw: &[u8], w: u32, h: u32) -> Result<Clean, Refusal> {
     }
     let img = decode_untrusted(&bytes).map_err(|_| Refusal::BadThumb)?;
     let (tw, th) = (img.width(), img.height());
-    if tw == 0 || th == 0 || tw > ATTACHMENT_THUMB_BOX || th > ATTACHMENT_THUMB_BOX || tw > w || th > h {
+    if tw == 0
+        || th == 0
+        || tw > ATTACHMENT_THUMB_BOX
+        || th > ATTACHMENT_THUMB_BOX
+        || tw > w
+        || th > h
+    {
         return Err(Refusal::BadThumb);
     }
     // Same shape as the image (rounding allows a pixel or two).
@@ -164,7 +188,13 @@ pub fn thumb(raw: &[u8], w: u32, h: u32) -> Result<Clean, Refusal> {
     if (expect_h - f64::from(th)).abs() > 2.0 && (expect_w - f64::from(tw)).abs() > 2.0 {
         return Err(Refusal::BadThumb);
     }
-    Ok(Clean { bytes, kind, width: tw, height: th, animated: false })
+    Ok(Clean {
+        bytes,
+        kind,
+        width: tw,
+        height: th,
+        animated: false,
+    })
 }
 
 /// The hub's own thumbnail of `first` (the app sent none and the image is bigger than the
@@ -175,26 +205,48 @@ pub fn make_thumb(first: &DynamicImage) -> Option<Clean> {
     let (bytes, kind) = if transparent {
         let rgba = t.to_rgba8();
         let mut out = Vec::new();
-        image::codecs::png::PngEncoder::new(&mut out).write_image(rgba.as_raw(), rgba.width(), rgba.height(), image::ExtendedColorType::Rgba8).ok()?;
+        image::codecs::png::PngEncoder::new(&mut out)
+            .write_image(
+                rgba.as_raw(),
+                rgba.width(),
+                rgba.height(),
+                image::ExtendedColorType::Rgba8,
+            )
+            .ok()?;
         (out, Kind::Png)
     } else {
         (encode_jpeg(&t, THUMB_JPEG_QUALITY)?, Kind::Jpeg)
     };
-    Some(Clean { bytes, kind, width: t.width(), height: t.height(), animated: false })
+    Some(Clean {
+        bytes,
+        kind,
+        width: t.width(),
+        height: t.height(),
+        animated: false,
+    })
 }
 
 fn encode_jpeg(img: &DynamicImage, quality: u8) -> Option<Vec<u8>> {
     let rgb = img.to_rgb8();
     let mut out = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality).encode_image(&rgb).ok()?;
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality)
+        .encode_image(&rgb)
+        .ok()?;
     Some(out)
 }
 
 /// Does this JPEG's EXIF ask for a rotation / flip?
 fn needs_rotation(raw: &[u8]) -> bool {
-    let Ok(reader) = image::ImageReader::with_format(Cursor::new(raw), image::ImageFormat::Jpeg).into_decoder() else { return false };
+    let Ok(reader) =
+        image::ImageReader::with_format(Cursor::new(raw), image::ImageFormat::Jpeg).into_decoder()
+    else {
+        return false;
+    };
     let mut reader = reader;
-    !matches!(reader.orientation(), Ok(image::metadata::Orientation::NoTransforms) | Err(_))
+    !matches!(
+        reader.orientation(),
+        Ok(image::metadata::Orientation::NoTransforms) | Err(_)
+    )
 }
 
 fn limits() -> Limits {
@@ -255,7 +307,10 @@ pub fn strip(kind: Kind, b: &[u8]) -> Option<(Vec<u8>, bool)> {
 }
 
 fn be16(b: &[u8], i: usize) -> Option<usize> {
-    Some(usize::from(u16::from_be_bytes([*b.get(i)?, *b.get(i + 1)?])))
+    Some(usize::from(u16::from_be_bytes([
+        *b.get(i)?,
+        *b.get(i + 1)?,
+    ])))
 }
 
 fn le32(b: &[u8], i: usize) -> Option<usize> {
@@ -366,7 +421,10 @@ fn strip_png(b: &[u8]) -> Option<Vec<u8>> {
         if kind == b"IHDR" {
             ihdr = true;
         }
-        if matches!(kind, b"IHDR" | b"PLTE" | b"tRNS" | b"IDAT" | b"sRGB" | b"IEND") {
+        if matches!(
+            kind,
+            b"IHDR" | b"PLTE" | b"tRNS" | b"IDAT" | b"sRGB" | b"IEND"
+        ) {
             out.extend(&b[i..end]);
         }
         i = end;
@@ -481,7 +539,10 @@ fn strip_webp(b: &[u8]) -> Option<(Vec<u8>, bool)> {
         if stop > end {
             return None;
         }
-        let keep = matches!(&fourcc, b"VP8 " | b"VP8L" | b"VP8X" | b"ALPH" | b"ANIM" | b"ANMF");
+        let keep = matches!(
+            &fourcc,
+            b"VP8 " | b"VP8L" | b"VP8X" | b"ALPH" | b"ANIM" | b"ANMF"
+        );
         if keep {
             out.extend(fourcc);
             out.extend((size as u32).to_le_bytes());
@@ -538,7 +599,8 @@ pub mod tests {
             let mut enc = GifEncoder::new(&mut out);
             enc.set_repeat(Repeat::Infinite).unwrap();
             for c in frames {
-                enc.encode_frame(image::Frame::new(RgbaImage::from_pixel(w, h, *c))).unwrap();
+                enc.encode_frame(image::Frame::new(RgbaImage::from_pixel(w, h, *c)))
+                    .unwrap();
             }
         }
         out
@@ -547,7 +609,11 @@ pub mod tests {
     /// A GIF with a comment and an XMP application extension spliced in after the header.
     fn gif_with_junk(g: &[u8]) -> Vec<u8> {
         let flags = g[10];
-        let gct = if flags & 0x80 != 0 { 3 * (1usize << ((flags & 7) + 1)) } else { 0 };
+        let gct = if flags & 0x80 != 0 {
+            3 * (1usize << ((flags & 7) + 1))
+        } else {
+            0
+        };
         let at = 13 + gct;
         let mut out = g[..at].to_vec();
         out.extend([0x21, 0xfe, 7]);
@@ -566,7 +632,9 @@ pub mod tests {
     fn webp_with_metadata() -> Vec<u8> {
         let img = RgbImage::from_fn(64, 48, |x, y| Rgb([(x * 4) as u8, (y * 5) as u8, 90]));
         let mut plain = Vec::new();
-        image::codecs::webp::WebPEncoder::new_lossless(&mut plain).encode(img.as_raw(), 64, 48, image::ExtendedColorType::Rgb8).unwrap();
+        image::codecs::webp::WebPEncoder::new_lossless(&mut plain)
+            .encode(img.as_raw(), 64, 48, image::ExtendedColorType::Rgb8)
+            .unwrap();
         let vp8l = &plain[12..]; // the VP8L chunk
         let chunk = |fourcc: &[u8], data: &[u8]| {
             let mut c = fourcc.to_vec();
@@ -601,17 +669,31 @@ pub mod tests {
         let src = jpeg(320, 200);
         let dirty = with_app1(&src, b"Exif\0\0SECRET-GPS-DATA");
         let (clean, first) = image(&dirty).unwrap();
-        assert_eq!((clean.kind, clean.width, clean.height, clean.animated), (Kind::Jpeg, 320, 200, false));
+        assert_eq!(
+            (clean.kind, clean.width, clean.height, clean.animated),
+            (Kind::Jpeg, 320, 200, false)
+        );
         assert!(!has(&clean.bytes, b"SECRET") && !has(&clean.bytes, b"COMMENT"));
-        assert!(clean.bytes.len() <= src.len(), "not re-encoded: no bigger than the original");
+        assert!(
+            clean.bytes.len() <= src.len(),
+            "not re-encoded: no bigger than the original"
+        );
         assert_eq!((first.width(), first.height()), (320, 200));
     }
 
     #[test]
     fn a_rotated_jpeg_is_re_encoded_upright() {
-        let src = RgbImage::from_fn(400, 200, |x, _| if x < 200 { Rgb([255, 0, 0]) } else { Rgb([0, 0, 255]) });
+        let src = RgbImage::from_fn(400, 200, |x, _| {
+            if x < 200 {
+                Rgb([255, 0, 0])
+            } else {
+                Rgb([0, 0, 255])
+            }
+        });
         let mut j = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut j, 95).encode_image(&src).unwrap();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut j, 95)
+            .encode_image(&src)
+            .unwrap();
         let exif = b"Exif\0\0MM\0\x2a\0\0\0\x08\0\x01\x01\x12\0\x03\0\0\0\x01\0\x06\0\0\0\0\0\0";
         let (clean, _) = image(&with_app1(&j, exif)).unwrap();
         assert_eq!((clean.width, clean.height), (200, 400));
@@ -633,12 +715,23 @@ pub mod tests {
         dirty.extend(&p[33..]);
         let (clean, _) = image(&dirty).unwrap();
         assert!(!has(&clean.bytes, b"SECRET"));
-        assert_eq!((clean.kind, clean.width, clean.height), (Kind::Png, 100, 80));
+        assert_eq!(
+            (clean.kind, clean.width, clean.height),
+            (Kind::Png, 100, 80)
+        );
     }
 
     #[test]
     fn gif_junk_is_dropped_and_animation_kept() {
-        let g = gif(&[Rgba([255, 0, 0, 255]), Rgba([0, 255, 0, 255]), Rgba([0, 0, 255, 255])], 40, 30);
+        let g = gif(
+            &[
+                Rgba([255, 0, 0, 255]),
+                Rgba([0, 255, 0, 255]),
+                Rgba([0, 0, 255, 255]),
+            ],
+            40,
+            30,
+        );
         let dirty = gif_with_junk(&g);
         assert!(has(&dirty, b"SECRET1"));
         let (clean, _) = image(&dirty).unwrap();
@@ -653,20 +746,44 @@ pub mod tests {
     #[test]
     fn webp_metadata_chunks_and_flags_are_dropped() {
         let dirty = webp_with_metadata();
-        assert!(image::load_from_memory(&dirty).is_ok(), "the test file itself is valid");
+        assert!(
+            image::load_from_memory(&dirty).is_ok(),
+            "the test file itself is valid"
+        );
         let (clean, _) = image(&dirty).unwrap();
-        assert!(!has(&clean.bytes, b"SECRET") && !has(&clean.bytes, b"EXIF") && !has(&clean.bytes, b"ICCP"));
-        assert_eq!(clean.bytes[20] & (0x20 | 0x08 | 0x04), 0, "VP8X flags cleared");
-        assert_eq!((clean.width, clean.height, clean.kind), (64, 48, Kind::WebP));
-        assert_eq!(u32::from_le_bytes(clean.bytes[4..8].try_into().unwrap()) as usize, clean.bytes.len() - 8);
+        assert!(
+            !has(&clean.bytes, b"SECRET")
+                && !has(&clean.bytes, b"EXIF")
+                && !has(&clean.bytes, b"ICCP")
+        );
+        assert_eq!(
+            clean.bytes[20] & (0x20 | 0x08 | 0x04),
+            0,
+            "VP8X flags cleared"
+        );
+        assert_eq!(
+            (clean.width, clean.height, clean.kind),
+            (64, 48, Kind::WebP)
+        );
+        assert_eq!(
+            u32::from_le_bytes(clean.bytes[4..8].try_into().unwrap()) as usize,
+            clean.bytes.len() - 8
+        );
     }
 
     #[test]
     fn bombs_junk_and_oversize_are_refused() {
         assert_eq!(image(b"<html>").unwrap_err(), Refusal::Unsupported);
         assert_eq!(image(b"").unwrap_err(), Refusal::Unsupported);
-        assert_eq!(image(&png_claiming(30_000, 30_000)).unwrap_err(), Refusal::Dimensions);
-        assert_eq!(image(&png(4200, 10)).unwrap_err(), Refusal::Dimensions, "wider than the 4096 cap");
+        assert_eq!(
+            image(&png_claiming(30_000, 30_000)).unwrap_err(),
+            Refusal::Dimensions
+        );
+        assert_eq!(
+            image(&png(4200, 10)).unwrap_err(),
+            Refusal::Dimensions,
+            "wider than the 4096 cap"
+        );
         let mut cut = png(300, 300);
         cut.truncate(cut.len() / 2);
         assert_eq!(image(&cut).unwrap_err(), Refusal::Damaged);
@@ -677,18 +794,34 @@ pub mod tests {
             Rgb([(seed >> 24) as u8, (seed >> 16) as u8, (seed >> 8) as u8])
         });
         let mut big = Vec::new();
-        image::codecs::png::PngEncoder::new(&mut big).write_image(noisy.as_raw(), 1800, 1800, image::ExtendedColorType::Rgb8).unwrap();
+        image::codecs::png::PngEncoder::new(&mut big)
+            .write_image(noisy.as_raw(), 1800, 1800, image::ExtendedColorType::Rgb8)
+            .unwrap();
         assert!(big.len() > ATTACHMENT_MAX_BYTES);
-        assert_eq!(image(&big).unwrap_err(), Refusal::TooBig { animated: false });
+        assert_eq!(
+            image(&big).unwrap_err(),
+            Refusal::TooBig { animated: false }
+        );
     }
 
     #[test]
     fn thumbnails_must_match_the_image() {
         let t = jpeg(400, 225);
         assert!(thumb(&t, 1920, 1080).is_ok());
-        assert_eq!(thumb(&t, 1080, 1920).unwrap_err(), Refusal::BadThumb, "wrong shape");
-        assert_eq!(thumb(&jpeg(500, 281), 1920, 1080).unwrap_err(), Refusal::BadThumb, "outside the box");
-        assert_eq!(thumb(&gif(&[Rgba([0, 0, 0, 255])], 40, 40), 400, 400).unwrap_err(), Refusal::BadThumb);
+        assert_eq!(
+            thumb(&t, 1080, 1920).unwrap_err(),
+            Refusal::BadThumb,
+            "wrong shape"
+        );
+        assert_eq!(
+            thumb(&jpeg(500, 281), 1920, 1080).unwrap_err(),
+            Refusal::BadThumb,
+            "outside the box"
+        );
+        assert_eq!(
+            thumb(&gif(&[Rgba([0, 0, 0, 255])], 40, 40), 400, 400).unwrap_err(),
+            Refusal::BadThumb
+        );
         assert_eq!(thumb(b"junk", 10, 10).unwrap_err(), Refusal::BadThumb);
     }
 

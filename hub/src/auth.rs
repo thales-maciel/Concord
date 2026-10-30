@@ -2,10 +2,10 @@
 //! brakes.
 //!
 //! - A name can be protected by a personal password (argon2id, hashed on the blocking pool).
-//!   Required for every role above Membro; optional for Membros. A protected name needs the
+//!   Required for every role above Member; optional for Members. A protected name needs the
 //!   password, a reset code or a remembered device token on top of the server password.
 //! - Device tokens and session tokens are random 256-bit values stored as sha256 hashes.
-//! - Reset codes (the owner's "Redefinir senha pessoal", or `concord-server --reset-password`) are
+//! - Reset codes (the owner's "Reset personal password", or `concord-server --reset-password`) are
 //!   random 50-bit codes, stored hashed, valid for [`RESET_CODE_TTL_MS`], compared in constant time.
 //! - [`Throttle`]: after a few failures in a row, a name or an address must wait (1 s, doubling,
 //!   at most a minute) before its next attempt is even checked. A password check reserves its
@@ -30,7 +30,8 @@ pub const ARGON2_AT_ONCE: usize = 2;
 
 /// argon2id with the crate's defaults (19 MiB, 2 passes): ~20-50 ms here, run off the runtime.
 pub fn hash_password(password: &str) -> anyhow::Result<String> {
-    let salt = SaltString::encode_b64(&random_bytes::<16>()).map_err(|e| anyhow::anyhow!("salt: {e}"))?;
+    let salt =
+        SaltString::encode_b64(&random_bytes::<16>()).map_err(|e| anyhow::anyhow!("salt: {e}"))?;
     Argon2::default()
         .hash_password(password.as_bytes(), &salt)
         .map(|h| h.to_string())
@@ -40,7 +41,9 @@ pub fn hash_password(password: &str) -> anyhow::Result<String> {
 /// Constant-time verification (inside argon2).
 pub fn verify_password(password: &str, phc: &str) -> bool {
     match PasswordHash::new(phc) {
-        Ok(h) => Argon2::default().verify_password(password.as_bytes(), &h).is_ok(),
+        Ok(h) => Argon2::default()
+            .verify_password(password.as_bytes(), &h)
+            .is_ok(),
         Err(_) => false,
     }
 }
@@ -61,7 +64,11 @@ pub fn new_reset_code() -> String {
 
 /// Codes are typed by people: ignore case, dashes and spaces.
 pub fn reset_code_hash(code: &str) -> String {
-    let norm: String = code.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_uppercase()).collect();
+    let norm: String = code
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
     // The salt keeps its pre-concord name: stored reset codes were hashed with it.
     sha256_hex(&format!("voxhub-reset:{norm}"))
 }
@@ -89,7 +96,12 @@ pub enum Denied {
 /// Check the personal-password part of a login. `device_ok` says whether the device token that
 /// was sent (if any) is a live token of this user. Password checks are slow (argon2): call this
 /// on the blocking pool.
-pub fn check(row: &UserRow, password: Option<&str>, device_ok: bool, now_ms: i64) -> Result<Proof, Denied> {
+pub fn check(
+    row: &UserRow,
+    password: Option<&str>,
+    device_ok: bool,
+    now_ms: i64,
+) -> Result<Proof, Denied> {
     if let Some(phc) = &row.password_hash {
         if device_ok {
             return Ok(Proof::DeviceToken);
@@ -192,7 +204,9 @@ impl Throttle {
         if since >= FORGET_AFTER {
             return None;
         }
-        Self::wait_for(e.failures).checked_sub(since).filter(|d| !d.is_zero())
+        Self::wait_for(e.failures)
+            .checked_sub(since)
+            .filter(|d| !d.is_zero())
     }
 
     /// Check-and-reserve, atomically: `Err(wait)` when `key` must wait, counting the checks of
@@ -200,7 +214,11 @@ impl Throttle {
     /// reserved until the [`Attempt`] is resolved or dropped.
     pub fn begin(&self, key: &str) -> Result<Attempt<'_>, Duration> {
         let mut g = self.lock();
-        let e = g.entry(key.to_string()).or_insert(Entry { failures: 0, last: Instant::now(), in_flight: 0 });
+        let e = g.entry(key.to_string()).or_insert(Entry {
+            failures: 0,
+            last: Instant::now(),
+            in_flight: 0,
+        });
         if e.in_flight == 0 && e.last.elapsed() >= FORGET_AFTER {
             e.failures = 0;
         }
@@ -216,7 +234,11 @@ impl Throttle {
             }
         }
         e.in_flight += 1;
-        Ok(Attempt { t: self, key: key.to_string(), done: false })
+        Ok(Attempt {
+            t: self,
+            key: key.to_string(),
+            done: false,
+        })
     }
 
     /// A reserved check ended: `Some(true)` failed, `Some(false)` succeeded, `None` proved
@@ -246,7 +268,11 @@ impl Throttle {
         if g.len() > 4096 {
             g.retain(|_, e| e.in_flight > 0 || e.last.elapsed() < FORGET_AFTER);
         }
-        let e = g.entry(key.to_string()).or_insert(Entry { failures: 0, last: Instant::now(), in_flight: 0 });
+        let e = g.entry(key.to_string()).or_insert(Entry {
+            failures: 0,
+            last: Instant::now(),
+            in_flight: 0,
+        });
         if e.last.elapsed() >= FORGET_AFTER {
             e.failures = 0;
         }
@@ -320,10 +346,20 @@ mod tests {
         assert_eq!(code.len(), 12);
         r.reset_hash = Some(reset_code_hash(&code));
         r.reset_expires_ms = Some(1000);
-        assert_eq!(check(&r, None, true, 0), Err(Denied::Required), "device tokens do not survive a reset");
-        assert_eq!(check(&r, Some(&code.to_lowercase().replace('-', " ")), false, 999), Ok(Proof::ResetCode));
+        assert_eq!(
+            check(&r, None, true, 0),
+            Err(Denied::Required),
+            "device tokens do not survive a reset"
+        );
+        assert_eq!(
+            check(&r, Some(&code.to_lowercase().replace('-', " ")), false, 999),
+            Ok(Proof::ResetCode)
+        );
         assert_eq!(check(&r, Some(&code), false, 1001), Err(Denied::Expired));
-        assert_eq!(check(&r, Some("AAAA-AAAA-AA"), false, 0), Err(Denied::Wrong));
+        assert_eq!(
+            check(&r, Some("AAAA-AAAA-AA"), false, 0),
+            Err(Denied::Wrong)
+        );
     }
 
     #[test]
@@ -358,7 +394,10 @@ mod tests {
         assert!(t.begin("k").is_err(), "three failures: wait");
         t.lock().get_mut("k").unwrap().last -= FIRST_WAIT;
         let d = t.begin("k").unwrap();
-        assert!(t.begin("k").is_err(), "one check at a time once the brake is on");
+        assert!(
+            t.begin("k").is_err(),
+            "one check at a time once the brake is on"
+        );
         drop(d);
         // A success clears the name; a dropped attempt only releases its reservation.
         let e = t.begin("k").unwrap();

@@ -1,4 +1,4 @@
-//! Microphone level meter and voice-activity gate ("Sensibilidade de entrada").
+//! Microphone level meter and voice-activity gate ("Input sensitivity").
 //!
 //! Both run in the mic callback on the signal that would be sent: after the WebRTC APM (echo
 //! cancellation, noise suppression, AGC), in 10 ms chunks. The LiveKit APM wrapper exposes no
@@ -102,14 +102,22 @@ pub struct GateConfig {
 
 impl Default for GateConfig {
     fn default() -> Self {
-        Self { mode: GateMode::Auto, threshold_db: DEFAULT_THRESHOLD_DB, hold_ms: DEFAULT_HOLD_MS }
+        Self {
+            mode: GateMode::Auto,
+            threshold_db: DEFAULT_THRESHOLD_DB,
+            hold_ms: DEFAULT_HOLD_MS,
+        }
     }
 }
 
 impl GateConfig {
     /// Clamp everything into its valid range (NaN falls back to the default).
     pub fn sanitized(self) -> Self {
-        let threshold_db = if self.threshold_db.is_nan() { DEFAULT_THRESHOLD_DB } else { self.threshold_db };
+        let threshold_db = if self.threshold_db.is_nan() {
+            DEFAULT_THRESHOLD_DB
+        } else {
+            self.threshold_db
+        };
         Self {
             mode: self.mode,
             threshold_db: threshold_db.clamp(THRESHOLD_MIN_DB, THRESHOLD_MAX_DB),
@@ -156,7 +164,8 @@ impl VoiceGate {
     pub fn set_config(&self, cfg: GateConfig) {
         let cfg = cfg.sanitized();
         self.mode.store(cfg.mode.to_u8(), Ordering::Relaxed);
-        self.threshold.store(cfg.threshold_db.to_bits(), Ordering::Relaxed);
+        self.threshold
+            .store(cfg.threshold_db.to_bits(), Ordering::Relaxed);
         self.hold_ms.store(cfg.hold_ms, Ordering::Relaxed);
     }
 
@@ -332,7 +341,11 @@ impl GateProcessor {
             GateMode::Auto if !self.calibrated => AUTO_MAX_DB,
             GateMode::Auto => (self.floor_db + AUTO_MARGIN_DB).clamp(AUTO_MIN_DB, AUTO_MAX_DB),
         };
-        let need = if self.open { threshold - HYSTERESIS_DB } else { threshold };
+        let need = if self.open {
+            threshold - HYSTERESIS_DB
+        } else {
+            threshold
+        };
         if peak >= need {
             self.open = true;
             self.hold_left_ms = cfg.hold_ms as f32;
@@ -352,8 +365,12 @@ impl GateProcessor {
 
         self.apply_fade(chunk);
 
-        self.gate.level.store(self.meter_db.to_bits(), Ordering::Relaxed);
-        self.gate.active_threshold.store(threshold.to_bits(), Ordering::Relaxed);
+        self.gate
+            .level
+            .store(self.meter_db.to_bits(), Ordering::Relaxed);
+        self.gate
+            .active_threshold
+            .store(threshold.to_bits(), Ordering::Relaxed);
         self.gate.open.store(self.open, Ordering::Relaxed);
         self.open
     }
@@ -367,7 +384,11 @@ impl GateProcessor {
             return;
         }
         let rising = target > self.gain;
-        let step = if rising { 1.0 / FADE_IN_SAMPLES } else { -1.0 / FADE_OUT_SAMPLES };
+        let step = if rising {
+            1.0 / FADE_IN_SAMPLES
+        } else {
+            -1.0 / FADE_OUT_SAMPLES
+        };
         for s in chunk.iter_mut() {
             self.gain = (self.gain + step).clamp(0.0, 1.0);
             *s = (*s as f32 * self.gain) as i16;
@@ -389,7 +410,10 @@ mod tests {
 
     impl Sig {
         fn new() -> Self {
-            Self { phase: 0.0, rng: 12345 }
+            Self {
+                phase: 0.0,
+                rng: 12345,
+            }
         }
 
         /// 1 kHz sine whose RMS is `db` dBFS.
@@ -405,7 +429,9 @@ mod tests {
 
         /// Speech-like: the level wanders between about -20 and -40 dBFS from chunk to chunk.
         fn speech(&mut self, i: usize) -> Vec<i16> {
-            const SHAPE: [f32; 12] = [-20.0, -22.0, -26.0, -32.0, -38.0, -30.0, -22.0, -20.0, -24.0, -34.0, -40.0, -28.0];
+            const SHAPE: [f32; 12] = [
+                -20.0, -22.0, -26.0, -32.0, -38.0, -30.0, -22.0, -20.0, -24.0, -34.0, -40.0, -28.0,
+            ];
             self.tone(SHAPE[i % SHAPE.len()])
         }
 
@@ -423,7 +449,11 @@ mod tests {
     }
 
     fn manual(threshold_db: f32, hold_ms: u32) -> (Arc<VoiceGate>, GateProcessor) {
-        let gate = Arc::new(VoiceGate::new(GateConfig { mode: GateMode::Manual, threshold_db, hold_ms }));
+        let gate = Arc::new(VoiceGate::new(GateConfig {
+            mode: GateMode::Manual,
+            threshold_db,
+            hold_ms,
+        }));
         (gate.clone(), GateProcessor::new(gate))
     }
 
@@ -432,7 +462,11 @@ mod tests {
         (gate.clone(), GateProcessor::new(gate))
     }
 
-    fn feed(p: &mut GateProcessor, make: &mut dyn FnMut() -> Vec<i16>, chunks: usize) -> Vec<(bool, Vec<i16>)> {
+    fn feed(
+        p: &mut GateProcessor,
+        make: &mut dyn FnMut() -> Vec<i16>,
+        chunks: usize,
+    ) -> Vec<(bool, Vec<i16>)> {
         (0..chunks)
             .map(|_| {
                 let mut c = make();
@@ -447,7 +481,9 @@ mod tests {
         assert_eq!(rms_dbfs(&[]), MIN_DB);
         assert_eq!(rms_dbfs(&[0; 480]), MIN_DB);
         // Full-scale square wave is 0 dBFS (i16::MIN has the full magnitude).
-        let sq: Vec<i16> = (0..480).map(|i| if i % 2 == 0 { i16::MIN } else { 32767 }).collect();
+        let sq: Vec<i16> = (0..480)
+            .map(|i| if i % 2 == 0 { i16::MIN } else { 32767 })
+            .collect();
         assert!(rms_dbfs(&sq).abs() < 0.01, "{}", rms_dbfs(&sq));
         // Half scale = -6.02 dB.
         assert!((rms_dbfs(&vec![16384; 480]) + 6.02).abs() < 0.01);
@@ -480,17 +516,28 @@ mod tests {
         let first = &burst[0].1;
         assert!(first[0].abs() < 200, "fade starts near zero: {}", first[0]);
         let peak_late = first[240..].iter().map(|s| s.abs()).max().unwrap();
-        assert!(peak_late > 4000, "full level after the 5 ms fade: {peak_late}");
-        assert!(first[..48].iter().map(|s| s.abs()).max().unwrap() < first[200..].iter().map(|s| s.abs()).max().unwrap());
+        assert!(
+            peak_late > 4000,
+            "full level after the 5 ms fade: {peak_late}"
+        );
+        assert!(
+            first[..48].iter().map(|s| s.abs()).max().unwrap()
+                < first[200..].iter().map(|s| s.abs()).max().unwrap()
+        );
         // After the 10th chunk the audio is untouched.
         assert_eq!(burst[10].1, inputs[10]);
         // Silence again: stays open for the hold time (350 ms = 35 chunks), then closes.
         let tail = feed(&mut p, &mut || vec![0; CHUNK], 50);
         let open_chunks = tail.iter().take_while(|(open, _)| *open).count();
-        assert!((34..=36).contains(&open_chunks), "held for {open_chunks} chunks");
+        assert!(
+            (34..=36).contains(&open_chunks),
+            "held for {open_chunks} chunks"
+        );
         assert!(!gate.is_open());
         // Everything after the fade is exact digital silence.
-        assert!(tail[open_chunks + 2..].iter().all(|(_, c)| c.iter().all(|&s| s == 0)));
+        assert!(tail[open_chunks + 2..]
+            .iter()
+            .all(|(_, c)| c.iter().all(|&s| s == 0)));
         // A second burst opens it again.
         assert!(feed(&mut p, &mut || sig.tone(-20.0), 1)[0].0);
     }
@@ -522,7 +569,9 @@ mod tests {
             for (open, _) in feed(&mut p, &mut || vec![0; CHUNK], 20) {
                 was_closed |= !open;
             }
-            assert!(feed(&mut p, &mut || sig.tone(-25.0), 5).iter().all(|(o, _)| *o));
+            assert!(feed(&mut p, &mut || sig.tone(-25.0), 5)
+                .iter()
+                .all(|(o, _)| *o));
         }
         assert!(!was_closed, "word gaps must not close the gate");
         assert!(gate.is_open());
@@ -533,20 +582,30 @@ mod tests {
         let (gate, mut p) = manual(-40.0, 350);
         let mut sig = Sig::new();
         let quiet = feed(&mut p, &mut || sig.noise(-55.0), 200);
-        assert!(quiet.iter().all(|(open, c)| !open && c.iter().all(|&s| s == 0)));
+        assert!(quiet
+            .iter()
+            .all(|(open, c)| !open && c.iter().all(|&s| s == 0)));
         assert!(!gate.is_open());
         // The meter still shows what the mic hears (post-APM, pre-gate).
-        assert!((gate.level_db() + 55.0).abs() < 2.0, "meter {}", gate.level_db());
+        assert!(
+            (gate.level_db() + 55.0).abs() < 2.0,
+            "meter {}",
+            gate.level_db()
+        );
         let loud = feed(&mut p, &mut || sig.noise(-30.0), 20);
         assert!(loud.iter().all(|(open, _)| *open));
         assert!(gate.is_open());
         // 3 dB under the threshold while open still counts as speech (hysteresis)...
         let (gate, mut p) = manual(-40.0, 100);
         feed(&mut p, &mut || sig.tone(-30.0), 3);
-        assert!(feed(&mut p, &mut || sig.tone(-42.0), 30).iter().all(|(o, _)| *o));
+        assert!(feed(&mut p, &mut || sig.tone(-42.0), 30)
+            .iter()
+            .all(|(o, _)| *o));
         // ...but from closed the same level does not open it.
         let (_g, mut p2) = manual(-40.0, 100);
-        assert!(feed(&mut p2, &mut || sig.tone(-42.0), 30).iter().all(|(o, _)| !*o));
+        assert!(feed(&mut p2, &mut || sig.tone(-42.0), 30)
+            .iter()
+            .all(|(o, _)| !*o));
         assert!(gate.is_open());
     }
 
@@ -555,7 +614,11 @@ mod tests {
         let (gate, mut p) = manual(-20.0, 100);
         let mut sig = Sig::new();
         assert!(!feed(&mut p, &mut || sig.tone(-35.0), 1)[0].0);
-        gate.set_config(GateConfig { mode: GateMode::Manual, threshold_db: -50.0, hold_ms: 100 });
+        gate.set_config(GateConfig {
+            mode: GateMode::Manual,
+            threshold_db: -50.0,
+            hold_ms: 100,
+        });
         assert!(feed(&mut p, &mut || sig.tone(-35.0), 1)[0].0);
         assert_eq!(gate.threshold_db(), -50.0);
     }
@@ -609,7 +672,10 @@ mod tests {
         assert!((gate.level_db() + 20.0).abs() < 0.5);
         feed(&mut p, &mut || vec![0; CHUNK], 10);
         let after = gate.level_db();
-        assert!(after < -20.0 && after > -50.0, "falls gradually, not at once: {after}");
+        assert!(
+            after < -20.0 && after > -50.0,
+            "falls gradually, not at once: {after}"
+        );
         feed(&mut p, &mut || vec![0; CHUNK], 200);
         assert_eq!(gate.level_db(), MIN_DB);
     }
@@ -621,19 +687,38 @@ mod tests {
         // Steady room noise at -50 dBFS: after calibration the threshold sits 15 dB above it and
         // the noise never opens the gate (apart from the calibration period, gate shut).
         let r = feed(&mut p, &mut || sig.noise(-50.0), 400);
-        assert!(r.iter().all(|(open, _)| !open), "steady noise must not open the gate");
-        assert!((p.noise_floor_db() + 50.0).abs() < 4.0, "floor {}", p.noise_floor_db());
+        assert!(
+            r.iter().all(|(open, _)| !open),
+            "steady noise must not open the gate"
+        );
+        assert!(
+            (p.noise_floor_db() + 50.0).abs() < 4.0,
+            "floor {}",
+            p.noise_floor_db()
+        );
         let thr = gate.threshold_db();
         assert!((thr + 35.0).abs() < 4.0, "threshold {thr}");
         // Speech well above the threshold opens it, and the floor does not chase speech.
         let mut i = 0;
-        let speech = feed(&mut p, &mut || {
-            i += 1;
-            sig.speech(i)
-        }, 300);
+        let speech = feed(
+            &mut p,
+            &mut || {
+                i += 1;
+                sig.speech(i)
+            },
+            300,
+        );
         assert!(speech.iter().all(|(open, _)| *open));
-        assert!(gate.threshold_db() < -30.0 + 0.1, "threshold stays bounded: {}", gate.threshold_db());
-        assert!(p.noise_floor_db() < -45.0, "speech did not drag the floor up: {}", p.noise_floor_db());
+        assert!(
+            gate.threshold_db() < -30.0 + 0.1,
+            "threshold stays bounded: {}",
+            gate.threshold_db()
+        );
+        assert!(
+            p.noise_floor_db() < -45.0,
+            "speech did not drag the floor up: {}",
+            p.noise_floor_db()
+        );
         // Back to noise: closes after the hold.
         let after = feed(&mut p, &mut || sig.noise(-50.0), 60);
         assert!(!after.last().unwrap().0);
@@ -650,11 +735,23 @@ mod tests {
         // A fan starts: steady noise 20 dB louder. It trips the gate for a moment, then the floor
         // adopts it and the gate closes again.
         let r = feed(&mut p, &mut || sig.noise(-40.0), 300);
-        assert!(r.iter().take(80).any(|(open, _)| *open), "initially the new noise opens the gate");
-        assert!(!r.last().unwrap().0, "adapted: steady noise no longer opens the gate");
-        assert!(gate.threshold_db() > quiet_thr + 6.0, "threshold rose: {}", gate.threshold_db());
+        assert!(
+            r.iter().take(80).any(|(open, _)| *open),
+            "initially the new noise opens the gate"
+        );
+        assert!(
+            !r.last().unwrap().0,
+            "adapted: steady noise no longer opens the gate"
+        );
+        assert!(
+            gate.threshold_db() > quiet_thr + 6.0,
+            "threshold rose: {}",
+            gate.threshold_db()
+        );
         // Speech on top of the new floor still passes.
-        assert!(feed(&mut p, &mut || sig.tone(-22.0), 5).iter().all(|(o, _)| *o));
+        assert!(feed(&mut p, &mut || sig.tone(-22.0), 5)
+            .iter()
+            .all(|(o, _)| *o));
     }
 
     #[test]
@@ -674,24 +771,52 @@ mod tests {
         let mut sig = Sig::new();
         assert!(feed(&mut p, &mut || sig.tone(-20.0), 1)[0].0);
         let (_gate, mut p) = auto();
-        assert!(!feed(&mut p, &mut || sig.tone(-40.0), 1)[0].0, "calibrating: quiet sounds stay out");
+        assert!(
+            !feed(&mut p, &mut || sig.tone(-40.0), 1)[0].0,
+            "calibrating: quiet sounds stay out"
+        );
     }
 
     #[test]
     fn config_is_clamped_and_roundtrips() {
-        let c = GateConfig { mode: GateMode::Manual, threshold_db: -200.0, hold_ms: 5 }.sanitized();
+        let c = GateConfig {
+            mode: GateMode::Manual,
+            threshold_db: -200.0,
+            hold_ms: 5,
+        }
+        .sanitized();
         assert_eq!((c.threshold_db, c.hold_ms), (THRESHOLD_MIN_DB, HOLD_MIN_MS));
-        let c = GateConfig { mode: GateMode::Auto, threshold_db: f32::NAN, hold_ms: 99_999 }.sanitized();
-        assert_eq!((c.threshold_db, c.hold_ms), (DEFAULT_THRESHOLD_DB, HOLD_MAX_MS));
+        let c = GateConfig {
+            mode: GateMode::Auto,
+            threshold_db: f32::NAN,
+            hold_ms: 99_999,
+        }
+        .sanitized();
+        assert_eq!(
+            (c.threshold_db, c.hold_ms),
+            (DEFAULT_THRESHOLD_DB, HOLD_MAX_MS)
+        );
         let gate = VoiceGate::default();
         assert_eq!(gate.config(), GateConfig::default());
-        let want = GateConfig { mode: GateMode::Manual, threshold_db: -33.0, hold_ms: 500 };
+        let want = GateConfig {
+            mode: GateMode::Manual,
+            threshold_db: -33.0,
+            hold_ms: 500,
+        };
         gate.set_config(want);
         assert_eq!(gate.config(), want);
         let json = serde_json::to_string(&want).unwrap();
         assert_eq!(serde_json::from_str::<GateConfig>(&json).unwrap(), want);
         // Old/partial files fall back to the defaults.
-        assert_eq!(serde_json::from_str::<GateConfig>("{}").unwrap(), GateConfig::default());
-        assert_eq!(serde_json::from_str::<GateConfig>(r#"{"mode":"manual"}"#).unwrap().mode, GateMode::Manual);
+        assert_eq!(
+            serde_json::from_str::<GateConfig>("{}").unwrap(),
+            GateConfig::default()
+        );
+        assert_eq!(
+            serde_json::from_str::<GateConfig>(r#"{"mode":"manual"}"#)
+                .unwrap()
+                .mode,
+            GateMode::Manual
+        );
     }
 }

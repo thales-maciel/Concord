@@ -33,10 +33,14 @@ pub fn assign(child: &tokio::process::Child) {
         Some(h.0 as usize)
     });
     let (Some(job), Some(proc)) = (job, child.raw_handle()) else {
-        tracing::warn!("child not attached to job object; it may outlive the hub if the hub crashes");
+        tracing::warn!(
+            "child not attached to job object; it may outlive the hub if the hub crashes"
+        );
         return;
     };
-    if let Err(e) = unsafe { AssignProcessToJobObject(HANDLE(*job as *mut _), HANDLE(proc as *mut _)) } {
+    if let Err(e) =
+        unsafe { AssignProcessToJobObject(HANDLE(*job as *mut _), HANDLE(proc as *mut _)) }
+    {
         tracing::warn!("AssignProcessToJobObject failed: {e}");
     }
 }

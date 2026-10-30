@@ -7,10 +7,10 @@ use std::time::Instant;
 use anyhow::{bail, Context, Result};
 use flate2::read::GzDecoder;
 use ini::Ini;
-use tract_core::ndarray::{prelude::*, Axis};
 use tar::Archive;
 use tract_core::internal::tract_itertools::izip;
 use tract_core::internal::tract_smallvec::alloc::collections::VecDeque;
+use tract_core::ndarray::{prelude::*, Axis};
 use tract_core::ops;
 use tract_core::prelude::*;
 use tract_onnx::{prelude::*, tract_hir::shapefactoid};
@@ -41,7 +41,10 @@ impl DfParams {
         let mut erb_dec = Vec::new();
         let mut df_dec = Vec::new();
         let mut config = Ini::new();
-        for e in archive.entries().context("Could not extract models from tar file.")? {
+        for e in archive
+            .entries()
+            .context("Could not extract models from tar file.")?
+        {
             let mut file = e.context("Could not open model tar entry.")?;
             let path = file.path().unwrap();
             if path.ends_with("enc.onnx") {
@@ -55,7 +58,8 @@ impl DfParams {
                     Ini::read_from(&mut file).context("Could not load config from tar file.")?;
             } else if path.ends_with("version.txt") {
                 let mut version = String::new();
-                file.read_to_string(&mut version).expect("Could not read version.txt");
+                file.read_to_string(&mut version)
+                    .expect("Could not read version.txt");
                 log::info!("Loading model with id: {}", version);
             } else {
                 log::warn!("Found non-matching item in model tar file: {:?}", path)
@@ -79,8 +83,7 @@ impl Default for DfParams {
         #[cfg(feature = "default-model")]
         {
             log::debug!("Loading model DeepFilterNet3_onnx.tar.gz");
-            DfParams::from_bytes(DEFAULT_MODEL)
-                .expect("Could not load model config")
+            DfParams::from_bytes(DEFAULT_MODEL).expect("Could not load model config")
         }
         #[cfg(not(feature = "default-model"))]
         panic!("Not compiled with a default model")
@@ -470,7 +473,12 @@ impl DfTract {
         // Run encoder
         let mut enc_emb = self.enc.run(tvec!(
             self.erb_buf.clone(),
-            TValue::from(self.cplx_buf.clone().into_tensor().permute_axes(&[0, 3, 1, 2])?)
+            TValue::from(
+                self.cplx_buf
+                    .clone()
+                    .into_tensor()
+                    .permute_axes(&[0, 3, 1, 2])?
+            )
         ))?;
 
         let &lsnr = enc_emb.pop().unwrap().to_scalar::<f32>()?;
@@ -506,7 +514,12 @@ impl DfTract {
         };
 
         let coefs = if apply_df {
-            let mut coefs = self.df_dec.run(tvec!(emb, c0))?.pop().unwrap().into_tensor();
+            let mut coefs = self
+                .df_dec
+                .run(tvec!(emb, c0))?
+                .pop()
+                .unwrap()
+                .into_tensor();
             coefs.set_shape(&[ch, self.nb_df, self.df_order, 2])?;
             Some(coefs)
         } else {
@@ -684,7 +697,10 @@ impl DfTract {
 
     pub fn set_spec_buffer(&mut self, spec: ArrayView2<f32>) -> Result<()> {
         debug_assert_eq!(self.spec_buf.shape(), spec.shape());
-        let mut buf = self.spec_buf.to_array_view_mut()?.into_shape([self.ch, self.n_freqs])?;
+        let mut buf = self
+            .spec_buf
+            .to_array_view_mut()?
+            .into_shape([self.ch, self.n_freqs])?;
         for (i_ch, mut b_ch) in spec.outer_iter().zip(buf.outer_iter_mut()) {
             for (&i, b) in i_ch.iter().zip(b_ch.iter_mut()) {
                 *b = i
@@ -811,7 +827,9 @@ fn init_encoder_impl(
     Ok(m)
 }
 fn init_encoder(m: &Path, df_cfg: &ini::Properties, n_ch: usize) -> Result<TypedModel> {
-    let m = tract_onnx::onnx().with_ignore_output_shapes(true).model_for_path(m)?;
+    let m = tract_onnx::onnx()
+        .with_ignore_output_shapes(true)
+        .model_for_path(m)?;
     init_encoder_impl(m, df_cfg, n_ch)
 }
 
@@ -820,7 +838,9 @@ fn init_encoder_from_read(
     df_cfg: &ini::Properties,
     n_ch: usize,
 ) -> Result<TypedModel> {
-    let m = tract_onnx::onnx().with_ignore_output_shapes(true).model_for_read(m)?;
+    let m = tract_onnx::onnx()
+        .with_ignore_output_shapes(true)
+        .model_for_read(m)?;
     init_encoder_impl(m, df_cfg, n_ch)
 }
 
@@ -924,7 +944,9 @@ fn init_erb_decoder(
     n_ch: usize,
     mask_reduction: Option<ReduceMask>,
 ) -> Result<TypedModel> {
-    let m = tract_onnx::onnx().with_ignore_output_shapes(true).model_for_path(m)?;
+    let m = tract_onnx::onnx()
+        .with_ignore_output_shapes(true)
+        .model_for_path(m)?;
     init_erb_decoder_impl(m, net_cfg, df_cfg, n_ch, mask_reduction)
 }
 fn init_erb_decoder_from_read(
@@ -934,7 +956,9 @@ fn init_erb_decoder_from_read(
     n_ch: usize,
     mask_reduction: Option<ReduceMask>,
 ) -> Result<TypedModel> {
-    let m = tract_onnx::onnx().with_ignore_output_shapes(true).model_for_read(m)?;
+    let m = tract_onnx::onnx()
+        .with_ignore_output_shapes(true)
+        .model_for_read(m)?;
     init_erb_decoder_impl(m, net_cfg, df_cfg, n_ch, mask_reduction)
 }
 
@@ -984,7 +1008,9 @@ fn init_df_decoder(
     df_cfg: &ini::Properties,
     n_ch: usize,
 ) -> Result<TypedModel> {
-    let m = tract_onnx::onnx().with_ignore_output_shapes(true).model_for_path(m)?;
+    let m = tract_onnx::onnx()
+        .with_ignore_output_shapes(true)
+        .model_for_path(m)?;
     init_df_decoder_impl(m, net_cfg, df_cfg, n_ch)
 }
 fn init_df_decoder_from_read(
@@ -993,7 +1019,9 @@ fn init_df_decoder_from_read(
     df_cfg: &ini::Properties,
     n_ch: usize,
 ) -> Result<TypedModel> {
-    let m = tract_onnx::onnx().with_ignore_output_shapes(true).model_for_read(m)?;
+    let m = tract_onnx::onnx()
+        .with_ignore_output_shapes(true)
+        .model_for_read(m)?;
     init_df_decoder_impl(m, net_cfg, df_cfg, n_ch)
 }
 

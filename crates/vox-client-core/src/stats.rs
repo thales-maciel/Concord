@@ -41,16 +41,23 @@ impl StreamCounters {
         self.frames.fetch_add(1, Ordering::Relaxed);
         let sq: u64 = samples.iter().map(|&s| (s as i64 * s as i64) as u64).sum();
         self.sum_sq.fetch_add(sq, Ordering::Relaxed);
-        self.samples.fetch_add(samples.len() as u64, Ordering::Relaxed);
+        self.samples
+            .fetch_add(samples.len() as u64, Ordering::Relaxed);
     }
 
     /// [`StreamCounters::audio`] for interleaved stereo, plus the energy of the difference
     /// between the channels (how much stereo there really is).
     pub fn audio_stereo(&self, samples: &[i16]) {
         self.audio(samples);
-        let side: u64 = samples.as_chunks::<2>().0.iter().map(|p| (p[0] as i64 - p[1] as i64).pow(2) as u64).sum();
+        let side: u64 = samples
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|p| (p[0] as i64 - p[1] as i64).pow(2) as u64)
+            .sum();
         self.side_sq.fetch_add(side, Ordering::Relaxed);
-        self.pairs.fetch_add((samples.len() / 2) as u64, Ordering::Relaxed);
+        self.pairs
+            .fetch_add((samples.len() / 2) as u64, Ordering::Relaxed);
     }
 }
 
@@ -239,7 +246,9 @@ impl ProcessMeter {
         Self {
             last_wall: Instant::now(),
             last_cpu_100ns: process_cpu_100ns(),
-            ncpu: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) as f64,
+            ncpu: std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1) as f64,
         }
     }
 
@@ -267,7 +276,10 @@ impl ProcessMeter {
 pub(crate) fn process_cpu_100ns() -> u64 {
     use windows_sys::Win32::Foundation::FILETIME;
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
-    let z = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+    let z = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
     let (mut c, mut e, mut k, mut u) = (z, z, z, z);
     // SAFETY: pseudo-handle of our own process, valid out-pointers.
     let ok = unsafe { GetProcessTimes(GetCurrentProcess(), &mut c, &mut e, &mut k, &mut u) };
@@ -280,13 +292,20 @@ pub(crate) fn process_cpu_100ns() -> u64 {
 
 #[cfg(windows)]
 pub(crate) fn process_memory() -> (u64, u64) {
-    use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX};
+    use windows_sys::Win32::System::ProcessStatus::{
+        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
+    };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
     // SAFETY: zeroed POD struct, size passed matches, own-process pseudo-handle.
     unsafe {
         let mut pmc: PROCESS_MEMORY_COUNTERS_EX = std::mem::zeroed();
         pmc.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32;
-        if GetProcessMemoryInfo(GetCurrentProcess(), &mut pmc as *mut _ as *mut PROCESS_MEMORY_COUNTERS, pmc.cb) == 0 {
+        if GetProcessMemoryInfo(
+            GetCurrentProcess(),
+            &mut pmc as *mut _ as *mut PROCESS_MEMORY_COUNTERS,
+            pmc.cb,
+        ) == 0
+        {
             return (0, 0);
         }
         (pmc.WorkingSetSize as u64, pmc.PrivateUsage as u64)
@@ -402,7 +421,11 @@ impl Reporter {
         for s in streams {
             let mut r = StreamReport {
                 label: s.label.clone(),
-                dir: if s.dir == Direction::Send { "send" } else { "recv" },
+                dir: if s.dir == Direction::Send {
+                    "send"
+                } else {
+                    "recv"
+                },
                 width: s.counters.width.load(Ordering::Relaxed),
                 height: s.counters.height.load(Ordering::Relaxed),
                 ..Default::default()
@@ -457,9 +480,15 @@ impl Reporter {
                     r.kbps = Some(b.saturating_sub(prev.bytes) as f64 * 8.0 / dt / 1000.0);
                 }
             }
-            r.rms_dbfs = rms_dbfs(sum_sq.saturating_sub(prev.sum_sq), samples.saturating_sub(prev.samples));
+            r.rms_dbfs = rms_dbfs(
+                sum_sq.saturating_sub(prev.sum_sq),
+                samples.saturating_sub(prev.samples),
+            );
             // side = (L - R) / 2, so its energy is a quarter of the summed (L - R)^2
-            r.side_dbfs = rms_dbfs(side_sq.saturating_sub(prev.side_sq) / 4, pairs.saturating_sub(prev.pairs));
+            r.side_dbfs = rms_dbfs(
+                side_sq.saturating_sub(prev.side_sq) / 4,
+                pairs.saturating_sub(prev.pairs),
+            );
             prev.sum_sq = sum_sq;
             prev.samples = samples;
             prev.side_sq = side_sq;
@@ -474,7 +503,8 @@ impl Reporter {
             out.push(r);
         }
         // Forget streams that went away.
-        self.prev.retain(|k, _| streams.iter().any(|s| &s.label == k));
+        self.prev
+            .retain(|k, _| streams.iter().any(|s| &s.label == k));
 
         let p = self.meter.sample();
         info!(
@@ -505,7 +535,8 @@ fn extract_rtp(stats: &[RtcStats], dir: Direction, r: &mut StreamReport, bytes: 
                 if !o.outbound.encoder_implementation.is_empty() {
                     r.codec_impl = o.outbound.encoder_implementation.clone();
                 }
-                r.quality_limitation = format!("{:?}", o.outbound.quality_limitation_reason).to_lowercase();
+                r.quality_limitation =
+                    format!("{:?}", o.outbound.quality_limitation_reason).to_lowercase();
             }
             (Direction::Recv, RtcStats::InboundRtp(i)) => {
                 *bytes = Some(bytes.unwrap_or(0) + i.inbound.bytes_received);
@@ -521,7 +552,10 @@ fn extract_rtp(stats: &[RtcStats], dir: Direction, r: &mut StreamReport, bytes: 
                 }
             }
             (_, RtcStats::Codec(c)) if c.codec.mime_type.starts_with("audio/") => {
-                r.codec = format!("{} {} Hz ch={} {}", c.codec.mime_type, c.codec.clock_rate, c.codec.channels, c.codec.sdp_fmtp_line);
+                r.codec = format!(
+                    "{} {} Hz ch={} {}",
+                    c.codec.mime_type, c.codec.clock_rate, c.codec.channels, c.codec.sdp_fmtp_line
+                );
             }
             _ => {}
         }
@@ -648,10 +682,18 @@ fn log_encoder(e: &EncoderReport, prev: &mut Prev) {
     let recovery_idrs = f.recovery_idrs.load(Ordering::Relaxed);
     let broken = f.broken_frames.load(Ordering::Relaxed);
     let withheld = f.withheld_frames.load(Ordering::Relaxed);
-    let guard_min = f.guard_min_pct.swap(f.guard_pct.load(Ordering::Relaxed), Ordering::Relaxed);
+    let guard_min = f
+        .guard_min_pct
+        .swap(f.guard_pct.load(Ordering::Relaxed), Ordering::Relaxed);
     let min = f.min_target_bps.swap(u64::MAX, Ordering::Relaxed);
     let max = f.max_target_bps.swap(0, Ordering::Relaxed);
-    let kbps = |b: u64| if b == 0 || b == u64::MAX { "-".to_string() } else { format!("{}", b / 1000) };
+    let kbps = |b: u64| {
+        if b == 0 || b == u64::MAX {
+            "-".to_string()
+        } else {
+            format!("{}", b / 1000)
+        }
+    };
     let hw = e
         .hw
         .map(|h| {
@@ -701,8 +743,14 @@ fn log_encoder(e: &EncoderReport, prev: &mut Prev) {
 }
 
 fn log_stream(r: &StreamReport, is_video: bool) {
-    let kbps = r.kbps.map(|k| format!("{k:.0}")).unwrap_or_else(|| "-".into());
-    let rtp_fps = r.rtp_fps.map(|f| format!("{f:.1}")).unwrap_or_else(|| "-".into());
+    let kbps = r
+        .kbps
+        .map(|k| format!("{k:.0}"))
+        .unwrap_or_else(|| "-".into());
+    let rtp_fps = r
+        .rtp_fps
+        .map(|f| format!("{f:.1}"))
+        .unwrap_or_else(|| "-".into());
     if is_video {
         let opt = |v: Option<u64>| v.map(|x| x.to_string()).unwrap_or_else(|| "-".into());
         info!(
@@ -726,8 +774,14 @@ fn log_stream(r: &StreamReport, is_video: bool) {
             "stream stats"
         );
     } else {
-        let rms = r.rms_dbfs.map(|d| format!("{d:.1}")).unwrap_or_else(|| "silent".into());
-        let side = r.side_dbfs.map(|d| format!("{d:.1}")).unwrap_or_else(|| "-".into());
+        let rms = r
+            .rms_dbfs
+            .map(|d| format!("{d:.1}"))
+            .unwrap_or_else(|| "silent".into());
+        let side = r
+            .side_dbfs
+            .map(|d| format!("{d:.1}"))
+            .unwrap_or_else(|| "-".into());
         info!(
             stream = %r.label,
             dir = r.dir,
@@ -749,7 +803,11 @@ mod tests {
     fn rms_levels() {
         let c = StreamCounters::default();
         c.audio(&[16384, -16384, 16384, -16384]); // half scale square wave = -6 dBFS
-        let db = rms_dbfs(c.sum_sq.load(Ordering::Relaxed), c.samples.load(Ordering::Relaxed)).unwrap();
+        let db = rms_dbfs(
+            c.sum_sq.load(Ordering::Relaxed),
+            c.samples.load(Ordering::Relaxed),
+        )
+        .unwrap();
         assert!((db + 6.02).abs() < 0.05, "{db}");
         assert_eq!(rms_dbfs(0, 960), None);
         assert_eq!(rms_dbfs(10, 0), None);
@@ -763,8 +821,12 @@ mod tests {
         assert_eq!(mono.pairs.load(Ordering::Relaxed), 2);
         let st = StreamCounters::default();
         st.audio_stereo(&[16384, -16384, -16384, 16384]); // L = -R at half scale
-        // side = (L - R) / 2 = +-16384, so it is as loud as each channel: -6 dBFS
-        let db = rms_dbfs(st.side_sq.load(Ordering::Relaxed) / 4, st.pairs.load(Ordering::Relaxed)).unwrap();
+                                                          // side = (L - R) / 2 = +-16384, so it is as loud as each channel: -6 dBFS
+        let db = rms_dbfs(
+            st.side_sq.load(Ordering::Relaxed) / 4,
+            st.pairs.load(Ordering::Relaxed),
+        )
+        .unwrap();
         assert!((db + 6.02).abs() < 0.05, "{db}");
     }
 

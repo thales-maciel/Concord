@@ -1,44 +1,12 @@
-//! The call stage (v1.0, "Sala de voz" in docs/PLANO-v1.0.md): the cards of the people in our
-//! voice room, a second card for each one who is live, the voice dock at the bottom and, in the
-//! stage fullscreen, a header of its own. Watching a stream draws its video *inside* its card.
+//! Voice-room stage, pinned cards, streams, cameras and fullscreen views.
+//! [`stage_layout`] handles layout; pins are cleared on leaving the room.
 //!
-//! - **Pins**: clicking a card (or "Fixar" in its menu) pins it; any number can be pinned. The
-//!   pinned cards share the big area, the others go to a strip below (`stage_layout.rs`, the pure
-//!   layout). Clicking a pinned card (or "Desafixar") unpins it. Pins are kept per person / stream
-//!   while we are in the room, and cleared when we leave.
-//! - **Hidden cards**: a card without video can be hidden from its menu ("Ocultar este card",
-//!   "Ocultar todos sem vídeo"); "mostrar ocultos" in the header brings them back.
-//! - **Stage fullscreen**: the header button, or a double-click on the stage's empty space, puts
-//!   the window in OS fullscreen with only the stage (`App::stage_fullscreen`; the shell draws
-//!   nothing else). Esc or the button leave it.
+//! Windows video uses D3D11 child windows, positioned by [`App::sync_video`] and clipped
+//! around egui overlays by `video_clip.rs`. macOS rendering lives in `video_gl.rs`.
 //!
-//! Video is not drawn by egui. Each watched stream gets a [`VideoHost`]: a child window that the
-//! core's viewer thread presents into with D3D11 (GPU YUV->RGB, no CPU conversion, no texture
-//! upload into egui). Every frame the UI records where each video should be (`want`), then
-//! [`App::sync_video`] moves the child windows there (only on change) and hides them when the call
-//! view is not shown. Native windows always draw on top of egui ("airspace"), so the part of a
-//! video under an egui window, menu, popup or tooltip is cut out of its child window (see
-//! `video_clip.rs`): the popup shows, the rest of the video keeps playing. A video covered
-//! entirely is hidden. Cards draw nothing over their video: the name tag sits under it.
-//!
-//! Fullscreen of one watched stream (on the monitor the app is on): a double-click on its video,
-//! the card's fullscreen button, its menu, or F11; Esc, F11 or a double-click leave it and the
-//! previous view comes back (the stage fullscreen too, when it was on). A popped-out stream does
-//! the same in its own window.
-//!
-//! Several streams (item 9): "Assistir transmissão" on more live cards adds them (at most
-//! [`MAX_WATCHED`], then a message), each playing in its own card, each with its own audio
-//! volume / mute. The watched streams in the strip are drawn at [`STRIP_FPS`] (single-layer
-//! streams: the SFU cannot send a smaller version, so the decode cost stays; only the drawing is
-//! cut). "Abrir em janela" pops out one stream at a time, each in its own window. A watched
-//! stream that is nowhere on screen (chat view, app minimized, another one fullscreen, scrolled
-//! out of the strip) is paused at the SFU after a short grace (no network, no decode), and its
-//! audio keeps playing. Optionally ("Ouvir só as transmissões fixadas") only the pinned streams
-//! play sound.
-//!
-//! Webcams (item 11): a member whose camera is on shows it in their own card (like Discord), with
-//! the name tag below and the speaking border around it. My own card shows the local preview,
-//! mirrored, straight from the camera (never decoded from the network).
+//! Strip streams draw at [`STRIP_FPS`] without reducing decode cost. Offscreen streams
+//! pause video at the SFU after a grace period while audio continues. Local camera
+//! preview comes directly from capture, not from a network round trip.
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -85,7 +53,7 @@ const _: () = assert!(PREVIEW_FPS < PREVIEW_FPS_FOCUSED);
 
 /// Drawing rate of a watched stream in the strip under the pinned cards (item 9).
 pub const STRIP_FPS: u32 = 15;
-/// A pressed "Assistir" the core has not confirmed within this time is forgotten.
+/// A pressed "Watch" the core has not confirmed within this time is forgotten.
 pub const WATCH_PENDING_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// May one more stream be watched, with `watching` confirmed and `pending` requested?
@@ -95,14 +63,17 @@ pub fn watch_allowed(watching: usize, pending: usize) -> bool {
 
 /// The message when the limit is reached.
 pub fn watch_limit_text() -> String {
-    format!("{ICON_TV} Você já está assistindo {MAX_WATCHED} transmissões, o máximo ao mesmo tempo. Pare de assistir uma para abrir outra.")
+    format!("{ICON_TV} You are already watching {MAX_WATCHED} streams, the simultaneous limit. Stop watching one to open another.")
 }
 
 /// Preview size for a tile that is `tile_px` physical pixels wide: the smallest class that covers
 /// it, so a small tile costs less and a focused one is sharp enough to check details.
 pub fn preview_size_for(tile_px: i32) -> (u32, u32) {
     const CLASSES: [(u32, u32); 4] = [(480, 270), (640, 360), (960, 540), (1280, 720)];
-    CLASSES.into_iter().find(|(w, _)| *w as i32 >= tile_px).unwrap_or(CLASSES[CLASSES.len() - 1])
+    CLASSES
+        .into_iter()
+        .find(|(w, _)| *w as i32 >= tile_px)
+        .unwrap_or(CLASSES[CLASSES.len() - 1])
 }
 
 /// One card of the stage this frame.
@@ -132,7 +103,7 @@ pub struct CallUi {
     pub fullscreen_key: Option<String>,
     /// Leave fullscreen at the end of this frame (popped out from fullscreen).
     pub fullscreen_off_pending: bool,
-    /// Short message ("transmissão encerrada"), shown for a few seconds.
+    /// Short message ("stream ended"), shown for a few seconds.
     pub toast: Option<(String, Instant)>,
     /// A single click on a watched stream card, applied (pin / unpin) once it is clearly not the
     /// first half of a double-click (which goes fullscreen instead).
@@ -231,7 +202,9 @@ impl VideoUi {
     /// The video `key` goes in `rect` this frame, drawn with `painter` (its layer and clip).
     pub fn put(&mut self, key: String, rect: Rect, painter: &egui::Painter) {
         #[cfg(target_os = "macos")]
-        self.mac.paint_at.insert(key.clone(), (painter.layer_id(), painter.clip_rect()));
+        self.mac
+            .paint_at
+            .insert(key.clone(), (painter.layer_id(), painter.clip_rect()));
         #[cfg(not(target_os = "macos"))]
         let _ = painter;
         self.want.insert(key, rect);
@@ -249,14 +222,20 @@ pub fn to_px(r: Rect, ppp: f32) -> (i32, i32, i32, i32) {
 
 /// Names in a case-insensitive order, without building lowercase copies.
 fn cmp_names(a: &str, b: &str) -> std::cmp::Ordering {
-    a.chars().flat_map(char::to_lowercase).cmp(b.chars().flat_map(char::to_lowercase))
+    a.chars()
+        .flat_map(char::to_lowercase)
+        .cmp(b.chars().flat_map(char::to_lowercase))
 }
 
 /// "3 pessoas · 2 em foco · 1 card oculto".
 pub fn stage_meta_text(people: usize, pinned: usize, hidden: usize) -> String {
-    let mut s = if people == 1 { "1 pessoa".to_string() } else { format!("{people} pessoas") };
+    let mut s = if people == 1 {
+        "1 person".to_string()
+    } else {
+        format!("{people} people")
+    };
     if pinned > 0 {
-        s.push_str(&format!(" · {pinned} em foco"));
+        s.push_str(&format!(" · {pinned} focused"));
     }
     match hidden {
         0 => {}
@@ -274,12 +253,12 @@ impl App {
         self.center = Center::Call;
     }
 
-    /// "Assistir" from the sidebar: the stage, with that stream pinned (next to the cards
+    /// "Watch" from the sidebar: the stage, with that stream pinned (next to the cards
     /// already pinned).
     pub fn watch_focused(&mut self, identity: &str) {
         self.center = Center::Call;
         if self.watch(identity) && !self.identity_is_audio_only(identity) {
-            // (An audio-only live has no picture to enlarge: "Ouvir" just starts the sound.)
+            // (An audio-only live has no picture to enlarge: "Listen" just starts the sound.)
             if let Ok(id) = identity.parse::<UserId>() {
                 self.pin(TileKey::Stream(id));
             }
@@ -330,14 +309,17 @@ impl App {
     pub fn focused_stream(&self) -> Option<String> {
         let me = self.my_id();
         self.call.pins.iter().find_map(|k| match k {
-            TileKey::Stream(u) if Some(*u) != me => Some(u.to_string()).filter(|s| self.is_watching(s)),
+            TileKey::Stream(u) if Some(*u) != me => {
+                Some(u.to_string()).filter(|s| self.is_watching(s))
+            }
             _ => None,
         })
     }
 
     /// The preview of my own live is pinned (it runs faster and bigger).
     pub fn self_preview_focused(&self) -> bool {
-        self.my_id().is_some_and(|me| self.is_pinned(TileKey::Stream(me)))
+        self.my_id()
+            .is_some_and(|me| self.is_pinned(TileKey::Stream(me)))
     }
 
     /// A stream we stopped watching (or that ended) is no longer pinned.
@@ -361,7 +343,7 @@ impl App {
         }
     }
 
-    /// "Ocultar este card" (a card without video).
+    /// "Hide this card" (a card without video).
     pub fn hide_card(&mut self, user: UserId) {
         self.call.hidden.cards.insert(user);
         self.unpin(TileKey::Member(user));
@@ -369,14 +351,14 @@ impl App {
         self.repaint.wake();
     }
 
-    /// "Ocultar todos sem vídeo" (people who join later included).
+    /// "Hide everyone without video" (people who join later included).
     pub fn hide_cards_without_video(&mut self) {
         self.call.hidden.all_without_video = true;
         tracing::info!("stage: every card without video hidden");
         self.repaint.wake();
     }
 
-    /// "Mostrar ocultos".
+    /// "Show hidden".
     pub fn show_hidden_cards(&mut self) {
         self.call.hidden.clear();
         tracing::info!("stage: hidden cards shown again");
@@ -387,7 +369,12 @@ impl App {
 
     /// The watched streams that have a picture (all but the audio-only ones).
     fn watching_video(&self) -> Vec<String> {
-        self.voice.watching.iter().filter(|k| !self.identity_is_audio_only(k)).cloned().collect()
+        self.voice
+            .watching
+            .iter()
+            .filter(|k| !self.identity_is_audio_only(k))
+            .cloned()
+            .collect()
     }
 
     /// Stream fullscreen on / off. Turning it on without a chosen stream takes the first pinned
@@ -427,25 +414,38 @@ impl App {
             return;
         }
         self.call.os_fullscreen = want;
-        tracing::info!(on = want, stream = self.call.fullscreen, stage = self.stage_fullscreen, "window fullscreen");
-        match self.video.parent.filter(|_| vox_client_core::testmode::background()) {
+        tracing::info!(
+            on = want,
+            stream = self.call.fullscreen,
+            stage = self.stage_fullscreen,
+            "window fullscreen"
+        );
+        match self
+            .video
+            .parent
+            .filter(|_| vox_client_core::testmode::background())
+        {
             // Autotests: the same fullscreen without taking the foreground (`testmode`).
             Some(hwnd) => vox_client_core::testmode::fullscreen_behind(hwnd, want),
             None => ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(want)),
         }
     }
 
-    /// Fullscreen of this watched stream (a double-click on it, its "Tela cheia").
+    /// Fullscreen of this watched stream (a double-click on it, its "Fullscreen").
     pub fn fullscreen_stream(&mut self, ctx: &egui::Context, key: &str) {
         self.call.fullscreen_key = Some(key.to_string());
         self.set_fullscreen(ctx, true);
     }
 
-    /// The stream F11 / "Tela cheia" without a target shows: the first pinned one, else the first
+    /// The stream F11 / "Fullscreen" without a target shows: the first pinned one, else the first
     /// watched one inside the app.
     fn fullscreen_target(&self) -> Option<String> {
-        let inline = |k: &String| self.is_watching(k) && !self.identity_is_audio_only(k) && !self.stream_popped(k);
-        self.focused_stream().filter(inline).or_else(|| self.voice.watching.iter().find(|k| inline(k)).cloned())
+        let inline = |k: &String| {
+            self.is_watching(k) && !self.identity_is_audio_only(k) && !self.stream_popped(k)
+        };
+        self.focused_stream()
+            .filter(inline)
+            .or_else(|| self.voice.watching.iter().find(|k| inline(k)).cloned())
     }
 
     /// Move one watched stream into its own window (`out`) or back inside the app. Each stream
@@ -455,8 +455,11 @@ impl App {
             return;
         }
         if let Ok(v) = Viewer::get() {
-            let name = key.parse::<UserId>().map(|id| self.name_of(id)).unwrap_or_else(|_| key.to_string());
-            v.set_title(key, &format!("concord - transmissão de {name}"));
+            let name = key
+                .parse::<UserId>()
+                .map(|id| self.name_of(id))
+                .unwrap_or_else(|_| key.to_string());
+            v.set_title(key, &format!("concord - {name}'s stream"));
             v.pop_out(key, out);
         }
         if out && self.call.fullscreen_key.as_deref() == Some(key) {
@@ -466,12 +469,17 @@ impl App {
 
     /// Whether this watched stream is in its own window right now.
     pub fn stream_popped(&self, key: &str) -> bool {
-        Viewer::get().ok().and_then(|v| v.state(key)).is_some_and(|s| s.popped_out)
+        Viewer::get()
+            .ok()
+            .and_then(|v| v.state(key))
+            .is_some_and(|s| s.popped_out)
     }
 
     /// In its own window, and that window is not minimized (someone can see it).
     fn stream_in_own_window(&self, key: &str) -> bool {
-        let Some(st) = Viewer::get().ok().and_then(|v| v.state(key)) else { return false };
+        let Some(st) = Viewer::get().ok().and_then(|v| v.state(key)) else {
+            return false;
+        };
         if !st.popped_out {
             return false;
         }
@@ -487,7 +495,9 @@ impl App {
 
     /// The egui context (for actions taken outside a frame callback, e.g. the autotest).
     pub fn repaint_ctx(&self) -> egui::Context {
-        self.repaint.ctx().expect("egui context is set before the first frame")
+        self.repaint
+            .ctx()
+            .expect("egui context is set before the first frame")
     }
 
     pub fn toast(&mut self, text: impl Into<String>) {
@@ -502,12 +512,19 @@ impl App {
         }
         let mut ended = Vec::new();
         for w in self.voice.watching.clone() {
-            let Ok(id) = w.parse::<UserId>() else { continue };
+            let Ok(id) = w.parse::<UserId>() else {
+                continue;
+            };
             // (In a DM call the members come from the room, not from the hub's voice state.)
             let live = if self.voice.channel == Some(crate::app::dms::DM_CALL_CHANNEL) {
-                self.dms.call_members.iter().any(|m| m.user.id == id && m.streaming)
+                self.dms
+                    .call_members
+                    .iter()
+                    .any(|m| m.user.id == id && m.streaming)
             } else {
-                self.voice_members.get(&id).is_some_and(|m| m.streaming && m.channel_id.is_some() && m.channel_id == self.voice.channel)
+                self.voice_members.get(&id).is_some_and(|m| {
+                    m.streaming && m.channel_id.is_some() && m.channel_id == self.voice.channel
+                })
             };
             if !live {
                 let name = self.name_of(id);
@@ -520,15 +537,17 @@ impl App {
         }
         match ended.as_slice() {
             [] => {}
-            [one] => self.toast(format!("{ICON_TV} A transmissão de {one} foi encerrada.")),
-            many => self.toast(format!("{ICON_TV} As transmissões de {} foram encerradas.", many.join(", "))),
+            [one] => self.toast(format!("{ICON_TV} {one}'s stream ended.")),
+            many => self.toast(format!("{ICON_TV} Streams ended: {}.", many.join(", "))),
         }
     }
 
     // ------------------------------------------------------------ drawing
 
     pub fn toast_bar(&mut self, ui: &mut egui::Ui) {
-        let Some((text, at)) = self.call.toast.clone() else { return };
+        let Some((text, at)) = self.call.toast.clone() else {
+            return;
+        };
         let left = Duration::from_secs(TOAST_SECS).saturating_sub(at.elapsed());
         if left.is_zero() {
             self.call.toast = None;
@@ -543,13 +562,18 @@ impl App {
             .anchor(Align2::CENTER_TOP, Vec2::new(0.0, 64.0))
             .interactable(true)
             .show(&ctx, |ui| {
-                ui_kit::notice_frame(ui_kit::Notice::Info).fill(theme::MOVEL).shadow(ctx.global_style().visuals.popup_shadow).show(ui, |ui| {
-                    ui.set_max_width(460.0);
-                    ui.horizontal(|ui| {
-                        ui_kit::notice_text(ui, ui_kit::Notice::Info, &text);
-                        close = ui_kit::icon_button(ui, ph::X, "Fechar o aviso", IconState::Normal).clicked();
+                ui_kit::notice_frame(ui_kit::Notice::Info)
+                    .fill(theme::MOVEL)
+                    .shadow(ctx.global_style().visuals.popup_shadow)
+                    .show(ui, |ui| {
+                        ui.set_max_width(460.0);
+                        ui.horizontal(|ui| {
+                            ui_kit::notice_text(ui, ui_kit::Notice::Info, &text);
+                            close =
+                                ui_kit::icon_button(ui, ph::X, "Dismiss notice", IconState::Normal)
+                                    .clicked();
+                        });
                     });
-                });
             });
         if close {
             self.call.toast = None;
@@ -567,7 +591,8 @@ impl App {
     fn fullscreen_video(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let key = self.call.fullscreen_key.clone();
-        let mut exit = ctx.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::F11));
+        let mut exit =
+            ctx.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::F11));
         let rect = ui.max_rect();
         ui.painter().rect_filled(rect, 0.0, Color32::BLACK);
         let resp = ui.interact(rect, egui::Id::new("fullscreen_video"), Sense::click());
@@ -599,17 +624,33 @@ impl App {
             self.stage_header(ui, head);
             area.min.y = head.bottom();
             // Esc leaves (a menu or popup that is open takes the Esc first).
-            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !egui::Popup::is_any_open(&ctx) && self.cmenu.open.is_none() {
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape))
+                && !egui::Popup::is_any_open(&ctx)
+                && self.cmenu.open.is_none()
+            {
                 self.set_stage_fullscreen(&ctx, false);
             }
         }
-        let dock = Rect::from_min_max(Pos2::new(area.left(), (area.bottom() - dock::DOCK_H).max(area.top())), area.max);
+        let dock = Rect::from_min_max(
+            Pos2::new(area.left(), (area.bottom() - dock::DOCK_H).max(area.top())),
+            area.max,
+        );
         area.max.y = dock.top();
         self.voice_dock(ui, dock);
         let cards = area.shrink(STAGE_PAD);
         if self.voice.channel.is_none() {
-            let text = if self.voice.joining.is_some() { "Conectando à voz..." } else { "Você não está em um canal de voz." };
-            ui.painter().text(cards.center(), Align2::CENTER_CENTER, text, theme::body(15.0), theme::NEVOA);
+            let text = if self.voice.joining.is_some() {
+                "Connecting to voice..."
+            } else {
+                "You are not in a voice channel."
+            };
+            ui.painter().text(
+                cards.center(),
+                Align2::CENTER_CENTER,
+                text,
+                theme::body(15.0),
+                theme::NEVOA,
+            );
             return;
         }
         if cards.width() > 1.0 && cards.height() > 1.0 {
@@ -621,13 +662,37 @@ impl App {
     /// the room, the counts and the stage's buttons.
     fn stage_header(&mut self, ui: &mut egui::Ui, rect: Rect) {
         let painter = ui.painter_at(rect);
-        painter.hline(rect.x_range(), rect.bottom() - 0.5, egui::Stroke::new(theme::stroke::HAIRLINE, theme::RISCO));
+        painter.hline(
+            rect.x_range(),
+            rect.bottom() - 0.5,
+            egui::Stroke::new(theme::stroke::HAIRLINE, theme::RISCO),
+        );
         let inner = rect.shrink2(Vec2::new(16.0, 0.0));
-        let mut left = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(Layout::left_to_right(Align::Center)));
-        left.label(RichText::new(ph::SPEAKER_HIGH).size(19.0).color(theme::NEVOA));
-        left.label(RichText::new(self.room_name()).font(theme::display(17.0)).color(theme::GIZ));
-        left.label(RichText::new(self.stage_meta()).size(13.0).color(theme::NEVOA));
-        let mut right = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(Layout::right_to_left(Align::Center)));
+        let mut left = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(inner)
+                .layout(Layout::left_to_right(Align::Center)),
+        );
+        left.label(
+            RichText::new(ph::SPEAKER_HIGH)
+                .size(19.0)
+                .color(theme::NEVOA),
+        );
+        left.label(
+            RichText::new(self.room_name())
+                .font(theme::display(17.0))
+                .color(theme::GIZ),
+        );
+        left.label(
+            RichText::new(self.stage_meta())
+                .size(13.0)
+                .color(theme::NEVOA),
+        );
+        let mut right = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(inner)
+                .layout(Layout::right_to_left(Align::Center)),
+        );
         self.stage_tools(&mut right, false);
     }
 
@@ -635,14 +700,23 @@ impl App {
     pub fn room_name(&self) -> String {
         match self.voice.channel.or(self.voice.joining) {
             Some(crate::app::dms::DM_CALL_CHANNEL) => self.dm_call_title(),
-            Some(ch) => self.channels.iter().find(|c| c.id == ch).map(|c| c.name.clone()).unwrap_or_default(),
+            Some(ch) => self
+                .channels
+                .iter()
+                .find(|c| c.id == ch)
+                .map(|c| c.name.clone())
+                .unwrap_or_default(),
             None => String::new(),
         }
     }
 
     /// "3 pessoas · 2 em foco · 1 card oculto" (as of the last frame).
     pub fn stage_meta(&self) -> String {
-        stage_meta_text(self.members_here().len(), self.call.pinned_count, self.call.hidden_count)
+        stage_meta_text(
+            self.members_here().len(),
+            self.call.pinned_count,
+            self.call.hidden_count,
+        )
     }
 
     /// The stage's own buttons, laid out by `ui` (the shell's center header is right to left):
@@ -652,9 +726,13 @@ impl App {
         let ctx = ui.ctx().clone();
         let full = self.stage_fullscreen;
         let (icon, hover, state) = if full {
-            (ph::CORNERS_IN, "Sair da tela cheia (Esc)", IconState::On)
+            (ph::CORNERS_IN, "Exit fullscreen (Esc)", IconState::On)
         } else {
-            (ph::CORNERS_OUT, "Tela cheia dos cards (ou clique duplo no fundo da sala)", IconState::Normal)
+            (
+                ph::CORNERS_OUT,
+                "Fullscreen stage (or double-click the room background)",
+                IconState::Normal,
+            )
         };
         if ui_kit::icon_button(ui, icon, hover, state).clicked() {
             self.set_stage_fullscreen(&ctx, !full);
@@ -663,12 +741,16 @@ impl App {
         if hidden > 0 {
             let text = hidden.to_string();
             let r = ui_kit::button_sized(ui, Kind::Ghost, Size::Small, Some(ph::EYE_SLASH), &text);
-            if r.on_hover_text("Mostrar os cards ocultos").clicked() {
+            if r.on_hover_text("Show hidden cards").clicked() {
                 self.show_hidden_cards();
             }
         }
         if meta {
-            ui.label(RichText::new(self.stage_meta()).size(13.0).color(theme::NEVOA));
+            ui.label(
+                RichText::new(self.stage_meta())
+                    .size(13.0)
+                    .color(theme::NEVOA),
+            );
         }
     }
 
@@ -700,14 +782,35 @@ impl App {
         let mut pinned = std::mem::take(&mut self.call.pinned_idx);
         let mut rest = std::mem::take(&mut self.call.rest_idx);
         self.build_tiles(&mut tiles, &mut keys);
-        let hidden = stage::arrange(&keys, &self.call.pins, &self.call.hidden, &mut pinned, &mut rest);
+        let hidden = stage::arrange(
+            &keys,
+            &self.call.pins,
+            &self.call.hidden,
+            &mut pinned,
+            &mut rest,
+        );
         let counts = (hidden, pinned.len(), pinned.len() + rest.len());
-        if counts != (self.call.hidden_count, self.call.pinned_count, self.call.card_count) {
-            (self.call.hidden_count, self.call.pinned_count, self.call.card_count) = counts;
+        if counts
+            != (
+                self.call.hidden_count,
+                self.call.pinned_count,
+                self.call.card_count,
+            )
+        {
+            (
+                self.call.hidden_count,
+                self.call.pinned_count,
+                self.call.card_count,
+            ) = counts;
             // The header (drawn before the stage) shows these.
             ctx.request_repaint();
         }
-        let input = stage::Input { pinned: pinned.len(), rest: rest.len(), area, strip_first: self.call.strip_first };
+        let input = stage::Input {
+            pinned: pinned.len(),
+            rest: rest.len(),
+            area,
+            strip_first: self.call.strip_first,
+        };
         let lay = match self.call.layout.take() {
             Some((i, l)) if i == input => l,
             _ => {
@@ -722,13 +825,32 @@ impl App {
         self.call.stage_rect = Some(area);
 
         if tiles.is_empty() {
-            ui.painter().text(area.center(), Align2::CENTER_CENTER, "Ninguém na sala.", theme::body(15.0), theme::NEVOA);
+            ui.painter().text(
+                area.center(),
+                Align2::CENTER_CENTER,
+                "Nobody in the room.",
+                theme::body(15.0),
+                theme::NEVOA,
+            );
         } else if pinned.is_empty() && rest.is_empty() {
             // Every card is hidden.
-            ui.painter().text(area.center() - Vec2::new(0.0, 22.0), Align2::CENTER_CENTER, "Todos os cards estão ocultos.", theme::body(15.0), theme::NEVOA);
-            let r = Rect::from_center_size(area.center() + Vec2::new(0.0, 14.0), Vec2::new(240.0, 32.0));
-            let mut c = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(Layout::top_down(Align::Center)));
-            if ui_kit::button(&mut c, Kind::Secondary, Some(ph::EYE), "Mostrar ocultos").clicked() {
+            ui.painter().text(
+                area.center() - Vec2::new(0.0, 22.0),
+                Align2::CENTER_CENTER,
+                "All cards are hidden.",
+                theme::body(15.0),
+                theme::NEVOA,
+            );
+            let r = Rect::from_center_size(
+                area.center() + Vec2::new(0.0, 14.0),
+                Vec2::new(240.0, 32.0),
+            );
+            let mut c = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(r)
+                    .layout(Layout::top_down(Align::Center)),
+            );
+            if ui_kit::button(&mut c, Kind::Secondary, Some(ph::EYE), "Show hidden").clicked() {
                 self.show_hidden_cards();
             }
         }
@@ -741,10 +863,15 @@ impl App {
         }
         if with_pins {
             for (k, &i) in rest.iter().enumerate() {
-                let Some(Some(r)) = lay.strip.get(k) else { continue };
+                let Some(Some(r)) = lay.strip.get(k) else {
+                    continue;
+                };
                 self.draw_tile(ui, &tiles[i], *r);
                 let t = &tiles[i];
-                if t.video && matches!(t.key, TileKey::Stream(_)) && Some(t.key.user()) != self.my_id() {
+                if t.video
+                    && matches!(t.key, TileKey::Stream(_))
+                    && Some(t.key.user()) != self.my_id()
+                {
                     // Still playing, at its small size: drawn less often.
                     self.video.strip.insert(t.key.user().to_string());
                 }
@@ -775,12 +902,12 @@ impl App {
         let (back, fwd) = lay.can_scroll();
         let mut step = 0i32;
         if let Some(r) = lay.prev {
-            if strip_arrow(ui, r, ph::CARET_LEFT, back, "Cards anteriores") {
+            if strip_arrow(ui, r, ph::CARET_LEFT, back, "Previous cards") {
                 step = -1;
             }
         }
         if let Some(r) = lay.next {
-            if strip_arrow(ui, r, ph::CARET_RIGHT, fwd, "Mais cards") {
+            if strip_arrow(ui, r, ph::CARET_RIGHT, fwd, "More cards") {
                 step = 1;
             }
         }
@@ -818,15 +945,25 @@ impl App {
         for m in members {
             let id = m.user.id;
             let cam = self.camera_key_of(id).is_some();
-            tiles.push(Tile { key: TileKey::Member(id), member: m.clone(), video: cam });
+            tiles.push(Tile {
+                key: TileKey::Member(id),
+                member: m.clone(),
+                video: cam,
+            });
             if m.streaming {
                 let key = id.to_string();
                 let video = if Some(id) == me {
                     self.my_preview_live()
                 } else {
-                    self.is_watching(&key) && !self.stream_is_audio_only(m) && !self.stream_popped(&key)
+                    self.is_watching(&key)
+                        && !self.stream_is_audio_only(m)
+                        && !self.stream_popped(&key)
                 };
-                tiles.push(Tile { key: TileKey::Stream(id), member: m.clone(), video });
+                tiles.push(Tile {
+                    key: TileKey::Stream(id),
+                    member: m.clone(),
+                    video,
+                });
             }
         }
         keys.extend(tiles.iter().map(|t| (t.key, t.video)));
@@ -842,7 +979,9 @@ impl App {
 
     /// Open a stage card's menu at `pos` as a right click on it does (the autotest).
     pub(crate) fn open_card_menu(&mut self, ctx: &egui::Context, key: TileKey, pos: Pos2) -> bool {
-        let Some(t) = self.call.tiles.iter().find(|t| t.key == key).cloned() else { return false };
+        let Some(t) = self.call.tiles.iter().find(|t| t.key == key).cloned() else {
+            return false;
+        };
         let lead = match key {
             TileKey::Stream(_) => Lead::Stream,
             TileKey::Member(_) if t.video => Lead::Camera,
@@ -863,37 +1002,67 @@ impl App {
             TileKey::Stream(_) => self.draw_stream_card(ui, &painter, tile, rect, pinned),
         };
         if self.call.drawn.len() < 64 {
-            self.call.drawn.push(DrawnCard { key: tile.key, rect, video, pinned });
+            self.call.drawn.push(DrawnCard {
+                key: tile.key,
+                rect,
+                video,
+                pinned,
+            });
         }
     }
 
     /// A person's card: their camera, or their picture with the speaking ring. Returns where its
     /// video goes.
-    fn draw_member_card(&mut self, ui: &mut egui::Ui, painter: &egui::Painter, tile: &Tile, rect: Rect, pinned: bool) -> Option<Rect> {
+    fn draw_member_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        painter: &egui::Painter,
+        tile: &Tile,
+        rect: Rect,
+        pinned: bool,
+    ) -> Option<Rect> {
         let m = &tile.member;
         let uid = m.user.id;
         let me = self.my_id() == Some(uid);
         let small = rect.height() < SMALL_H;
         let id = egui::Id::new(("stage_card", tile.key));
-        let speaking = !m.muted && if me { self.sending_voice() } else { self.voice.speaking.contains(&uid.to_string()) };
+        let speaking = !m.muted
+            && if me {
+                self.sending_voice()
+            } else {
+                self.voice.speaking.contains(&uid.to_string())
+            };
         let cam = self.camera_key_of(uid);
         self.paint_sound_flash(painter, rect, uid, cam.is_none());
-        let lead = if cam.is_some() { Lead::Camera } else { Lead::None };
-        let base = ui.interact(rect, id, Sense::click()).on_hover_text(card_hover(pinned, false));
+        let lead = if cam.is_some() {
+            Lead::Camera
+        } else {
+            Lead::None
+        };
+        let base = ui
+            .interact(rect, id, Sense::click())
+            .on_hover_text(card_hover(pinned, false));
         self.card_menu_hit(&base, tile, lead);
         if base.clicked() {
             self.toggle_pin(tile.key);
         }
         let mut name = m.user.shown_name().to_string();
         if me {
-            name.push_str(" (você)");
+            name.push_str(" (you)");
         }
         let marks = [
             m.muted.then_some((ph::MICROPHONE_SLASH, theme::AO_VIVO)),
             m.deafened.then_some((ph::HEADPHONES, theme::AO_VIVO)),
             (cam.is_none() && self.camera_flag_of(m)).then_some((ph::VIDEO_CAMERA, theme::NEVOA)),
         ];
-        let tag = Tag { pin: pinned, icon: None, name: &name, live: None, marks, viewers: None };
+        let tag = Tag {
+            pin: pinned,
+            icon: None,
+            name: &name,
+            live: None,
+            marks,
+            viewers: None,
+        };
         let mut placed = None;
         let tag_rect = match cam {
             Some(vkey) => {
@@ -902,11 +1071,32 @@ impl App {
                 self.video.put(vkey, body, painter);
                 placed = Some(body);
                 let (band, at) = tag_band(rect, small);
-                let actions = if me && !small && rect.width() >= 280.0 { 1 } else { 0 };
-                let t = paint_tag(painter, at, band.width() - actions as f32 * 34.0, &tag, small);
+                let actions = if me && !small && rect.width() >= 280.0 {
+                    1
+                } else {
+                    0
+                };
+                let t = paint_tag(
+                    painter,
+                    at,
+                    band.width() - actions as f32 * 34.0,
+                    &tag,
+                    small,
+                );
                 if actions > 0 {
-                    let mut row = ui.new_child(egui::UiBuilder::new().max_rect(band).layout(Layout::right_to_left(Align::Center)));
-                    if ui_kit::icon_button(&mut row, ph::VIDEO_CAMERA_SLASH, "Desligar câmera", IconState::Normal).clicked() {
+                    let mut row = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(band)
+                            .layout(Layout::right_to_left(Align::Center)),
+                    );
+                    if ui_kit::icon_button(
+                        &mut row,
+                        ph::VIDEO_CAMERA_SLASH,
+                        "Turn off camera",
+                        IconState::Normal,
+                    )
+                    .clicked()
+                    {
                         self.stop_camera();
                     }
                 }
@@ -916,12 +1106,26 @@ impl App {
                 let r = (rect.height().min(rect.width()) * 0.2).clamp(12.0, 64.0);
                 let c = rect.center() - Vec2::new(0.0, if small { 8.0 } else { 14.0 });
                 // The person's picture, or the coloured initial while it loads / when there is none.
-                crate::avatars::draw_avatar(&mut self.avatars.store, painter, ui.ctx(), c, r, &m.user, crate::avatars::Surface::Tile);
+                crate::avatars::draw_avatar(
+                    &mut self.avatars.store,
+                    painter,
+                    ui.ctx(),
+                    c,
+                    r,
+                    &m.user,
+                    crate::avatars::Surface::Tile,
+                );
                 if speaking {
                     ui_kit::paint_speaking_ring(painter, c, r, theme::MOVEL);
                 }
                 let inset = if small { 6.0 } else { 10.0 };
-                paint_tag(painter, Pos2::new(rect.left() + inset, rect.bottom() - inset), rect.width() - 2.0 * inset, &tag, small)
+                paint_tag(
+                    painter,
+                    Pos2::new(rect.left() + inset, rect.bottom() - inset),
+                    rect.width() - 2.0 * inset,
+                    &tag,
+                    small,
+                )
             }
         };
         if speaking {
@@ -939,7 +1143,14 @@ impl App {
     }
 
     /// A live person's stream card. Returns where its video goes.
-    fn draw_stream_card(&mut self, ui: &mut egui::Ui, painter: &egui::Painter, tile: &Tile, rect: Rect, pinned: bool) -> Option<Rect> {
+    fn draw_stream_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        painter: &egui::Painter,
+        tile: &Tile,
+        rect: Rect,
+        pinned: bool,
+    ) -> Option<Rect> {
         let m = &tile.member;
         let uid = m.user.id;
         let me = self.my_id() == Some(uid);
@@ -948,27 +1159,42 @@ impl App {
         let key = uid.to_string();
         let watching = self.is_watching(&key);
         let audio_only = self.stream_is_audio_only(m);
-        let viewers = if self.viewers_shown() { Some(self.viewers_of(uid).len()) } else { None };
+        let viewers = if self.viewers_shown() {
+            Some(self.viewers_of(uid).len())
+        } else {
+            None
+        };
         let ctx = ui.ctx().clone();
         // Right click anywhere on the card: the stream's menu first, then the person's.
         let base = ui.interact(rect, id, Sense::click());
         self.card_menu_hit(&base, tile, Lead::Stream);
         let (band, at) = tag_band(rect, small);
         // Everything above the name tag.
-        let content = Rect::from_min_max(rect.min + Vec2::splat(CARD_INSET), Pos2::new(rect.right() - CARD_INSET, band.top()));
+        let content = Rect::from_min_max(
+            rect.min + Vec2::splat(CARD_INSET),
+            Pos2::new(rect.right() - CARD_INSET, band.top()),
+        );
         let big = !small && rect.width() >= 300.0;
         let mut placed = None;
         let mut actions = 0;
-        let pending = self.voice.watch_pending.iter().any(|(w, at)| *w == key && at.elapsed() < WATCH_PENDING_TIMEOUT);
+        let pending = self
+            .voice
+            .watch_pending
+            .iter()
+            .any(|(w, at)| *w == key && at.elapsed() < WATCH_PENDING_TIMEOUT);
         let same = self.voice.channel.is_some() && m.channel_id == self.voice.channel;
         if audio_only {
-            // "Só áudio": no picture at all, a music card instead.
+            // "Audio only": no picture at all, a music card instead.
             let state = if me {
-                if matches!(self.voice.share, crate::app::Share::Off) { "" } else { "Você está transmitindo só o áudio" }
+                if matches!(self.voice.share, crate::app::Share::Off) {
+                    ""
+                } else {
+                    "You are streaming audio only"
+                }
             } else if watching {
-                "Ouvindo"
+                "Listening"
             } else {
-                "Só o som, sem imagem"
+                "Audio only, no video"
             };
             audio_card(painter, content, small, state);
             let at_btn = content.center() + Vec2::new(0.0, if small { 18.0 } else { 44.0 });
@@ -976,17 +1202,45 @@ impl App {
                 // Nothing to listen to: you never hear your own share.
             } else if watching {
                 let row = Rect::from_center_size(at_btn, Vec2::new(content.width(), 30.0));
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(row).layout(Layout::left_to_right(Align::Center)));
+                let mut child = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(row)
+                        .layout(Layout::left_to_right(Align::Center)),
+                );
                 let w = if small { 110.0 } else { 170.0 };
                 child.add_space(((row.width() - w) / 2.0).max(0.0));
                 self.stream_audio_menu(&mut child, &m.user);
-                if ui_kit::button_sized(&mut child, Kind::Secondary, Size::Small, None, if small { "Parar" } else { "Parar de ouvir" }).clicked() {
+                if ui_kit::button_sized(
+                    &mut child,
+                    Kind::Secondary,
+                    Size::Small,
+                    None,
+                    if small { "Stop" } else { "Stop listening" },
+                )
+                .clicked()
+                {
                     self.unwatch(&key);
                 }
             } else if pending {
-                painter.text(at_btn, Align2::CENTER_CENTER, "Abrindo...", theme::body(if small { 11.0 } else { 14.0 }), theme::NEVOA);
+                painter.text(
+                    at_btn,
+                    Align2::CENTER_CENTER,
+                    "Opening...",
+                    theme::body(if small { 11.0 } else { 14.0 }),
+                    theme::NEVOA,
+                );
                 ctx.request_repaint_after(Duration::from_secs(1));
-            } else if centered_button(ui, at_btn, Kind::Secondary, Size::Small, Some(ph::SPEAKER_HIGH), "Ouvir").clicked() && same {
+            } else if centered_button(
+                ui,
+                at_btn,
+                Kind::Secondary,
+                Size::Small,
+                Some(ph::SPEAKER_HIGH),
+                "Listen",
+            )
+            .clicked()
+                && same
+            {
                 self.watch(&key);
             }
             if base.clicked() {
@@ -997,36 +1251,94 @@ impl App {
             // produced while this card is on screen.
             let body = video_body(rect, small);
             painter.rect_filled(body, radius::ROW, Color32::BLACK);
-            self.video.put(vox_client_core::golive::SELF_SHARE_KEY.to_string(), body, painter);
+            self.video.put(
+                vox_client_core::golive::SELF_SHARE_KEY.to_string(),
+                body,
+                painter,
+            );
             placed = Some(body);
             if base.on_hover_text(card_hover(pinned, false)).clicked() {
                 self.toggle_pin(tile.key);
             }
             if big {
                 actions = 1;
-                let mut row = ui.new_child(egui::UiBuilder::new().max_rect(band).layout(Layout::right_to_left(Align::Center)));
-                let label = if self.voice.switching_to.is_some() { "Trocando..." } else { "Trocar tela" };
-                let r = row.add_enabled_ui(self.voice.switching_to.is_none(), |ui| ui_kit::icon_button(ui, ph::ARROWS_CLOCKWISE, label, IconState::Normal)).inner;
+                let mut row = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(band)
+                        .layout(Layout::right_to_left(Align::Center)),
+                );
+                let label = if self.voice.switching_to.is_some() {
+                    "Switching..."
+                } else {
+                    "Switch screen"
+                };
+                let r = row
+                    .add_enabled_ui(self.voice.switching_to.is_none(), |ui| {
+                        ui_kit::icon_button(ui, ph::ARROWS_CLOCKWISE, label, IconState::Normal)
+                    })
+                    .inner;
                 if r.clicked() {
                     self.open_golive_switch();
                 }
             }
         } else if me {
-            // The preview is off (Settings or the menu): just "ao vivo" and who is watching.
-            painter.text(content.center() - Vec2::new(0.0, if small { 6.0 } else { 16.0 }), Align2::CENTER_CENTER, "Prévia desligada", theme::body(if small { 11.0 } else { 15.0 }), theme::NEVOA);
+            // The preview is off (Settings or the menu): just "live" and who is watching.
+            painter.text(
+                content.center() - Vec2::new(0.0, if small { 6.0 } else { 16.0 }),
+                Align2::CENTER_CENTER,
+                "Preview off",
+                theme::body(if small { 11.0 } else { 15.0 }),
+                theme::NEVOA,
+            );
             if let Some(n) = viewers {
-                let line = if n == 1 { "1 assistindo".to_string() } else { format!("{n} assistindo") };
-                painter.text(content.center() + Vec2::new(0.0, if small { 8.0 } else { 4.0 }), Align2::CENTER_CENTER, line, theme::body(if small { 10.0 } else { 13.0 }), theme::NEVOA);
+                let line = if n == 1 {
+                    "1 assistindo".to_string()
+                } else {
+                    format!("{n} assistindo")
+                };
+                painter.text(
+                    content.center() + Vec2::new(0.0, if small { 8.0 } else { 4.0 }),
+                    Align2::CENTER_CENTER,
+                    line,
+                    theme::body(if small { 10.0 } else { 13.0 }),
+                    theme::NEVOA,
+                );
             }
-            if !small && centered_button(ui, content.center() + Vec2::new(0.0, 34.0), Kind::Secondary, Size::Small, Some(ph::EYE), "Mostrar prévia").clicked() {
+            if !small
+                && centered_button(
+                    ui,
+                    content.center() + Vec2::new(0.0, 34.0),
+                    Kind::Secondary,
+                    Size::Small,
+                    Some(ph::EYE),
+                    "Show preview",
+                )
+                .clicked()
+            {
                 self.set_self_preview(true);
             }
             if base.clicked() {
                 self.toggle_pin(tile.key);
             }
         } else if watching && self.stream_popped(&key) {
-            painter.text(content.center() - Vec2::new(0.0, if small { 0.0 } else { 14.0 }), Align2::CENTER_CENTER, "Aberta em outra janela", theme::body(if small { 11.0 } else { 14.0 }), theme::NEVOA);
-            if !small && centered_button(ui, content.center() + Vec2::new(0.0, 16.0), Kind::Secondary, Size::Small, Some(ph::ARROW_SQUARE_OUT), "Trazer de volta").clicked() {
+            painter.text(
+                content.center() - Vec2::new(0.0, if small { 0.0 } else { 14.0 }),
+                Align2::CENTER_CENTER,
+                "Open in another window",
+                theme::body(if small { 11.0 } else { 14.0 }),
+                theme::NEVOA,
+            );
+            if !small
+                && centered_button(
+                    ui,
+                    content.center() + Vec2::new(0.0, 16.0),
+                    Kind::Secondary,
+                    Size::Small,
+                    Some(ph::ARROW_SQUARE_OUT),
+                    "Bring back",
+                )
+                .clicked()
+            {
                 self.pop_out_stream(&key, false);
             }
             if base.clicked() {
@@ -1048,29 +1360,71 @@ impl App {
             }
             if big {
                 actions = 4;
-                let mut row = ui.new_child(egui::UiBuilder::new().max_rect(band.shrink2(Vec2::new(4.0, 0.0))).layout(Layout::right_to_left(Align::Center)));
-                if ui_kit::icon_button(&mut row, ph::X, "Parar de assistir", IconState::Normal).clicked() {
+                let mut row = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(band.shrink2(Vec2::new(4.0, 0.0)))
+                        .layout(Layout::right_to_left(Align::Center)),
+                );
+                if ui_kit::icon_button(&mut row, ph::X, "Stop watching", IconState::Normal)
+                    .clicked()
+                {
                     self.unwatch(&key);
                 }
-                if ui_kit::icon_button(&mut row, ph::CORNERS_OUT, "Tela cheia (Esc ou clique duplo para sair)", IconState::Normal).clicked() {
+                if ui_kit::icon_button(
+                    &mut row,
+                    ph::CORNERS_OUT,
+                    "Fullscreen (Esc or double-click to exit)",
+                    IconState::Normal,
+                )
+                .clicked()
+                {
                     self.fullscreen_stream(&ctx, &key);
                 }
-                if ui_kit::icon_button(&mut row, ph::ARROW_SQUARE_OUT, "Abrir em janela (fechar a janela traz a transmissão de volta)", IconState::Normal).clicked() {
+                if ui_kit::icon_button(
+                    &mut row,
+                    ph::ARROW_SQUARE_OUT,
+                    "Open in a window (close it to bring the stream back)",
+                    IconState::Normal,
+                )
+                .clicked()
+                {
                     self.pop_out_stream(&key, true);
                 }
                 self.stream_audio_menu(&mut row, &m.user);
             }
         } else {
-            let label = if small { "Assistir" } else { "Assistir transmissão" };
+            let label = if small { "Watch" } else { "Watch stream" };
             if pending {
-                painter.text(content.center(), Align2::CENTER_CENTER, "Abrindo...", theme::body(if small { 11.0 } else { 14.0 }), theme::NEVOA);
+                painter.text(
+                    content.center(),
+                    Align2::CENTER_CENTER,
+                    "Opening...",
+                    theme::body(if small { 11.0 } else { 14.0 }),
+                    theme::NEVOA,
+                );
                 ctx.request_repaint_after(Duration::from_secs(1));
             } else {
                 if !small {
-                    painter.text(content.center() - Vec2::new(0.0, 30.0), Align2::CENTER_CENTER, ph::MONITOR, theme::body(30.0), theme::NEVOA);
+                    painter.text(
+                        content.center() - Vec2::new(0.0, 30.0),
+                        Align2::CENTER_CENTER,
+                        ph::MONITOR,
+                        theme::body(30.0),
+                        theme::NEVOA,
+                    );
                 }
                 let at_btn = content.center() + Vec2::new(0.0, if small { 0.0 } else { 10.0 });
-                if centered_button(ui, at_btn, Kind::Secondary, if small { Size::Small } else { Size::Normal }, Some(ph::PLAY), label).clicked() && same {
+                if centered_button(
+                    ui,
+                    at_btn,
+                    Kind::Secondary,
+                    if small { Size::Small } else { Size::Normal },
+                    Some(ph::PLAY),
+                    label,
+                )
+                .clicked()
+                    && same
+                {
                     // Next to the streams already watched (a message past the limit).
                     self.watch(&key);
                 }
@@ -1079,16 +1433,37 @@ impl App {
                 self.toggle_pin(tile.key);
             }
         }
-        let name = if me { "Sua transmissão" } else { m.user.shown_name() };
+        let name = if me {
+            "Your stream"
+        } else {
+            m.user.shown_name()
+        };
         let tag = Tag {
             pin: pinned,
-            icon: Some((if audio_only { ph::MUSIC_NOTES } else { ph::MONITOR }, theme::NEVOA)),
+            icon: Some((
+                if audio_only {
+                    ph::MUSIC_NOTES
+                } else {
+                    ph::MONITOR
+                },
+                theme::NEVOA,
+            )),
             name,
-            live: Some(if audio_only { "ao vivo · só áudio" } else { "ao vivo" }),
+            live: Some(if audio_only {
+                "live · audio only"
+            } else {
+                "live"
+            }),
             marks: [None; 3],
             viewers,
         };
-        let tag_rect = paint_tag(painter, at, band.width() - actions as f32 * 34.0, &tag, small);
+        let tag_rect = paint_tag(
+            painter,
+            at,
+            band.width() - actions as f32 * 34.0,
+            &tag,
+            small,
+        );
         // The tag opens the streamer's profile card (after the card's own area).
         let name_resp = ui.interact(tag_rect, id.with("name"), Sense::click());
         self.card_menu_hit(&name_resp, tile, Lead::Stream);
@@ -1098,27 +1473,33 @@ impl App {
         placed
     }
 
-    /// The card's own items at the top of the right-click menu opened from a card: "Fixar" /
-    /// "Desafixar" (the menu's only pin item: the person's own pin items are left out under it,
-    /// `context_menu::card_rows`) and, for a card without video, "Ocultar este card" and "Ocultar
-    /// todos sem vídeo". `None`: the menu was not opened from one of this person's cards;
+    /// The card's own items at the top of the right-click menu opened from a card: "Pin" /
+    /// "Unpin" (the menu's only pin item: the person's own pin items are left out under it,
+    /// `context_menu::card_rows`) and, for a card without video, Hide this card and
+    /// Hide everyone without video. `None`: the menu was not opened from this person's cards;
     /// `Some(true)`: an item was clicked (the caller closes the menu).
-    pub(crate) fn card_menu_section(&mut self, ui: &mut egui::Ui, user: &User, _lead: Lead) -> Option<bool> {
+    pub(crate) fn card_menu_section(
+        &mut self,
+        ui: &mut egui::Ui,
+        user: &User,
+        _lead: Lead,
+    ) -> Option<bool> {
         let (key, video) = self.call.menu_card.filter(|(k, _)| k.user() == user.id)?;
         let hide = Hidden::can_hide(key, video);
         let mut done = false;
-        let text = if self.is_pinned(key) { "Desafixar" } else { "Fixar" };
+        let text = if self.is_pinned(key) { "Unpin" } else { "Pin" };
         if ui_kit::menu_row(ui, ph::PUSH_PIN, text, false).clicked() {
             self.toggle_pin(key);
             done = true;
         }
         if hide {
             self.call.card_menu_drawn = Some(key);
-            if ui_kit::menu_row(ui, ph::EYE_SLASH, "Ocultar este card", false).clicked() {
+            if ui_kit::menu_row(ui, ph::EYE_SLASH, "Hide this card", false).clicked() {
                 self.hide_card(key.user());
                 done = true;
             }
-            if ui_kit::menu_row(ui, ph::USERS_THREE, "Ocultar todos sem vídeo", false).clicked() {
+            if ui_kit::menu_row(ui, ph::USERS_THREE, "Hide everyone without video", false).clicked()
+            {
                 self.hide_cards_without_video();
                 done = true;
             }
@@ -1134,14 +1515,24 @@ impl App {
         } else {
             let identity = id.to_string();
             // (A camera I hid for myself is not received nor drawn.)
-            (self.voice.cameras.contains(&identity) && !self.camera_hidden_for_me(id)).then(|| camera_key(&identity))
+            (self.voice.cameras.contains(&identity) && !self.camera_hidden_for_me(id))
+                .then(|| camera_key(&identity))
         }
     }
 
     /// Every camera tile key that can be on screen now.
     fn camera_keys(&self) -> Vec<String> {
-        let hidden = |i: &String| i.parse::<UserId>().is_ok_and(|u| self.camera_hidden_for_me(u));
-        let mut keys: Vec<String> = self.voice.cameras.iter().filter(|i| !hidden(i)).map(|i| camera_key(i)).collect();
+        let hidden = |i: &String| {
+            i.parse::<UserId>()
+                .is_ok_and(|u| self.camera_hidden_for_me(u))
+        };
+        let mut keys: Vec<String> = self
+            .voice
+            .cameras
+            .iter()
+            .filter(|i| !hidden(i))
+            .map(|i| camera_key(i))
+            .collect();
         if self.camera_on() {
             keys.push(SELF_CAMERA_KEY.to_string());
         }
@@ -1160,7 +1551,11 @@ impl App {
             self.call.fullscreen_off_pending = false;
             self.set_fullscreen(ctx, false);
         }
-        let watched: Vec<String> = if self.screen == crate::app::Screen::Main { self.watching_video() } else { Vec::new() };
+        let watched: Vec<String> = if self.screen == crate::app::Screen::Main {
+            self.watching_video()
+        } else {
+            Vec::new()
+        };
         let mut keys = watched.clone();
         if self.screen == crate::app::Screen::Main {
             keys.extend(self.camera_keys());
@@ -1169,13 +1564,21 @@ impl App {
             }
         }
         if self.call.fullscreen {
-            let ok = self.call.fullscreen_key.as_ref().is_some_and(|k| watched.contains(k) && !self.stream_popped(k));
+            let ok = self
+                .call
+                .fullscreen_key
+                .as_ref()
+                .is_some_and(|k| watched.contains(k) && !self.stream_popped(k));
             if !ok || self.center != Center::Call {
                 self.set_fullscreen(ctx, false);
             }
         }
         // The stage fullscreen only lasts while the stage is what the center shows.
-        if self.stage_fullscreen && !(self.screen == crate::app::Screen::Main && self.voice.channel.is_some() && self.center == Center::Call) {
+        if self.stage_fullscreen
+            && !(self.screen == crate::app::Screen::Main
+                && self.voice.channel.is_some()
+                && self.center == Center::Call)
+        {
             self.set_stage_fullscreen(ctx, false);
         }
         if self.center != Center::Call && !self.call.fullscreen {
@@ -1186,9 +1589,17 @@ impl App {
         // What egui draws over each video. macOS: egui draws the videos itself, under its own
         // popups, so nothing is cut out or hidden (the overlays are only known: logs, autotests).
         let overlays = self.video_clips(ctx);
-        let clips = if cfg!(target_os = "macos") { HashMap::new() } else { overlays.clone() };
+        let clips = if cfg!(target_os = "macos") {
+            HashMap::new()
+        } else {
+            overlays.clone()
+        };
         // Only a video covered entirely is hidden (and the preview of my own live stops).
-        let hidden: Vec<String> = clips.iter().filter(|(_, c)| **c == Clip::Hidden).map(|(k, _)| k.clone()).collect();
+        let hidden: Vec<String> = clips
+            .iter()
+            .filter(|(_, c)| **c == Clip::Hidden)
+            .map(|(k, _)| k.clone())
+            .collect();
         self.sync_share_preview(ctx, &hidden);
         self.note_clips(&overlays);
         self.video.covered = !clips.is_empty();
@@ -1198,7 +1609,11 @@ impl App {
         }
         // Item 9: which watched streams are on screen (a dialog over one does not count as
         // hidden: it is brief, and pausing costs the streamer a keyframe), and which are small.
-        self.video.shown = watched.iter().filter(|k| self.video.want.contains_key(*k)).cloned().collect();
+        self.video.shown = watched
+            .iter()
+            .filter(|k| self.video.want.contains_key(*k))
+            .cloned()
+            .collect();
         self.sync_strip_caps(&watched);
         self.sync_streams_visible(ctx, true);
         self.sync_focus_audio();
@@ -1232,7 +1647,11 @@ impl App {
                 if own.values().any(|o| *o == l) {
                     own_rank.insert(l, i);
                 }
-                if matches!(l.order, egui::Order::Middle | egui::Order::Foreground | egui::Order::Tooltip) && visible.contains(&l) {
+                if matches!(
+                    l.order,
+                    egui::Order::Middle | egui::Order::Foreground | egui::Order::Tooltip
+                ) && visible.contains(&l)
+                {
                     if let Some(r) = m.area_rect(l.id) {
                         overlays.push((l, i, r));
                     }
@@ -1245,12 +1664,16 @@ impl App {
         }
         let mut out = HashMap::new();
         for (key, rect) in &self.video.want {
-            let inside = own.get(key).map(|l| (*l, l.order, own_rank.get(l).copied()));
+            let inside = own
+                .get(key)
+                .map(|l| (*l, l.order, own_rank.get(l).copied()));
             let cuts: Vec<clip::Px> = overlays
                 .iter()
                 .filter(|(l, i, _)| match inside {
                     None => true,
-                    Some((layer, order, rank)) => *l != layer && (l.order, Some(*i)) > (order, rank),
+                    Some((layer, order, rank)) => {
+                        *l != layer && (l.order, Some(*i)) > (order, rank)
+                    }
                 })
                 .map(|(_, _, r)| clip::cut_px(*r, clip::PAD, ppp))
                 .collect();
@@ -1264,7 +1687,13 @@ impl App {
 
     /// One log line per video when its clip state changes (clipped / unclipped / hidden).
     fn note_clips(&self, clips: &HashMap<String, Clip>) {
-        let was = |k: &String| self.video.clips.get(k).map(Clip::state).unwrap_or("unclipped");
+        let was = |k: &String| {
+            self.video
+                .clips
+                .get(k)
+                .map(Clip::state)
+                .unwrap_or("unclipped")
+        };
         for (k, c) in clips {
             if was(k) != c.state() {
                 let cuts = match c {
@@ -1288,7 +1717,11 @@ impl App {
         for k in watched {
             let Some(st) = v.state(k) else { continue };
             // A stream in its own window is drawn at full rate wherever its tile is.
-            let cap = if self.video.strip.contains(k) && !st.popped_out { STRIP_FPS } else { 0 };
+            let cap = if self.video.strip.contains(k) && !st.popped_out {
+                STRIP_FPS
+            } else {
+                0
+            };
             if st.max_fps != cap {
                 tracing::info!(key = %k, max_fps = cap, "watched stream drawing rate");
                 v.set_max_fps(k, cap);
@@ -1310,33 +1743,52 @@ impl App {
             if !from_ui && !self.video.visible_sent.contains_key(&k) {
                 continue;
             }
-            let inside = self.screen == crate::app::Screen::Main && !minimized && self.video.shown.contains(&k);
+            let inside = self.screen == crate::app::Screen::Main
+                && !minimized
+                && self.video.shown.contains(&k);
             let visible = inside || self.stream_in_own_window(&k);
             if self.video.visible_sent.get(&k) != Some(&visible) {
                 tracing::info!(key = %k, visible, minimized, center = ?self.center, "watched stream visibility");
                 self.video.visible_sent.insert(k.clone(), visible);
-                self.backend.send(Cmd::StreamVisible { identity: k, visible });
+                self.backend.send(Cmd::StreamVisible {
+                    identity: k,
+                    visible,
+                });
             }
         }
     }
 
-    /// "Ouvir só as transmissões fixadas": with several watched streams and some pinned (or one
+    /// "Only play pinned streams": with several watched streams and some pinned (or one
     /// fullscreen), the others are silenced; otherwise every watched stream plays.
     fn sync_focus_audio(&mut self) {
         let video = self.watching_video();
         let me = self.my_id();
         let focus: Vec<&String> = if self.call.fullscreen {
-            self.call.fullscreen_key.iter().filter(|f| self.is_watching(f)).collect()
+            self.call
+                .fullscreen_key
+                .iter()
+                .filter(|f| self.is_watching(f))
+                .collect()
         } else {
             video
                 .iter()
-                .filter(|k| k.parse::<UserId>().is_ok_and(|u| Some(u) != me && self.is_pinned(TileKey::Stream(u))))
+                .filter(|k| {
+                    k.parse::<UserId>()
+                        .is_ok_and(|u| Some(u) != me && self.is_pinned(TileKey::Stream(u)))
+                })
                 .collect()
         };
         // Only streams with a picture can be put aside: the sound of an audio-only live (the
         // music) is the whole point of it and keeps playing.
-        let want: HashSet<String> = if !focus.is_empty() && self.settings.stream_focus_audio && self.voice.watching.len() > 1 {
-            video.iter().filter(|k| !focus.contains(k)).cloned().collect()
+        let want: HashSet<String> = if !focus.is_empty()
+            && self.settings.stream_focus_audio
+            && self.voice.watching.len() > 1
+        {
+            video
+                .iter()
+                .filter(|k| !focus.contains(k))
+                .cloned()
+                .collect()
         } else {
             HashSet::new()
         };
@@ -1344,11 +1796,17 @@ impl App {
             return;
         }
         for k in want.difference(&self.video.focus_muted_sent) {
-            self.backend.send(Cmd::StreamFocusMuted { identity: k.clone(), muted: true });
+            self.backend.send(Cmd::StreamFocusMuted {
+                identity: k.clone(),
+                muted: true,
+            });
         }
         for k in self.video.focus_muted_sent.difference(&want) {
             if self.voice.watching.contains(k) {
-                self.backend.send(Cmd::StreamFocusMuted { identity: k.clone(), muted: false });
+                self.backend.send(Cmd::StreamFocusMuted {
+                    identity: k.clone(),
+                    muted: false,
+                });
             }
         }
         tracing::info!(silenced = ?want, "stream audio focus");
@@ -1362,7 +1820,9 @@ impl App {
         self.video.placed.retain(|k, _| keys.contains(k));
         for key in keys {
             if !self.video.hosts.contains_key(key) {
-                let Some(parent) = self.video.parent else { continue };
+                let Some(parent) = self.video.parent else {
+                    continue;
+                };
                 if self.video.host_failed {
                     continue;
                 }
@@ -1385,17 +1845,32 @@ impl App {
             }
             let clip = clips.get(key);
             let covered = clip == Some(&Clip::Hidden);
-            let rect = if covered { None } else { self.video.want.get(key).copied() };
+            let rect = if covered {
+                None
+            } else {
+                self.video.want.get(key).copied()
+            };
             let px = rect.map(|r| to_px(r, ppp));
             let cuts: Vec<PxRect> = match clip {
-                Some(Clip::Cut(c)) => c.iter().map(|&(x, y, w, h)| PxRect { x, y, w, h }).collect(),
+                Some(Clip::Cut(c)) => c
+                    .iter()
+                    .map(|&(x, y, w, h)| PxRect { x, y, w, h })
+                    .collect(),
                 _ => Vec::new(),
             };
             let host = self.video.hosts.get_mut(key).expect("inserted above");
             if host.place_clipped(px.map(|(x, y, w, h)| PxRect { x, y, w, h }), &cuts) {
                 match px {
                     Some(p) => {
-                        tracing::debug!(key, x = p.0, y = p.1, w = p.2, h = p.3, ppp, "inline video placed");
+                        tracing::debug!(
+                            key,
+                            x = p.0,
+                            y = p.1,
+                            w = p.2,
+                            h = p.3,
+                            ppp,
+                            "inline video placed"
+                        );
                         self.video.placed.insert(key.clone(), p);
                     }
                     None => {
@@ -1436,10 +1911,14 @@ impl App {
 /// The hover text of a card.
 fn card_hover(pinned: bool, stream: bool) -> &'static str {
     match (pinned, stream) {
-        (false, false) => "Clique para fixar · botão direito: mais opções",
-        (true, false) => "Clique para desafixar · botão direito: mais opções",
-        (false, true) => "Clique para fixar · clique duplo: tela cheia · botão direito: mais opções",
-        (true, true) => "Clique para desafixar · clique duplo: tela cheia · botão direito: mais opções",
+        (false, false) => "Click to pin · right-click for more options",
+        (true, false) => "Click to unpin · right-click for more options",
+        (false, true) => {
+            "Click to pin · double-click for fullscreen · right-click for more options"
+        }
+        (true, true) => {
+            "Click to unpin · double-click for fullscreen · right-click for more options"
+        }
     }
 }
 
@@ -1457,14 +1936,23 @@ fn tag_h(small: bool) -> f32 {
 fn tag_band(card: Rect, small: bool) -> (Rect, Pos2) {
     let margin = if small { 5.0 } else { 8.0 };
     let h = tag_h(small) + 2.0 * margin;
-    let band = Rect::from_min_max(Pos2::new(card.left() + CARD_INSET, card.bottom() - h), Pos2::new(card.right() - CARD_INSET, card.bottom()));
-    (band, Pos2::new(card.left() + margin + 2.0, card.bottom() - margin))
+    let band = Rect::from_min_max(
+        Pos2::new(card.left() + CARD_INSET, card.bottom() - h),
+        Pos2::new(card.right() - CARD_INSET, card.bottom()),
+    );
+    (
+        band,
+        Pos2::new(card.left() + margin + 2.0, card.bottom() - margin),
+    )
 }
 
 /// Where a video card's picture goes: inside the speaking border, above the name tag.
 fn video_body(card: Rect, small: bool) -> Rect {
     let (band, _) = tag_band(card, small);
-    Rect::from_min_max(card.min + Vec2::splat(CARD_INSET), Pos2::new(card.right() - CARD_INSET, band.top()))
+    Rect::from_min_max(
+        card.min + Vec2::splat(CARD_INSET),
+        Pos2::new(card.right() - CARD_INSET, band.top()),
+    )
 }
 
 /// What a card's name tag shows, left to right.
@@ -1473,7 +1961,7 @@ struct Tag<'a> {
     pin: bool,
     icon: Option<(&'static str, Color32)>,
     name: &'a str,
-    /// The "ao vivo" tag's text.
+    /// The "live" tag's text.
     live: Option<&'static str>,
     /// Small state icons after the name (microphone off, deafened, camera).
     marks: [Option<(&'static str, Color32)>; 3],
@@ -1491,14 +1979,26 @@ fn paint_tag(painter: &egui::Painter, at: Pos2, max_w: f32, t: &Tag<'_>, small: 
     let lay = |s: &str, c: Color32| painter.layout_no_wrap(s.to_owned(), icon_font.clone(), c);
     let pin = t.pin.then(|| lay(ph::PUSH_PIN, theme::GIZ));
     let icon = t.icon.map(|(i, c)| lay(i, c));
-    let live = t.live.map(|s| painter.layout_no_wrap(s.to_owned(), theme::semibold(10.5), Color32::WHITE));
+    let live = t
+        .live
+        .map(|s| painter.layout_no_wrap(s.to_owned(), theme::semibold(10.5), Color32::WHITE));
     let marks = t.marks.map(|m| m.map(|(i, c)| lay(i, c)));
-    let viewers = t.viewers.map(|n| painter.layout_no_wrap(format!("{} {n}", ph::EYE), name_font.clone(), theme::NEVOA));
-    let width = |g: &Option<std::sync::Arc<egui::Galley>>, extra: f32| g.as_ref().map_or(0.0, |g| g.size().x + extra);
-    let fixed = width(&pin, sp) + width(&icon, sp) + width(&live, 10.0 + sp) + marks.iter().map(|m| width(m, sp)).sum::<f32>() + width(&viewers, sp);
+    let viewers = t.viewers.map(|n| {
+        painter.layout_no_wrap(format!("{} {n}", ph::EYE), name_font.clone(), theme::NEVOA)
+    });
+    let width = |g: &Option<std::sync::Arc<egui::Galley>>, extra: f32| {
+        g.as_ref().map_or(0.0, |g| g.size().x + extra)
+    };
+    let fixed = width(&pin, sp)
+        + width(&icon, sp)
+        + width(&live, 10.0 + sp)
+        + marks.iter().map(|m| width(m, sp)).sum::<f32>()
+        + width(&viewers, sp);
     let name_w = (max_w - 2.0 * pad - fixed).max(0.0);
     let name = crate::app::notify::fit_name(painter, t.name, name_font, theme::GIZ, name_w);
-    let w = (2.0 * pad + fixed + name.size().x.min(name_w)).min(max_w).max(0.0);
+    let w = (2.0 * pad + fixed + name.size().x.min(name_w))
+        .min(max_w)
+        .max(0.0);
     let rect = Rect::from_min_size(Pos2::new(at.x, at.y - h), Vec2::new(w, h));
     let p = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
     p.rect_filled(rect, radius::ROW, theme::ETIQUETA);
@@ -1537,30 +2037,75 @@ fn paint_tag(painter: &egui::Painter, at: Pos2, max_w: f32, t: &Tag<'_>, small: 
 }
 
 /// A kit button centred on `at` (inside a card).
-fn centered_button(ui: &mut egui::Ui, at: Pos2, kind: Kind, size: Size, icon: Option<&str>, text: &str) -> egui::Response {
+fn centered_button(
+    ui: &mut egui::Ui,
+    at: Pos2,
+    kind: Kind,
+    size: Size,
+    icon: Option<&str>,
+    text: &str,
+) -> egui::Response {
     let h = if size == Size::Small { 26.0 } else { 32.0 };
     let r = Rect::from_center_size(at, Vec2::new(320.0, h));
-    let mut c = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(Layout::top_down(Align::Center)));
+    let mut c = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(r)
+            .layout(Layout::top_down(Align::Center)),
+    );
     ui_kit::button_sized(&mut c, kind, size, icon, text)
 }
 
 /// One of the strip's scroll arrows. True when clicked.
 fn strip_arrow(ui: &mut egui::Ui, rect: Rect, icon: &str, enabled: bool, hover: &str) -> bool {
-    let resp = ui.interact(rect, egui::Id::new(("strip_arrow", icon)), if enabled { Sense::click() } else { Sense::hover() });
-    let fill = if enabled && resp.hovered() { theme::MOVEL_HOVER } else { theme::MOVEL };
+    let resp = ui.interact(
+        rect,
+        egui::Id::new(("strip_arrow", icon)),
+        if enabled {
+            Sense::click()
+        } else {
+            Sense::hover()
+        },
+    );
+    let fill = if enabled && resp.hovered() {
+        theme::MOVEL_HOVER
+    } else {
+        theme::MOVEL
+    };
     ui.painter().rect_filled(rect, radius::BUTTON, fill);
-    let fg = if enabled { theme::GIZ } else { theme::NEVOA.gamma_multiply(0.4) };
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, icon, theme::body(18.0), fg);
+    let fg = if enabled {
+        theme::GIZ
+    } else {
+        theme::NEVOA.gamma_multiply(0.4)
+    };
+    ui.painter().text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        icon,
+        theme::body(18.0),
+        fg,
+    );
     enabled && resp.on_hover_text(hover).clicked()
 }
 
 /// The card of an audio-only live in place of a picture: a music note and a line about the state
-/// (listening, or the card is ours). The "ao vivo · só áudio" tag is in the name tag.
+/// (listening, or the card is ours). The "live · audio only" tag is in the name tag.
 fn audio_card(painter: &egui::Painter, body: Rect, small: bool, state: &str) {
     let up = if small { 10.0 } else { 26.0 };
-    painter.text(body.center() - Vec2::new(0.0, up), Align2::CENTER_CENTER, ph::MUSIC_NOTES, theme::body(if small { 22.0 } else { 44.0 }), theme::GIZ);
+    painter.text(
+        body.center() - Vec2::new(0.0, up),
+        Align2::CENTER_CENTER,
+        ph::MUSIC_NOTES,
+        theme::body(if small { 22.0 } else { 44.0 }),
+        theme::GIZ,
+    );
     if !small && !state.is_empty() {
-        painter.text(body.center() + Vec2::new(0.0, 14.0), Align2::CENTER_CENTER, state, theme::body(12.5), theme::NEVOA);
+        painter.text(
+            body.center() + Vec2::new(0.0, 14.0),
+            Align2::CENTER_CENTER,
+            state,
+            theme::body(12.5),
+            theme::NEVOA,
+        );
     }
 }
 
@@ -1577,7 +2122,7 @@ mod tests {
         assert!(!watch_allowed(4, 0));
         assert!(!watch_allowed(3, 1), "a pending one counts");
         assert!(!watch_allowed(0, 4));
-        assert!(watch_limit_text().contains("4 transmissões"));
+        assert!(watch_limit_text().contains("4 streams"));
     }
 
     #[test]
@@ -1608,15 +2153,28 @@ mod tests {
     #[test]
     fn the_video_sits_inside_the_card_above_its_tag() {
         for small in [false, true] {
-            let card = Rect::from_min_size(Pos2::new(100.0, 50.0), Vec2::new(400.0, if small { 112.0 } else { 225.0 }));
+            let card = Rect::from_min_size(
+                Pos2::new(100.0, 50.0),
+                Vec2::new(400.0, if small { 112.0 } else { 225.0 }),
+            );
             let body = video_body(card, small);
             let (band, at) = tag_band(card, small);
             assert!(card.contains_rect(body) && card.contains_rect(band));
             // Room for the 2-point speaking border on every side, and the tag under the picture.
-            assert!(body.left() - card.left() >= theme::stroke::SPEAKING && card.right() - body.right() >= theme::stroke::SPEAKING);
+            assert!(
+                body.left() - card.left() >= theme::stroke::SPEAKING
+                    && card.right() - body.right() >= theme::stroke::SPEAKING
+            );
             assert!(body.top() - card.top() >= theme::stroke::SPEAKING);
-            assert!((body.bottom() - band.top()).abs() < 0.01 && at.y - tag_h(small) >= band.top() - 0.01 && at.y <= card.bottom());
-            assert!(body.height() > card.height() * 0.6, "small={small}: the picture keeps most of the card");
+            assert!(
+                (body.bottom() - band.top()).abs() < 0.01
+                    && at.y - tag_h(small) >= band.top() - 0.01
+                    && at.y <= card.bottom()
+            );
+            assert!(
+                body.height() > card.height() * 0.6,
+                "small={small}: the picture keeps most of the card"
+            );
         }
     }
 
@@ -1629,8 +2187,11 @@ mod tests {
 
     #[test]
     fn the_header_counts_read_well() {
-        assert_eq!(stage_meta_text(1, 0, 0), "1 pessoa");
-        assert_eq!(stage_meta_text(4, 2, 1), "4 pessoas · 2 em foco · 1 card oculto");
-        assert_eq!(stage_meta_text(3, 0, 2), "3 pessoas · 2 cards ocultos");
+        assert_eq!(stage_meta_text(1, 0, 0), "1 person");
+        assert_eq!(
+            stage_meta_text(4, 2, 1),
+            "4 people · 2 focused · 1 hidden card"
+        );
+        assert_eq!(stage_meta_text(3, 0, 2), "3 people · 2 hidden cards");
     }
 }

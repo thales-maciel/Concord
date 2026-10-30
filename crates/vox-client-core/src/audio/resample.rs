@@ -15,7 +15,12 @@ pub struct LinearResampler {
 impl LinearResampler {
     pub fn new(from_rate: u32, to_rate: u32, channels: usize) -> Self {
         assert!(from_rate > 0 && to_rate > 0 && channels > 0);
-        Self { channels, step: from_rate as f64 / to_rate as f64, pos: 0.0, prev: vec![0.0; channels] }
+        Self {
+            channels,
+            step: from_rate as f64 / to_rate as f64,
+            pos: 0.0,
+            prev: vec![0.0; channels],
+        }
     }
 
     /// Resample `input` (interleaved) and append the result to `out`.
@@ -26,7 +31,13 @@ impl LinearResampler {
             return;
         }
         // Virtual array y = [prev, input frames...] of n + 1 frames; interpolate y[i]..y[i+1].
-        let frame = |i: usize, c: usize| -> f32 { if i == 0 { self.prev[c] } else { input[(i - 1) * ch + c] } };
+        let frame = |i: usize, c: usize| -> f32 {
+            if i == 0 {
+                self.prev[c]
+            } else {
+                input[(i - 1) * ch + c]
+            }
+        };
         while self.pos < n as f64 {
             let i = self.pos as usize;
             let f = (self.pos - i as f64) as f32;
@@ -62,7 +73,9 @@ mod tests {
     fn constant_signal_stays_constant() {
         let mut r = LinearResampler::new(48_000, 44_100, 2);
         let mut out = Vec::new();
-        let block: Vec<f32> = (0..960).map(|i| if i % 2 == 0 { 0.5 } else { -0.5 }).collect();
+        let block: Vec<f32> = (0..960)
+            .map(|i| if i % 2 == 0 { 0.5 } else { -0.5 })
+            .collect();
         r.process(&block, &mut out); // warm-up (first sample interpolates from silence)
         out.clear();
         r.process(&block, &mut out);

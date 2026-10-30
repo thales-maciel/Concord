@@ -9,7 +9,10 @@ use eframe::egui;
 pub enum Segment<'a> {
     Text(&'a str),
     /// `shown` is the text as typed; `url` is what gets opened (`www.` gains `https://`).
-    Link { shown: &'a str, url: String },
+    Link {
+        shown: &'a str,
+        url: String,
+    },
 }
 
 /// Split one line into plain text and links.
@@ -18,9 +21,15 @@ pub fn segments(line: &str) -> Vec<Segment<'_>> {
     let mut rest = line;
     while let Some(start) = find_link_start(rest) {
         let tail = &rest[start..];
-        let end = tail.find(|c: char| c.is_whitespace() || c.is_control()).unwrap_or(tail.len());
+        let end = tail
+            .find(|c: char| c.is_whitespace() || c.is_control())
+            .unwrap_or(tail.len());
         let shown = trim_trailing_punct(&tail[..end]);
-        let url = if shown.starts_with("www.") { format!("https://{shown}") } else { shown.to_string() };
+        let url = if shown.starts_with("www.") {
+            format!("https://{shown}")
+        } else {
+            shown.to_string()
+        };
         if !is_openable(&url) {
             // A bare scheme like "https://" with nothing after it: keep it as text.
             out.push(Segment::Text(&rest[..start + shown.len().max(1)]));
@@ -57,7 +66,9 @@ fn find_link_start(s: &str) -> Option<usize> {
 fn trim_trailing_punct(s: &str) -> &str {
     let mut s = s;
     loop {
-        let Some(last) = s.chars().last() else { return s };
+        let Some(last) = s.chars().last() else {
+            return s;
+        };
         let strip = match last {
             '.' | ',' | ';' | ':' | '!' | '?' | '"' | '\'' => true,
             ')' => s.matches('(').count() < s.matches(')').count(),
@@ -73,9 +84,13 @@ fn trim_trailing_punct(s: &str) -> &str {
 
 fn is_openable(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
-    let host_part = lower.strip_prefix("https://").or_else(|| lower.strip_prefix("http://"));
+    let host_part = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"));
     matches!(host_part, Some(h) if !h.is_empty() && !h.starts_with('/'))
-        && !url.chars().any(|c| c.is_whitespace() || c.is_control() || c == '"')
+        && !url
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '"')
 }
 
 /// Render a chat message: plain text and clickable links, wrapping like a normal label.
@@ -144,11 +159,22 @@ pub fn open_url(url: &str) {
     {
         use windows_sys::Win32::UI::Shell::ShellExecuteW;
         use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-        let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+        let wide = |s: &str| {
+            s.encode_utf16()
+                .chain(std::iter::once(0))
+                .collect::<Vec<u16>>()
+        };
         let (op, target) = (wide("open"), wide(url));
         // SAFETY: both strings are NUL-terminated UTF-16 buffers that outlive the call.
         let r = unsafe {
-            ShellExecuteW(std::ptr::null_mut(), op.as_ptr(), target.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL)
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                op.as_ptr(),
+                target.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
         };
         // ShellExecuteW returns a value > 32 on success.
         if r as isize <= 32 {
@@ -184,7 +210,10 @@ mod tests {
                 Segment::Text(" legal"),
             ]
         );
-        assert_eq!(links("a http://a.com e https://b.com"), ["http://a.com", "https://b.com"]);
+        assert_eq!(
+            links("a http://a.com e https://b.com"),
+            ["http://a.com", "https://b.com"]
+        );
     }
 
     #[test]
@@ -197,7 +226,10 @@ mod tests {
     fn trailing_punctuation_is_not_part_of_the_link() {
         assert_eq!(links("veja https://x.com."), ["https://x.com"]);
         assert_eq!(links("(https://x.com/a)"), ["https://x.com/a"]);
-        assert_eq!(links("https://en.wikipedia.org/wiki/Rust_(language)"), ["https://en.wikipedia.org/wiki/Rust_(language)"]);
+        assert_eq!(
+            links("https://en.wikipedia.org/wiki/Rust_(language)"),
+            ["https://en.wikipedia.org/wiki/Rust_(language)"]
+        );
         assert_eq!(links("https://x.com/?q=1!"), ["https://x.com/?q=1"]);
     }
 
@@ -208,7 +240,9 @@ mod tests {
         assert!(links("javascript:alert(1)").is_empty());
         assert!(!is_openable("https:///etc"));
         assert!(!is_openable("C:\\Windows\\notepad.exe"));
-        assert!(is_openable("https://www.instagram.com/reel/DeRslJageXF/?dlrf=ZmlubXlpYjdzYmxm"));
+        assert!(is_openable(
+            "https://www.instagram.com/reel/DeRslJageXF/?dlrf=ZmlubXlpYjdzYmxm"
+        ));
     }
 
     #[test]
@@ -231,11 +265,20 @@ mod tests {
 
     #[test]
     fn urls_are_distinct_ordered_and_capped() {
-        assert_eq!(urls("a https://a.com b www.b.com c https://a.com", 5), ["https://a.com", "https://www.b.com"]);
-        assert_eq!(urls("https://a.com
+        assert_eq!(
+            urls("a https://a.com b www.b.com c https://a.com", 5),
+            ["https://a.com", "https://www.b.com"]
+        );
+        assert_eq!(
+            urls(
+                "https://a.com
 https://b.com
-https://c.com", 2), ["https://a.com", "https://b.com"]);
-        assert!(urls("sem link, só file:///C:/x.exe", 2).is_empty());
+https://c.com",
+                2
+            ),
+            ["https://a.com", "https://b.com"]
+        );
+        assert!(urls("no link, just file:///C:/x.exe", 2).is_empty());
         assert!(urls("", 2).is_empty());
     }
 

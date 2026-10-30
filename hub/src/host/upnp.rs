@@ -52,7 +52,13 @@ pub trait PortMapper: Send + Sync {
     fn external_ip(&self) -> Result<IpAddr, String>;
     /// This PC's address as the router sees it (where mapped traffic goes).
     fn local_ip(&self) -> Option<Ipv4Addr>;
-    fn add(&self, proto: Proto, port: u16, to: SocketAddrV4, lease_secs: u32) -> Result<(), MapError>;
+    fn add(
+        &self,
+        proto: Proto,
+        port: u16,
+        to: SocketAddrV4,
+        lease_secs: u32,
+    ) -> Result<(), MapError>;
     fn remove(&self, proto: Proto, port: u16) -> Result<(), String>;
 }
 
@@ -73,13 +79,26 @@ impl Mapped {
 }
 
 fn wanted(block: &PortBlock) -> [(Proto, u16); 4] {
-    [(Proto::Tcp, block.hub), (Proto::Tcp, block.signal), (Proto::Tcp, block.rtc_tcp), (Proto::Udp, block.rtc_udp)]
+    [
+        (Proto::Tcp, block.hub),
+        (Proto::Tcp, block.signal),
+        (Proto::Tcp, block.rtc_tcp),
+        (Proto::Udp, block.rtc_udp),
+    ]
 }
 
 /// Map every port of `block` to `local` (same port numbers outside and inside). Also renews:
 /// mapping a port again just extends its lease.
-pub fn map_block(m: &dyn PortMapper, block: &PortBlock, local: Ipv4Addr, permanent_only: bool) -> Mapped {
-    let mut out = Mapped { permanent: permanent_only, ..Default::default() };
+pub fn map_block(
+    m: &dyn PortMapper,
+    block: &PortBlock,
+    local: Ipv4Addr,
+    permanent_only: bool,
+) -> Mapped {
+    let mut out = Mapped {
+        permanent: permanent_only,
+        ..Default::default()
+    };
     for (proto, port) in wanted(block) {
         let to = SocketAddrV4::new(local, port);
         let mut r = m.add(proto, port, to, if out.permanent { 0 } else { LEASE_SECS });
@@ -91,7 +110,7 @@ pub fn map_block(m: &dyn PortMapper, block: &PortBlock, local: Ipv4Addr, permane
             Ok(()) => out.ports.push((proto, port)),
             Err(e) => {
                 let why = match e {
-                    MapError::InUse => "a porta já está aberta para outro aparelho".to_string(),
+                    MapError::InUse => "the port is already mapped to another device".to_string(),
                     MapError::OnlyPermanent => "o roteador recusou".to_string(),
                     MapError::Other(e) => e,
                 };
@@ -161,17 +180,33 @@ impl PortMapper for Igd {
         self.local
     }
 
-    fn add(&self, proto: Proto, port: u16, to: SocketAddrV4, lease_secs: u32) -> Result<(), MapError> {
+    fn add(
+        &self,
+        proto: Proto,
+        port: u16,
+        to: SocketAddrV4,
+        lease_secs: u32,
+    ) -> Result<(), MapError> {
         use igd_next::AddPortError as E;
-        self.gw.add_port(igd_proto(proto), port, SocketAddr::V4(to), lease_secs, DESCRIPTION).map_err(|e| match e {
-            E::OnlyPermanentLeasesSupported => MapError::OnlyPermanent,
-            E::PortInUse => MapError::InUse,
-            other => MapError::Other(other.to_string()),
-        })
+        self.gw
+            .add_port(
+                igd_proto(proto),
+                port,
+                SocketAddr::V4(to),
+                lease_secs,
+                DESCRIPTION,
+            )
+            .map_err(|e| match e {
+                E::OnlyPermanentLeasesSupported => MapError::OnlyPermanent,
+                E::PortInUse => MapError::InUse,
+                other => MapError::Other(other.to_string()),
+            })
     }
 
     fn remove(&self, proto: Proto, port: u16) -> Result<(), String> {
-        self.gw.remove_port(igd_proto(proto), port).map_err(|e| e.to_string())
+        self.gw
+            .remove_port(igd_proto(proto), port)
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -200,7 +235,13 @@ pub mod fake {
         fn local_ip(&self) -> Option<Ipv4Addr> {
             Some(Ipv4Addr::new(192, 168, 0, 20))
         }
-        fn add(&self, proto: Proto, port: u16, to: SocketAddrV4, lease_secs: u32) -> Result<(), MapError> {
+        fn add(
+            &self,
+            proto: Proto,
+            port: u16,
+            to: SocketAddrV4,
+            lease_secs: u32,
+        ) -> Result<(), MapError> {
             *self.adds.lock().unwrap() += 1;
             if self.taken.contains(&(proto, port)) {
                 return Err(MapError::InUse);
@@ -208,11 +249,19 @@ pub mod fake {
             if self.permanent_only && lease_secs != 0 {
                 return Err(MapError::OnlyPermanent);
             }
-            self.table.lock().unwrap().insert((proto, port), (to, lease_secs));
+            self.table
+                .lock()
+                .unwrap()
+                .insert((proto, port), (to, lease_secs));
             Ok(())
         }
         fn remove(&self, proto: Proto, port: u16) -> Result<(), String> {
-            self.table.lock().unwrap().remove(&(proto, port)).map(|_| ()).ok_or_else(|| "not mapped".into())
+            self.table
+                .lock()
+                .unwrap()
+                .remove(&(proto, port))
+                .map(|_| ())
+                .ok_or_else(|| "not mapped".into())
         }
     }
 }
@@ -226,15 +275,29 @@ mod tests {
 
     #[test]
     fn every_port_is_mapped_leased_and_removed() {
-        let r = FakeIgd { wan: Some("203.0.113.7".parse().unwrap()), ..Default::default() };
+        let r = FakeIgd {
+            wan: Some("203.0.113.7".parse().unwrap()),
+            ..Default::default()
+        };
         let b = PortBlock::nth(1);
         let m = map_block(&r, &b, LOCAL, false);
         assert!(m.complete() && !m.permanent);
-        assert_eq!(m.ports, [(Proto::Tcp, 7990), (Proto::Tcp, 7980), (Proto::Tcp, 7981), (Proto::Udp, 7982)]);
+        assert_eq!(
+            m.ports,
+            [
+                (Proto::Tcp, 7990),
+                (Proto::Tcp, 7980),
+                (Proto::Tcp, 7981),
+                (Proto::Udp, 7982)
+            ]
+        );
         {
             let t = r.table.lock().unwrap();
             assert_eq!(t.len(), 4);
-            assert_eq!(t[&(Proto::Udp, 7982)], (SocketAddrV4::new(LOCAL, 7982), LEASE_SECS));
+            assert_eq!(
+                t[&(Proto::Udp, 7982)],
+                (SocketAddrV4::new(LOCAL, 7982), LEASE_SECS)
+            );
         }
         // Renewing maps the same ports again.
         let again = map_block(&r, &b, LOCAL, m.permanent);
@@ -246,10 +309,18 @@ mod tests {
 
     #[test]
     fn permanent_only_routers_get_permanent_mappings() {
-        let r = FakeIgd { permanent_only: true, ..Default::default() };
+        let r = FakeIgd {
+            permanent_only: true,
+            ..Default::default()
+        };
         let m = map_block(&r, &PortBlock::DEFAULT, LOCAL, false);
         assert!(m.complete() && m.permanent);
-        assert!(r.table.lock().unwrap().values().all(|(_, lease)| *lease == 0));
+        assert!(r
+            .table
+            .lock()
+            .unwrap()
+            .values()
+            .all(|(_, lease)| *lease == 0));
         // Renewals go straight to permanent (no refused try first).
         let before = *r.adds.lock().unwrap();
         map_block(&r, &PortBlock::DEFAULT, LOCAL, m.permanent);
@@ -265,14 +336,21 @@ mod tests {
     #[ignore]
     fn real_router_read_only() {
         match discover(Duration::from_secs(4)) {
-            Ok(igd) => eprintln!("router found; this PC {:?}; WAN address {:?}", igd.local_ip(), igd.external_ip()),
+            Ok(igd) => eprintln!(
+                "router found; this PC {:?}; WAN address {:?}",
+                igd.local_ip(),
+                igd.external_ip()
+            ),
             Err(e) => eprintln!("no UPnP router: {e}"),
         }
     }
 
     #[test]
     fn a_port_taken_by_another_device_is_reported() {
-        let r = FakeIgd { taken: vec![(Proto::Udp, 7882)], ..Default::default() };
+        let r = FakeIgd {
+            taken: vec![(Proto::Udp, 7882)],
+            ..Default::default()
+        };
         let m = map_block(&r, &PortBlock::DEFAULT, LOCAL, false);
         assert!(!m.complete());
         assert_eq!(m.ports.len(), 3);

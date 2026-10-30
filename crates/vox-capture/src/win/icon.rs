@@ -6,15 +6,16 @@
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GdiFlush, GetObjectW, SelectObject, BITMAP, BITMAPINFO,
-    BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HGDIOBJ,
+    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GdiFlush, GetObjectW,
+    SelectObject, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HGDIOBJ,
 };
 use windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES;
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyIcon, DrawIconEx, GetClassLongPtrW, GetIconInfo, GetWindowThreadProcessId, IsIconic, SendMessageTimeoutW, DI_NORMAL, GCLP_HICON,
-    GCLP_HICONSM, HICON, ICONINFO, ICON_BIG, ICON_SMALL2, SMTO_ABORTIFHUNG, SMTO_BLOCK, WM_GETICON,
+    DestroyIcon, DrawIconEx, GetClassLongPtrW, GetIconInfo, GetWindowThreadProcessId, IsIconic,
+    SendMessageTimeoutW, DI_NORMAL, GCLP_HICON, GCLP_HICONSM, HICON, ICONINFO, ICON_BIG,
+    ICON_SMALL2, SMTO_ABORTIFHUNG, SMTO_BLOCK, WM_GETICON,
 };
 
 use super::enumerate::exe_path_of;
@@ -43,7 +44,8 @@ impl Drop for Icon {
 /// and tall.
 pub fn window_icon(hwnd: isize, max_size: u32) -> Result<RgbaImage> {
     let h = HWND(hwnd as *mut _);
-    let icon = find_icon(h).ok_or_else(|| CaptureError::NotFound("no icon for this window".into()))?;
+    let icon =
+        find_icon(h).ok_or_else(|| CaptureError::NotFound("no icon for this window".into()))?;
     render_icon(icon.h, max_size.clamp(16, 256))
 }
 
@@ -53,16 +55,30 @@ fn find_icon(hwnd: HWND) -> Option<Icon> {
     let ask = |kind: usize| -> Option<Icon> {
         let mut res = 0usize;
         let ok = unsafe {
-            SendMessageTimeoutW(hwnd, WM_GETICON, WPARAM(kind), LPARAM(0), SMTO_ABORTIFHUNG | SMTO_BLOCK, 150, Some(&mut res))
+            SendMessageTimeoutW(
+                hwnd,
+                WM_GETICON,
+                WPARAM(kind),
+                LPARAM(0),
+                SMTO_ABORTIFHUNG | SMTO_BLOCK,
+                150,
+                Some(&mut res),
+            )
         };
-        (ok.0 != 0 && res != 0).then(|| Icon { h: HICON(res as *mut _), owned: false })
+        (ok.0 != 0 && res != 0).then(|| Icon {
+            h: HICON(res as *mut _),
+            owned: false,
+        })
     };
     if let Some(i) = ask(ICON_BIG as usize) {
         return Some(i);
     }
     let class = |idx| {
         let v = unsafe { GetClassLongPtrW(hwnd, idx) };
-        (v != 0).then(|| Icon { h: HICON(v as *mut _), owned: false })
+        (v != 0).then(|| Icon {
+            h: HICON(v as *mut _),
+            owned: false,
+        })
     };
     if let Some(i) = class(GCLP_HICON) {
         return Some(i);
@@ -91,7 +107,10 @@ fn find_icon(hwnd: HWND) -> Option<Icon> {
             SHGFI_ICON | SHGFI_LARGEICON,
         )
     };
-    (r != 0 && !info.hIcon.is_invalid()).then_some(Icon { h: info.hIcon, owned: true })
+    (r != 0 && !info.hIcon.is_invalid()).then_some(Icon {
+        h: info.hIcon,
+        owned: true,
+    })
 }
 
 /// Natural size of an icon in pixels (32x32 when it cannot be read).
@@ -101,11 +120,27 @@ fn icon_size(h: HICON) -> (u32, u32) {
         return (32, 32);
     }
     let mut size = (32, 32);
-    let probe = if info.hbmColor.is_invalid() { info.hbmMask } else { info.hbmColor };
+    let probe = if info.hbmColor.is_invalid() {
+        info.hbmMask
+    } else {
+        info.hbmColor
+    };
     let mut bm = BITMAP::default();
-    if unsafe { GetObjectW(HGDIOBJ(probe.0), std::mem::size_of::<BITMAP>() as i32, Some(&mut bm as *mut _ as *mut _)) } != 0 && bm.bmWidth > 0 {
+    if unsafe {
+        GetObjectW(
+            HGDIOBJ(probe.0),
+            std::mem::size_of::<BITMAP>() as i32,
+            Some(&mut bm as *mut _ as *mut _),
+        )
+    } != 0
+        && bm.bmWidth > 0
+    {
         // A monochrome icon keeps its AND and XOR masks stacked in one bitmap.
-        let h = if info.hbmColor.is_invalid() { bm.bmHeight / 2 } else { bm.bmHeight };
+        let h = if info.hbmColor.is_invalid() {
+            bm.bmHeight / 2
+        } else {
+            bm.bmHeight
+        };
         size = (bm.bmWidth as u32, h.max(1) as u32);
     }
     unsafe {
@@ -122,7 +157,10 @@ fn icon_size(h: HICON) -> (u32, u32) {
 fn render_icon(icon: HICON, max_size: u32) -> Result<RgbaImage> {
     let (nw, nh) = icon_size(icon);
     let s = (max_size as f32 / nw.max(nh) as f32).min(1.0);
-    let (w, h) = (((nw as f32 * s) as u32).max(1), ((nh as f32 * s) as u32).max(1));
+    let (w, h) = (
+        ((nw as f32 * s) as u32).max(1),
+        ((nh as f32 * s) as u32).max(1),
+    );
     let over_black = draw(icon, w, h, 0x00_00_00_00)?;
     let over_white = draw(icon, w, h, 0x00_FF_FF_FF)?;
     Ok(recover_alpha(&over_black, &over_white, w, h))
@@ -181,7 +219,10 @@ pub(crate) fn recover_alpha(over_black: &[u8], over_white: &[u8], w: u32, h: u32
     for i in 0..n {
         let (b, w_) = (&over_black[i * 4..i * 4 + 4], &over_white[i * 4..i * 4 + 4]);
         // Use the channel with the least spread so one odd channel cannot make the pixel opaque.
-        let diff = (0..3).map(|c| w_[c].saturating_sub(b[c])).min().unwrap_or(0) as u32;
+        let diff = (0..3)
+            .map(|c| w_[c].saturating_sub(b[c]))
+            .min()
+            .unwrap_or(0) as u32;
         let a = 255 - diff;
         let o = i * 4;
         if a == 0 {
@@ -192,7 +233,11 @@ pub(crate) fn recover_alpha(over_black: &[u8], over_white: &[u8], w: u32, h: u32
         data[o + 2] = (b[0] as u32 * 255 / a).min(255) as u8;
         data[o + 3] = a as u8;
     }
-    RgbaImage { width: w, height: h, data }
+    RgbaImage {
+        width: w,
+        height: h,
+        data,
+    }
 }
 
 #[cfg(test)]
@@ -203,13 +248,21 @@ mod tests {
     fn alpha_is_recovered_from_two_backgrounds() {
         // Pixel 0: opaque red. Pixel 1: fully transparent. Pixel 2: half-transparent white
         // (premultiplied: over black = 128, over white = 255).
-        let black = [0, 0, 255, 0, /**/ 0, 0, 0, 0, /**/ 128, 128, 128, 0];
-        let white = [0, 0, 255, 0, /**/ 255, 255, 255, 0, /**/ 255, 255, 255, 0];
+        let black = [
+            0, 0, 255, 0, /**/ 0, 0, 0, 0, /**/ 128, 128, 128, 0,
+        ];
+        let white = [
+            0, 0, 255, 0, /**/ 255, 255, 255, 0, /**/ 255, 255, 255, 0,
+        ];
         let img = recover_alpha(&black, &white, 3, 1);
         assert_eq!(&img.data[0..4], &[255, 0, 0, 255]);
         assert_eq!(img.data[7], 0, "transparent");
         let a = img.data[11];
         assert!((126..=129).contains(&a), "alpha {a}");
-        assert!(img.data[8] >= 250, "colour restored to white: {}", img.data[8]);
+        assert!(
+            img.data[8] >= 250,
+            "colour restored to white: {}",
+            img.data[8]
+        );
     }
 }

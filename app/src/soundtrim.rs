@@ -1,22 +1,17 @@
-//! The trim editor inside the "Adicionar som" dialog: a long recording (up to 10 minutes) is
-//! shown as a waveform and the person marks the part, at most 5 s, that becomes the sound.
-//!
-//! The recording is read once on a background thread into a small overview (see
-//! `vox_client_core::soundboard::trim`: no decoded audio is kept, so there is nothing to free but
-//! the overview, which goes with the dialog). Everything on screen is drawn from that overview;
-//! the selection's audio is decoded again when it is previewed ("Ouvir trecho", through the
-//! backend, which plays the very clip that would be uploaded) and when it is uploaded.
-//!
-//! The pure parts (what a drag does to the selection, how the view zooms) are functions with unit
-//! tests; the widget only maps the pointer to seconds.
+//! Waveform selection and zoom for soundboard clips. A background overview retains no
+//! decoded audio; preview/upload decode the selection again through the backend.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, Align2, Color32, CursorIcon, FontId, Pos2, Rect, RichText, Sense, Stroke, Vec2};
-use vox_client_core::soundboard::{analyze, format_time, Overview, Selection, Trim, DEFAULT_FADE_MS, MAX_EDIT_SECS, MAX_SELECTION};
+use eframe::egui::{
+    self, Align2, Color32, CursorIcon, FontId, Pos2, Rect, RichText, Sense, Stroke, Vec2,
+};
+use vox_client_core::soundboard::{
+    analyze, format_time, Overview, Selection, Trim, DEFAULT_FADE_MS, MAX_EDIT_SECS, MAX_SELECTION,
+};
 
 use crate::app::App;
 use crate::backend::{Cmd, Repaint};
@@ -48,7 +43,7 @@ pub struct TrimEditor {
     progress: Arc<AtomicU32>,
     rx: Option<mpsc::Receiver<Result<Overview, String>>>,
     pub overview: Option<Overview>,
-    /// Why the file cannot be used (Portuguese, ready to show).
+    /// Why the file cannot be used (English, ready to show).
     pub error: Option<String>,
     pub sel: Selection,
     pub fade_in: bool,
@@ -57,7 +52,7 @@ pub struct TrimEditor {
     /// The seconds on screen.
     view: (f64, f64),
     drag: Option<Drag>,
-    /// "Ouvir trecho" is waiting for the clip or playing until then.
+    /// "Listen to clip" is waiting for the clip or playing until then.
     preview_until: Option<Instant>,
     pub preview_error: Option<String>,
     /// How many previews the backend confirmed (the autotest's probe) and the last one's length.
@@ -79,7 +74,12 @@ impl TrimEditor {
         let progress = Arc::new(AtomicU32::new(0f32.to_bits()));
         let (tx, rx) = mpsc::channel();
         {
-            let (path, cancel, progress, repaint) = (path.clone(), cancel.clone(), progress.clone(), repaint.clone());
+            let (path, cancel, progress, repaint) = (
+                path.clone(),
+                cancel.clone(),
+                progress.clone(),
+                repaint.clone(),
+            );
             std::thread::Builder::new()
                 .name("vox-sound-trim".into())
                 .spawn(move || {
@@ -106,7 +106,10 @@ impl TrimEditor {
             rx: Some(rx),
             overview: None,
             error: None,
-            sel: Selection { start: 0.0, end: 0.0 },
+            sel: Selection {
+                start: 0.0,
+                end: 0.0,
+            },
             fade_in: true,
             fade_out: true,
             trim_silence: true,
@@ -125,7 +128,7 @@ impl TrimEditor {
         let result = match rx.try_recv() {
             Ok(r) => r,
             Err(mpsc::TryRecvError::Empty) => return,
-            Err(mpsc::TryRecvError::Disconnected) => Err("Não consegui ler esse arquivo.".to_string()),
+            Err(mpsc::TryRecvError::Disconnected) => Err("Could not read this file.".to_string()),
         };
         self.rx = None;
         match result {
@@ -159,7 +162,8 @@ impl TrimEditor {
 
     /// What to cut, with the edge options as they stand.
     pub fn trim(&self) -> Trim {
-        self.sel.to_trim(self.fade_in, self.fade_out, self.trim_silence)
+        self.sel
+            .to_trim(self.fade_in, self.fade_out, self.trim_silence)
     }
 
     pub fn set_selection(&mut self, start: f64, end: f64) {
@@ -223,8 +227,16 @@ fn fit_view(a: f64, b: f64, dur: f64) -> (f64, f64) {
 fn zoom_view(view: (f64, f64), factor: f64, pivot: f64, dur: f64) -> (f64, f64) {
     let span = view.1 - view.0;
     let new_span = (span / factor).clamp(MIN_VIEW.min(dur), dur.max(MIN_VIEW.min(dur)));
-    let ratio = if span > 0.0 { ((pivot - view.0) / span).clamp(0.0, 1.0) } else { 0.5 };
-    fit_view(pivot - ratio * new_span, pivot - ratio * new_span + new_span, dur)
+    let ratio = if span > 0.0 {
+        ((pivot - view.0) / span).clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+    fit_view(
+        pivot - ratio * new_span,
+        pivot - ratio * new_span + new_span,
+        dur,
+    )
 }
 
 /// What the pointer at time `t` does to `sel` while `drag` is on.
@@ -268,19 +280,22 @@ const BAND: Color32 = Color32::from_rgba_premultiplied(23, 24, 24, 24);
 const HANDLE: Color32 = theme::GIZ;
 
 impl TrimEditor {
-    /// The editor's widgets. Returns true when "Ouvir trecho" was pressed.
+    /// The editor's widgets. Returns true when "Listen to clip" was pressed.
     pub fn ui(&mut self, ui: &mut egui::Ui, enabled: bool) -> bool {
         let dur = self.duration();
-        let (rate, channels) = self.overview.as_ref().map_or((0, 0), |o| (o.rate, o.channels));
+        let (rate, channels) = self
+            .overview
+            .as_ref()
+            .map_or((0, 0), |o| (o.rate, o.channels));
         ui.horizontal(|ui| {
             ui.label(RichText::new(ph::WAVEFORM).font(theme::body(15.0)).color(theme::NEVOA));
             ui.add(
                 egui::Label::new(
                     RichText::new(format!(
-                        "{} de áudio · {} · {}. Arraste as alças (ou a faixa) para escolher o trecho; a roda do mouse dá zoom.",
+                        "{} of audio · {} · {}. Drag the handles (or selection) to choose the clip; use the mouse wheel to zoom.",
                         format_time(dur),
                         if rate % 1000 == 0 { format!("{} kHz", rate / 1000) } else { format!("{:.1} kHz", rate as f32 / 1000.0) },
-                        if channels >= 2 { "estéreo" } else { "mono" }
+                        if channels >= 2 { "stereo" } else { "mono" }
                     ))
                     .size(size::SMALL + 0.5)
                     .color(theme::NEVOA),
@@ -295,40 +310,88 @@ impl TrimEditor {
             ui.add_space(space::S);
             ui.horizontal(|ui| {
                 ui.spacing_mut().interact_size.y = 28.0;
-                ui.label(RichText::new("Início").color(theme::NEVOA));
+                ui.label(RichText::new("Start").color(theme::NEVOA));
                 let mut start = self.sel.start;
-                if ui.add(egui::DragValue::new(&mut start).speed(0.01).range(0.0..=dur).fixed_decimals(2).suffix(" s")).changed() {
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut start)
+                            .speed(0.01)
+                            .range(0.0..=dur)
+                            .fixed_decimals(2)
+                            .suffix(" s"),
+                    )
+                    .changed()
+                {
                     self.sel = self.sel.with_start(start, dur);
                 }
                 ui.add_space(space::S);
-                ui.label(RichText::new("Fim").color(theme::NEVOA));
+                ui.label(RichText::new("End").color(theme::NEVOA));
                 let mut end = self.sel.end;
-                if ui.add(egui::DragValue::new(&mut end).speed(0.01).range(0.0..=dur).fixed_decimals(2).suffix(" s")).changed() {
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut end)
+                            .speed(0.01)
+                            .range(0.0..=dur)
+                            .fixed_decimals(2)
+                            .suffix(" s"),
+                    )
+                    .changed()
+                {
                     self.sel = self.sel.with_end(end, dur);
                 }
                 ui.add_space(space::S);
                 let len = self.sel.len();
-                let text = format!("Trecho de {len:.2} s (máx. {} s)", MAX_SELECTION as u32);
-                let color = if len >= MAX_SELECTION - 0.005 { theme::GIZ } else { theme::NEVOA };
+                let text = format!("Clip of {len:.2} s (max. {} s)", MAX_SELECTION as u32);
+                let color = if len >= MAX_SELECTION - 0.005 {
+                    theme::GIZ
+                } else {
+                    theme::NEVOA
+                };
                 ui.label(RichText::new(text).color(color));
             });
             ui.horizontal(|ui| {
                 let busy = self.previewing();
-                let r = ui.add_enabled_ui(!busy, |ui| ui_kit::button_sized(ui, Kind::Secondary, Size::Small, Some(ph::PLAY), "Ouvir trecho")).inner;
-                if r.on_hover_text("Toca só para você, do jeito que vai ser enviado").clicked() {
+                let r = ui
+                    .add_enabled_ui(!busy, |ui| {
+                        ui_kit::button_sized(
+                            ui,
+                            Kind::Secondary,
+                            Size::Small,
+                            Some(ph::PLAY),
+                            "Listen to clip",
+                        )
+                    })
+                    .inner;
+                if r.on_hover_text("Plays only for you, exactly as it will be sent")
+                    .clicked()
+                {
                     preview = true;
                 }
                 if busy {
                     ui.spinner();
                 }
-                if ui_kit::button_sized(ui, Kind::Ghost, Size::Small, Some(ph::SCISSORS), "Trecho mais alto").on_hover_text("Escolhe os 5 s mais fortes do áudio").clicked() {
+                if ui_kit::button_sized(
+                    ui,
+                    Kind::Ghost,
+                    Size::Small,
+                    Some(ph::SCISSORS),
+                    "Loudest clip",
+                )
+                .on_hover_text("Selects the loudest 5 seconds of audio")
+                .clicked()
+                {
                     self.best_part();
                 }
             });
             ui.horizontal_wrapped(|ui| {
-                ui.checkbox(&mut self.fade_in, format!("Suavizar o começo ({DEFAULT_FADE_MS} ms)")).on_hover_text("Evita um estalo no início do corte");
-                ui.checkbox(&mut self.fade_out, format!("Suavizar o fim ({DEFAULT_FADE_MS} ms)")).on_hover_text("Evita um estalo no fim do corte");
-                ui.checkbox(&mut self.trim_silence, "Cortar silêncio das pontas");
+                ui.checkbox(&mut self.fade_in, format!("Fade in ({DEFAULT_FADE_MS} ms)"))
+                    .on_hover_text("Avoids a click at the start of the cut");
+                ui.checkbox(
+                    &mut self.fade_out,
+                    format!("Suavizar o fim ({DEFAULT_FADE_MS} ms)"),
+                )
+                .on_hover_text("Avoids a click at the end of the cut");
+                ui.checkbox(&mut self.trim_silence, "Trim silence from edges");
             });
         });
         if let Some(e) = &self.preview_error {
@@ -349,17 +412,23 @@ impl TrimEditor {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = space::XS;
             let mid = (self.view.0 + self.view.1) / 2.0;
-            if ui_kit::icon_button(ui, ph::MINUS, "Afastar", IconState::Normal).clicked() {
+            if ui_kit::icon_button(ui, ph::MINUS, "Zoom out", IconState::Normal).clicked() {
                 self.view = zoom_view(self.view, 1.0 / 1.6, mid, dur);
             }
-            if ui_kit::icon_button(ui, ph::PLUS, "Aproximar", IconState::Normal).clicked() {
+            if ui_kit::icon_button(ui, ph::PLUS, "Zoom in", IconState::Normal).clicked() {
                 self.view = zoom_view(self.view, 1.6, mid, dur);
             }
             ui.add_space(space::S);
-            if ui_kit::button_sized(ui, Kind::Ghost, Size::Small, None, "Tudo").on_hover_text("Ver o áudio inteiro").clicked() {
+            if ui_kit::button_sized(ui, Kind::Ghost, Size::Small, None, "All")
+                .on_hover_text("View entire audio")
+                .clicked()
+            {
                 self.view = (0.0, dur.max(MIN_VIEW));
             }
-            if ui_kit::button_sized(ui, Kind::Ghost, Size::Small, None, "Ver o trecho").on_hover_text("Aproximar no trecho escolhido").clicked() {
+            if ui_kit::button_sized(ui, Kind::Ghost, Size::Small, None, "View clip")
+                .on_hover_text("Zoom to selected clip")
+                .clicked()
+            {
                 self.show_selection();
             }
             ui.add_space(space::S);
@@ -367,7 +436,10 @@ impl TrimEditor {
             if span < dur - 1e-6 {
                 let mut start = self.view.0;
                 ui.spacing_mut().slider_width = ui.available_width().max(60.0) - 8.0;
-                if ui.add(egui::Slider::new(&mut start, 0.0..=(dur - span)).show_value(false)).changed() {
+                if ui
+                    .add(egui::Slider::new(&mut start, 0.0..=(dur - span)).show_value(false))
+                    .changed()
+                {
                     self.view = (start, start + span);
                 }
             }
@@ -376,9 +448,12 @@ impl TrimEditor {
 
     fn waveform(&mut self, ui: &mut egui::Ui, enabled: bool) {
         let dur = self.duration();
-        let Some(ov) = self.overview.as_ref() else { return };
+        let Some(ov) = self.overview.as_ref() else {
+            return;
+        };
         let width = ui.available_width().max(240.0);
-        let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, WAVE_HEIGHT), Sense::click_and_drag());
+        let (rect, resp) =
+            ui.allocate_exact_size(Vec2::new(width, WAVE_HEIGHT), Sense::click_and_drag());
         let (v0, v1) = self.view;
         let span = (v1 - v0).max(1e-6);
         let x_of = |t: f64| rect.left() + ((t - v0) / span) as f32 * rect.width();
@@ -401,7 +476,9 @@ impl TrimEditor {
                     self.drag = Some(grab_at(p.x, xs, xe, t_of(p.x), self.sel));
                 }
             }
-            if let (Some(d), true, Some(p)) = (self.drag, resp.dragged(), resp.interact_pointer_pos()) {
+            if let (Some(d), true, Some(p)) =
+                (self.drag, resp.dragged(), resp.interact_pointer_pos())
+            {
                 self.sel = apply_drag(d, self.sel, t_of(p.x), dur);
             }
             if resp.drag_stopped() {
@@ -409,7 +486,10 @@ impl TrimEditor {
             }
             if resp.clicked() {
                 // A click outside the selection brings the selection there; on it, nothing.
-                if let Some(p) = resp.interact_pointer_pos().filter(|p| matches!(grab_at(p.x, xs, xe, t_of(p.x), self.sel), Drag::New(_))) {
+                if let Some(p) = resp
+                    .interact_pointer_pos()
+                    .filter(|p| matches!(grab_at(p.x, xs, xe, t_of(p.x), self.sel), Drag::New(_)))
+                {
                     self.sel = self.sel.centered_on(t_of(p.x), dur);
                 }
             }
@@ -432,7 +512,10 @@ impl TrimEditor {
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, radius::BUTTON, theme::FUNDO);
         let (xs, xe) = (x_of(self.sel.start), x_of(self.sel.end));
-        let band = Rect::from_min_max(Pos2::new(xs.max(rect.left()), rect.top()), Pos2::new(xe.min(rect.right()), rect.bottom()));
+        let band = Rect::from_min_max(
+            Pos2::new(xs.max(rect.left()), rect.top()),
+            Pos2::new(xe.min(rect.right()), rect.bottom()),
+        );
         if band.width() > 0.0 {
             painter.rect_filled(band, 0.0, BAND);
         }
@@ -441,26 +524,52 @@ impl TrimEditor {
         let scale = ov.peak().max(0.05);
         let (mid, half) = (rect.center().y, rect.height() / 2.0 - 5.0);
         let cw = rect.width() / n as f32;
-        painter.line_segment([Pos2::new(rect.left(), mid), Pos2::new(rect.right(), mid)], Stroke::new(1.0, theme::RISCO));
+        painter.line_segment(
+            [Pos2::new(rect.left(), mid), Pos2::new(rect.right(), mid)],
+            Stroke::new(1.0, theme::RISCO),
+        );
         for (i, &(lo, hi)) in cols.iter().enumerate() {
             let x = rect.left() + (i as f32 + 0.5) * cw;
             let (top, bottom) = (mid - hi / scale * half, mid - lo / scale * half);
             let bottom = bottom.max(top + 1.0);
-            let color = if x >= xs && x <= xe { WAVE_IN } else { WAVE_OUT };
-            painter.line_segment([Pos2::new(x, top), Pos2::new(x, bottom)], Stroke::new(cw.max(1.0), color));
+            let color = if x >= xs && x <= xe {
+                WAVE_IN
+            } else {
+                WAVE_OUT
+            };
+            painter.line_segment(
+                [Pos2::new(x, top), Pos2::new(x, bottom)],
+                Stroke::new(cw.max(1.0), color),
+            );
         }
         for (x, label_right) in [(xs, false), (xe, true)] {
             if x >= rect.left() - 1.0 && x <= rect.right() + 1.0 {
                 let x = x.clamp(rect.left() + 1.0, rect.right() - 1.0);
-                painter.line_segment([Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())], Stroke::new(2.0, HANDLE));
-                let grip = Rect::from_center_size(Pos2::new(x, rect.top() + 9.0), Vec2::new(8.0, 16.0));
+                painter.line_segment(
+                    [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+                    Stroke::new(2.0, HANDLE),
+                );
+                let grip =
+                    Rect::from_center_size(Pos2::new(x, rect.top() + 9.0), Vec2::new(8.0, 16.0));
                 painter.rect_filled(grip, 2.0, HANDLE);
                 let _ = label_right;
             }
         }
         let small = FontId::proportional(10.5);
-        painter.text(rect.left_bottom() + Vec2::new(6.0, -3.0), Align2::LEFT_BOTTOM, format_time(v0), small.clone(), theme::NEVOA);
-        painter.text(rect.right_bottom() + Vec2::new(-6.0, -3.0), Align2::RIGHT_BOTTOM, format_time(v1), small, theme::NEVOA);
+        painter.text(
+            rect.left_bottom() + Vec2::new(6.0, -3.0),
+            Align2::LEFT_BOTTOM,
+            format_time(v0),
+            small.clone(),
+            theme::NEVOA,
+        );
+        painter.text(
+            rect.right_bottom() + Vec2::new(-6.0, -3.0),
+            Align2::RIGHT_BOTTOM,
+            format_time(v1),
+            small,
+            theme::NEVOA,
+        );
     }
 }
 
@@ -486,19 +595,25 @@ impl App {
         self.sb.add.as_mut().and_then(|f| f.trim.as_mut())
     }
 
-    /// "Ouvir trecho": the backend cuts the clip as it would be uploaded and plays it here only.
+    /// "Listen to clip": the backend cuts the clip as it would be uploaded and plays it here only.
     pub fn trim_preview(&mut self) {
         let device = self.settings.output_device.clone();
         let Some(ed) = self.trim_editor() else { return };
-        let cmd = SoundCmd::PreviewClip { path: ed.path.clone(), trim: ed.trim(), output_device: device };
+        let cmd = SoundCmd::PreviewClip {
+            path: ed.path.clone(),
+            trim: ed.trim(),
+            output_device: device,
+        };
         self.backend.send(Cmd::Sound(cmd));
     }
 
-    /// The dialog's "Adicionar" for a file with the editor: upload the selection.
+    /// The dialog's "Add" for a file with the editor: upload the selection.
     pub fn trim_submit(&mut self, name: &str, emoji: &str) -> Result<(), String> {
-        let Some(ed) = self.trim_editor() else { return Err("Escolha um arquivo primeiro.".into()) };
+        let Some(ed) = self.trim_editor() else {
+            return Err("Choose a file first.".into());
+        };
         if !ed.ready() {
-            return Err("Espere o app terminar de ler o áudio.".into());
+            return Err("Wait for the app to finish reading the audio.".into());
         }
         let (path, trim) = (ed.path.clone(), ed.trim());
         self.add_sound_trimmed(path, name, emoji, Some(trim))
@@ -509,16 +624,35 @@ impl App {
 pub fn loading_ui(ui: &mut egui::Ui, ed: &TrimEditor) {
     ui.horizontal(|ui| {
         ui.spinner();
-        ui.label(RichText::new(format!("Lendo o áudio... {}%", (ed.progress() * 100.0) as u32)).color(theme::TEXTO));
+        ui.label(
+            RichText::new(format!(
+                "Reading audio... {}%",
+                (ed.progress() * 100.0) as u32
+            ))
+            .color(theme::TEXTO),
+        );
     });
     // A thin chalk bar on the night rail (like the level meter).
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width().min(420.0), 6.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(
+        Vec2::new(ui.available_width().min(420.0), 6.0),
+        Sense::hover(),
+    );
     ui.painter().rect_filled(rect, 3.0, theme::FUNDO);
-    let done = Rect::from_min_size(rect.min, Vec2::new(rect.width() * ed.progress().clamp(0.0, 1.0), rect.height()));
+    let done = Rect::from_min_size(
+        rect.min,
+        Vec2::new(rect.width() * ed.progress().clamp(0.0, 1.0), rect.height()),
+    );
     if done.width() >= 1.0 {
         ui.painter().rect_filled(done, 3.0, theme::GIZ);
     }
-    ui.label(RichText::new(format!("Aceita até {} minutos de áudio.", MAX_EDIT_SECS / 60)).size(size::SMALL + 0.5).color(theme::NEVOA));
+    ui.label(
+        RichText::new(format!(
+            "Accepts up to {} minutes of audio.",
+            MAX_EDIT_SECS / 60
+        ))
+        .size(size::SMALL + 0.5)
+        .color(theme::NEVOA),
+    );
 }
 
 #[cfg(test)]
@@ -534,7 +668,10 @@ mod tests {
         let s = apply_drag(Drag::End, sel, 40.0, dur);
         assert_eq!((s.start, s.end), (20.0, 25.0));
         let s = apply_drag(Drag::End, sel, -4.0, dur);
-        assert!((s.len() - vox_client_core::soundboard::MIN_SELECTION).abs() < 1e-9, "never inverted: {s:?}");
+        assert!(
+            (s.len() - vox_client_core::soundboard::MIN_SELECTION).abs() < 1e-9,
+            "never inverted: {s:?}"
+        );
     }
 
     #[test]
@@ -556,7 +693,11 @@ mod tests {
         let s = apply_drag(Drag::New(30.0), sel, 32.5, dur);
         assert_eq!((s.start, s.end), (30.0, 32.5));
         let s = apply_drag(Drag::New(30.0), sel, 20.0, dur);
-        assert_eq!((s.start, s.end), (25.0, 30.0), "to the left, the dragged side stops 5 s away");
+        assert_eq!(
+            (s.start, s.end),
+            (25.0, 30.0),
+            "to the left, the dragged side stops 5 s away"
+        );
         let s = apply_drag(Drag::New(30.0), sel, 29.9, dur);
         assert!(s.len() >= 0.05 - 1e-9 && s.end <= 30.0 + 1e-9);
     }
@@ -580,10 +721,16 @@ mod tests {
         let dur = 600.0;
         let v = zoom_view((0.0, 600.0), 10.0, 300.0, dur);
         assert!((v.1 - v.0 - 60.0).abs() < 1e-9);
-        assert!(((300.0 - v.0) / (v.1 - v.0) - 0.5).abs() < 1e-9, "the pivot stays at the same spot: {v:?}");
+        assert!(
+            ((300.0 - v.0) / (v.1 - v.0) - 0.5).abs() < 1e-9,
+            "the pivot stays at the same spot: {v:?}"
+        );
         // Zoom further around a point at 25 % of the view.
         let w = zoom_view(v, 2.0, v.0 + 15.0, dur);
-        assert!(((v.0 + 15.0 - w.0) / (w.1 - w.0) - 0.25).abs() < 1e-9, "{w:?}");
+        assert!(
+            ((v.0 + 15.0 - w.0) / (w.1 - w.0) - 0.25).abs() < 1e-9,
+            "{w:?}"
+        );
         // Never out of bounds, never narrower than the minimum, never wider than the recording.
         let tiny = zoom_view(v, 1e9, 10.0, dur);
         assert!((tiny.1 - tiny.0 - MIN_VIEW).abs() < 1e-9);

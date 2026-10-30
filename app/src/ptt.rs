@@ -61,8 +61,9 @@ mod imp {
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx,
-        KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
+        CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
+        TranslateMessage, UnhookWindowsHookEx, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_KEYDOWN,
+        WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
     };
 
     use super::{PttMsg, SHARED};
@@ -82,7 +83,12 @@ mod imp {
                 .spawn(move || {
                     // SAFETY: standard low-level hook install + message loop on this thread.
                     unsafe {
-                        let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), std::ptr::null_mut(), 0);
+                        let hook = SetWindowsHookExW(
+                            WH_KEYBOARD_LL,
+                            Some(hook_proc),
+                            std::ptr::null_mut(),
+                            0,
+                        );
                         if hook.is_null() {
                             let _ = tx.send(None);
                             return;

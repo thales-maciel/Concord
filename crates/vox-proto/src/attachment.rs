@@ -1,4 +1,4 @@
-//! Image attachments ("Imagens no chat"), added after v0.6.0 with no protocol bump: new
+//! Image attachments ("Images no chat"), added after v0.6.0 with no protocol bump: new
 //! endpoints, one new type and new optional fields; nothing existing changes meaning.
 //!
 //! The *sending app* does the heavy lifting (decode, EXIF orientation, resize, WebP / JPEG
@@ -58,7 +58,8 @@ pub const ATTACHMENT_PENDING_SECS: u64 = 3600;
 /// At most this many pending attachments per person.
 pub const ATTACHMENT_MAX_PENDING: usize = 16;
 /// The request body limit of the upload (image + thumbnail + slack).
-pub const ATTACHMENT_MAX_UPLOAD_BODY: usize = ATTACHMENT_MAX_ANIMATED_BYTES + ATTACHMENT_MAX_THUMB_BYTES + 4096;
+pub const ATTACHMENT_MAX_UPLOAD_BODY: usize =
+    ATTACHMENT_MAX_ANIMATED_BYTES + ATTACHMENT_MAX_THUMB_BYTES + 4096;
 
 /// `429` answer: the per-person daily upload allowance is used up.
 pub const ERR_ATTACHMENT_DAILY: &str = "daily upload limit reached";
@@ -123,7 +124,11 @@ pub struct SendMessageRequest {
 
 /// The line an older app shows for `n` images: `[imagem]`, `[2 imagens]`.
 pub fn attachment_marker(n: usize) -> String {
-    if n <= 1 { "[imagem]".to_string() } else { format!("[{n} imagens]") }
+    if n <= 1 {
+        "[imagem]".to_string()
+    } else {
+        format!("[{n} imagens]")
+    }
 }
 
 /// The stored / sent `content` of a message with `n` images: the caption, then the marker line.
@@ -132,7 +137,11 @@ pub fn with_attachment_marker(caption: &str, n: usize) -> String {
         return caption.to_string();
     }
     let marker = attachment_marker(n);
-    if caption.is_empty() { marker } else { format!("{caption}\n{marker}") }
+    if caption.is_empty() {
+        marker
+    } else {
+        format!("{caption}\n{marker}")
+    }
 }
 
 /// The caption of a message with `n` images (the marker line taken off again). Content that does
@@ -169,7 +178,17 @@ mod tests {
     use crate::{Message, ServerEvent, User};
 
     fn att(id: i64) -> Attachment {
-        Attachment { id, mime: "image/webp".into(), width: 1920, height: 1080, size: 312_000, thumb_w: 400, thumb_h: 225, animated: false, hash: "ab12".into() }
+        Attachment {
+            id,
+            mime: "image/webp".into(),
+            width: 1920,
+            height: 1080,
+            size: 312_000,
+            thumb_w: 400,
+            thumb_h: 225,
+            animated: false,
+            hash: "ab12".into(),
+        }
     }
 
     #[test]
@@ -178,20 +197,40 @@ mod tests {
         assert_eq!(attachment_marker(3), "[3 imagens]");
         assert_eq!(with_attachment_marker("olha", 1), "olha\n[imagem]");
         assert_eq!(with_attachment_marker("", 2), "[2 imagens]");
-        assert_eq!(with_attachment_marker("só texto", 0), "só texto");
+        assert_eq!(with_attachment_marker("text only", 0), "text only");
         for (caption, n) in [("olha", 1), ("", 2), ("[imagem]", 1), ("duas\nlinhas", 4)] {
-            assert_eq!(strip_attachment_marker(&with_attachment_marker(caption, n), n), caption);
+            assert_eq!(
+                strip_attachment_marker(&with_attachment_marker(caption, n), n),
+                caption
+            );
         }
         // Not our marker: left alone.
         assert_eq!(strip_attachment_marker("oi", 1), "oi");
-        assert_eq!(strip_attachment_marker("oi\n[2 imagens]", 1), "oi\n[2 imagens]");
+        assert_eq!(
+            strip_attachment_marker("oi\n[2 imagens]", 1),
+            "oi\n[2 imagens]"
+        );
         assert_eq!(strip_attachment_marker("x[imagem]", 1), "x[imagem]");
     }
 
     #[test]
     fn a_message_without_images_is_byte_identical_to_before() {
-        let m = Message { id: 1, channel_id: 2, author: User::new(3, "a"), content: "oi".into(), created_at_ms: 4, attachments: vec![], mentions: vec![], mention_everyone: false, reply: None, reactions: vec![] };
-        assert_eq!(serde_json::to_string(&m).unwrap(), r#"{"id":1,"channel_id":2,"author":{"id":3,"username":"a"},"content":"oi","created_at_ms":4}"#);
+        let m = Message {
+            id: 1,
+            channel_id: 2,
+            author: User::new(3, "a"),
+            content: "oi".into(),
+            created_at_ms: 4,
+            attachments: vec![],
+            mentions: vec![],
+            mention_everyone: false,
+            reply: None,
+            reactions: vec![],
+        };
+        assert_eq!(
+            serde_json::to_string(&m).unwrap(),
+            r#"{"id":1,"channel_id":2,"author":{"id":3,"username":"a"},"content":"oi","created_at_ms":4}"#
+        );
     }
 
     /// `Message` exactly as v0.6.0 had it.
@@ -208,13 +247,30 @@ mod tests {
 
     #[test]
     fn an_old_app_reads_the_caption_and_the_marker() {
-        let m = Message { id: 1, channel_id: 2, author: User::new(3, "a"), content: with_attachment_marker("olha isso", 2), created_at_ms: 4, attachments: vec![att(7), att(8)], mentions: vec![], mention_everyone: false, reply: None, reactions: vec![] };
-        let json = serde_json::to_string(&ServerEvent::MessageCreated { message: m.clone() }).unwrap();
+        let m = Message {
+            id: 1,
+            channel_id: 2,
+            author: User::new(3, "a"),
+            content: with_attachment_marker("olha isso", 2),
+            created_at_ms: 4,
+            attachments: vec![att(7), att(8)],
+            mentions: vec![],
+            mention_everyone: false,
+            reply: None,
+            reactions: vec![],
+        };
+        let json =
+            serde_json::to_string(&ServerEvent::MessageCreated { message: m.clone() }).unwrap();
         assert!(json.contains("\"attachments\":["));
-        let V060ServerEvent::MessageCreated { message } = serde_json::from_str::<V060ServerEvent>(&json).unwrap();
+        let V060ServerEvent::MessageCreated { message } =
+            serde_json::from_str::<V060ServerEvent>(&json).unwrap();
         assert_eq!(message.content, "olha isso\n[2 imagens]");
         // A new app gets the images and the bare caption.
-        let ServerEvent::MessageCreated { message } = serde_json::from_str::<ServerEvent>(&json).unwrap() else { panic!() };
+        let ServerEvent::MessageCreated { message } =
+            serde_json::from_str::<ServerEvent>(&json).unwrap()
+        else {
+            panic!()
+        };
         assert_eq!(message.attachments.len(), 2);
         assert_eq!(message.caption(), "olha isso");
         assert_eq!(message, m);
@@ -224,8 +280,15 @@ mod tests {
     fn old_json_parses_without_images() {
         let m: Message = serde_json::from_str(r#"{"id":1,"channel_id":2,"author":{"id":3,"username":"a"},"content":"[imagem]","created_at_ms":4}"#).unwrap();
         assert!(m.attachments.is_empty());
-        assert_eq!(m.caption(), "[imagem]", "without attachments the text is shown as it is");
-        let a: Attachment = serde_json::from_str(r#"{"id":1,"mime":"image/jpeg","width":10,"height":20,"size":30}"#).unwrap();
+        assert_eq!(
+            m.caption(),
+            "[imagem]",
+            "without attachments the text is shown as it is"
+        );
+        let a: Attachment = serde_json::from_str(
+            r#"{"id":1,"mime":"image/jpeg","width":10,"height":20,"size":30}"#,
+        )
+        .unwrap();
         assert_eq!((a.thumb_w, a.animated, a.hash.as_str()), (0, false, ""));
     }
 
@@ -236,12 +299,42 @@ mod tests {
             serde_json::to_string(&a).unwrap(),
             r#"{"id":5,"mime":"image/webp","width":1920,"height":1080,"size":312000,"thumb_w":400,"thumb_h":225,"hash":"ab12"}"#
         );
-        let gif = Attachment { animated: true, ..att(6) };
-        assert!(serde_json::to_string(&gif).unwrap().contains("\"animated\":true"));
-        assert_eq!(serde_json::to_string(&SendMessageRequest { content: "oi".into(), ..Default::default() }).unwrap(), r#"{"content":"oi"}"#);
-        assert_eq!(serde_json::to_string(&SendMessageRequest { content: String::new(), attachments: vec![1, 2], ..Default::default() }).unwrap(), r#"{"content":"","attachments":[1,2]}"#);
+        let gif = Attachment {
+            animated: true,
+            ..att(6)
+        };
+        assert!(serde_json::to_string(&gif)
+            .unwrap()
+            .contains("\"animated\":true"));
+        assert_eq!(
+            serde_json::to_string(&SendMessageRequest {
+                content: "oi".into(),
+                ..Default::default()
+            })
+            .unwrap(),
+            r#"{"content":"oi"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&SendMessageRequest {
+                content: String::new(),
+                attachments: vec![1, 2],
+                ..Default::default()
+            })
+            .unwrap(),
+            r#"{"content":"","attachments":[1,2]}"#
+        );
         let req: crate::DmSendRequest = serde_json::from_str(r#"{"content":"oi"}"#).unwrap();
-        assert!(req.attachments.is_empty(), "an old app's DM request has no images");
-        assert_eq!(serde_json::to_string(&crate::DmSendRequest { content: "oi".into(), ..Default::default() }).unwrap(), r#"{"content":"oi"}"#);
+        assert!(
+            req.attachments.is_empty(),
+            "an old app's DM request has no images"
+        );
+        assert_eq!(
+            serde_json::to_string(&crate::DmSendRequest {
+                content: "oi".into(),
+                ..Default::default()
+            })
+            .unwrap(),
+            r#"{"content":"oi"}"#
+        );
     }
 }

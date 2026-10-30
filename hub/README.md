@@ -1,106 +1,113 @@
 # concord-server
 
-Servidor do concord: login, canais de texto, chat, presença e emissão de tokens do LiveKit. Ele também inicia e vigia o `livekit-server` (voz e Go Live), então o host só precisa abrir um programa.
+Chat, presence, authentication and LiveKit supervision for voice/video.
 
-> Até a v1.0.0 o app se chamava **voxhub** e este programa, `voxhub-server.exe`. Desde a v1.0.1 ele é o `concord-server.exe`: o mesmo servidor, com a mesma pasta de dados (`data\`, o banco continua `voxhub.db`), os mesmos convites e o mesmo protocolo. Apps voxhub v1.0.0 e concord se conectam um ao outro normalmente. O `iniciar-servidor.bat` usa o `bin\concord-server.exe` e, se ele não existir, o antigo `bin\voxhub-server.exe`.
+## Run
 
-## Rodando (no PC do host)
+From the repository root on Windows:
 
 ```powershell
-# na raiz do projeto
-cargo build --release -p voxhub-server
+cargo build --locked --release -p voxhub-server
+powershell -ExecutionPolicy Bypass -File hub\scripts\fetch-livekit.ps1
 .\target\release\concord-server.exe --data-dir .\data
 ```
 
-Opções: `--data-dir <dir>` (padrão `./data`), `--livekit-bin <exe>` (padrão `./bin/livekit-server.exe`, relativo à pasta atual), `--console` (loga também no terminal), `--log-dir <dir>`, `--no-livekit`, `--reset-password <nome>` e `--reset-owner` (os dois últimos estão em [Dono do servidor](#dono-do-servidor-quem-hospeda-vira-dono)). Ctrl+C encerra o servidor e o LiveKit. Se o servidor travar, o Windows encerra o LiveKit junto (Job Object).
+The downloader verifies a pinned SHA-256, not just the release's checksum file.
+Ctrl+C stops both processes; a Windows Job Object also stops LiveKit if the hub crashes.
 
-Para baixar o LiveKit (versão fixa; o SHA256 do zip oficial está fixado no próprio script e o `checksums.txt` do release é só uma segunda checagem):
+| Option | Default / purpose |
+|---|---|
+| `--data-dir <dir>` | `./data` |
+| `--livekit-bin <exe>` | `./bin/livekit-server.exe`, relative to the working directory |
+| `--console` | Also log to the terminal |
+| `--log-dir <dir>` | Override the log directory |
+| `--no-livekit` | Do not start LiveKit |
+| `--no-diag` | Skip startup network diagnostics |
+
+## Configuration
+
+First run creates `<data-dir>\config.toml`. Edit and restart:
+
+- `server_password`: shared login password; empty allows anyone who can reach the server.
+- `public_host`: public IP/DDNS name clients use for LiveKit. `127.0.0.1` limits voice to this PC.
+- `[livekit] use_external_ip = true`: advertise the public IP for remote friends.
+- `api_key` / `api_secret`: generated automatically; keep secret.
+- `owner = "name"`: optionally pin ownership; place before `[livekit]`.
+
+Data also includes `voxhub.db` (SQLite/WAL) and generated `livekit.yaml`. Existing data,
+invites and wire formats remain compatible with voxhub v1.0.0. **Never share the data folder.**
+Hub traffic lacks TLS; prefer a VPN. See [SECURITY.md](../SECURITY.md).
+
+## Ownership
+
+An unowned server can be claimed by:
+
+- **Local login:** connect to `http://127.0.0.1:7890` from the server PC. LAN/public addresses
+  do not count, even on that PC. The first login or reconnect becomes Owner.
+- **Claim code:** sign in, choose **Claim server**, and enter the single-use code from the
+  server console/log. It changes each unowned startup; failed attempts incur a server-wide
+  exponential delay up to one minute.
+- **Configuration:** pin `owner = "name"`, disabling claims and in-app ownership transfers.
+
+Owner permissions activate only after a personal password is set. In **Server → Members**,
+the Owner can transfer ownership to someone with a personal password; the old Owner becomes
+Admin. Ownership changes are logged.
+
+**Local proxies/tunnels can make remote users appear local.** Forwarding headers and a
+non-loopback `Host` prevent automatic claiming, but tunnels stripping those headers can
+bypass that protection. Pin `owner`, or claim before exposing the server.
+
+### Recovery
+
+These commands update the database without starting the server. A running server notices
+within about two seconds:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File hub\scripts\fetch-livekit.ps1
-```
-
-## Primeira execução
-
-Cria `<data-dir>\config.toml` com padrões. Edite e reinicie:
-
-- `server_password`: senha compartilhada que os colegas digitam (vazio = sem senha).
-- `public_host`: seu IP público ou DDNS. É o endereço que os clientes usam para falar com o LiveKit. Com `127.0.0.1` só o seu PC consegue entrar na voz.
-- `[livekit] use_external_ip = true`: faça isso para colegas fora da sua rede, para o LiveKit anunciar o IP público.
-- `api_key`/`api_secret` são gerados sozinhos. Não compartilhe.
-
-- `owner`: normalmente **não precisa**. Veja a seção abaixo: quem hospeda vira o Dono sozinho. Escrever `owner = "seu-nome"` (no começo do arquivo, antes de `[livekit]`) é a forma manual, que fixa o Dono pelo nome.
-
-Também ficam em `<data-dir>`: `voxhub.db` (SQLite, modo WAL) e `livekit.yaml` (gerado a cada início).
-
-## Dono do servidor (quem hospeda vira dono)
-
-O **Dono** é quem pode tudo no servidor (dar cargo de Admin, redefinir a senha pessoal de alguém, etc.). Quem hospeda o servidor é o Dono, sem editar arquivo nenhum:
-
-- **Entrando pelo próprio PC do servidor.** Enquanto o servidor **não tem dono**, o primeiro login (ou o primeiro app reconectando, se já estava aberto) cuja conexão vem do **próprio PC do servidor** vira o Dono na hora. O servidor decide pelo endereço da conexão TCP (`127.0.0.1`/`::1`), nunca por cabeçalho, então **no app do PC do host use o endereço `http://127.0.0.1:7890`** (como na instalação). Entrar pelo IP da rede local ou pelo IP público, mesmo estando no PC do servidor, **não conta**. Em seguida o app pede a **senha pessoal** do Dono (os poderes só ligam depois dela) e a posse fica no registro de moderação ("virou o Dono do servidor").
-- **Código de reivindicação (plano B).** Ao ligar sem dono, a janela do servidor mostra um código de uso único e também o grava no log:
-
-  ```
-  Nenhum dono ainda. Para virar dono, entre no app e use o código: K7QM-2XD9
-  (ou entre pelo próprio PC do servidor: use o endereço 127.0.0.1)
-  ```
-
-  No app, quem estiver logado usa **"Reivindicar servidor"** (botão "Sem dono" ao lado do nome do servidor, ou em Configurações) e digita o código. Ele vale até alguém reivindicar, **muda a cada vez que o servidor liga** sem dono, é comparado em tempo constante e erros seguidos fazem o servidor inteiro esperar (1 s, 2 s, 4 s... até 1 minuto; vale para qualquer endereço). Depois de usado não funciona mais.
-- **Manual.** Com `owner = "nome"` no `config.toml`, o Dono é esse nome, nada é reivindicado e a posse não pode ser transferida pelo app.
-
-Servidor que já existia (v0.4.1/v0.5.0 sem `owner`): ao atualizar, o banco ganha só a tabela `server_meta` (migração aditiva e repetível; as versões anteriores continuam rodando nele). Abra o app **no PC do servidor, com `127.0.0.1`**: você vira o Dono sozinho (inclusive se o app já estava aberto e só reconectou).
-
-**Segurança.** Um proxy reverso ou túnel rodando no mesmo PC (ngrok, cloudflared, nginx...) faz todo mundo parecer vir de `127.0.0.1`. Por isso o servidor **não** reivindica automaticamente quando a requisição traz `Forwarded`, `X-Forwarded-*`, `X-Real-IP` ou um `Host` que não é `localhost`/`127.0.0.1`/`::1` (cabeçalhos só podem **negar**, nunca conceder). Um túnel que apaga esses cabeçalhos ainda enganaria a regra: se você usa túnel, ponha `owner = "seu-nome"` no `config.toml`, ou entre antes que qualquer outra pessoa consiga alcançar o servidor.
-
-**Transferir a posse.** O Dono abre "🛠 Servidor" > Membros e usa **"Transferir posse do servidor"** na linha da pessoa (com confirmação). A pessoa precisa ter **senha pessoal**; o Dono antigo vira Admin e a troca entra no registro de moderação. Com `owner` fixo no `config.toml` o botão fica desligado (a explicação aparece ao passar o mouse): troque o nome no arquivo e reinicie.
-
-**Recuperação.** Os dois comandos mexem só no banco, então podem rodar com o servidor ligado (ele percebe em até 2 s) ou desligado, e não iniciam o servidor:
-
-```powershell
-# esqueceu a senha pessoal de alguém (inclusive do Dono): mostra um código de uso único (vale até 3 dias)
-.\concord-server.exe --data-dir .\data --reset-password <nome>
-
-# o Dono sumiu ou perdeu o acesso: o servidor fica sem dono
+# Prints a single-use login code, valid until password replacement or at most 3 days.
+.\concord-server.exe --data-dir .\data --reset-password <name>
 .\concord-server.exe --data-dir .\data --reset-owner
 ```
 
-Depois de `--reset-owner` o servidor mostra um código novo na janela dele e quem entrar pelo PC do servidor vira o novo Dono (se o app do Dono antigo continuar aberto no PC do servidor, ele reconecta e reassume sozinho: feche-o antes se for passar para outra pessoa). `--reset-owner` não mexe no `owner` do `config.toml`: se o dono estiver lá, tire a linha. Também fica no registro ("Host (linha de comando)").
+Before resetting ownership for someone else, close the previous Owner's app: a loopback
+reconnect can reclaim it. Remove any pinned `owner` from `config.toml` separately.
 
-## Canais privados (v0.9.0)
+## Private channels
 
-Em "🛠 Servidor" > Canais, Admin e Dono marcam um canal (de texto ou de voz) como **Canal privado** e escolhem quem entra: os cargos Moderador e/ou Membro, e/ou pessoas específicas. **Dono e Admin sempre têm acesso.** Quem não tem acesso não vê nada: o canal não aparece, não gera aviso nem contador, o histórico, as imagens e as reações dele respondem "não encontrado", e a voz recusa a entrada. Quem perde o acesso (cargo trocado, tirado da lista, canal que virou privado) deixa de ver o canal na hora e, se estava na voz dele, é desconectado. Apps antigos (v0.8.x) simplesmente não veem os canais privados a que a pessoa não tem acesso. Cada mudança entra no registro de moderação.
+**Server → Channels** lets Admin/Owner grant access by Moderator/Member role or individual.
+Owner and Admin always have access. Others cannot see the channel, history, attachments,
+reactions or voice participants; losing access hides the channel and disconnects voice.
 
-> **ATENÇÃO: não volte para um servidor antigo.** Um `voxhub-server` v0.8.x (ou mais antigo) não conhece canais privados e, rodando neste banco de dados, mostraria esses canais para todo mundo. Para isso não acontecer, enquanto existir algum canal privado o banco fica marcado de um jeito que **o servidor antigo se recusa a iniciar** (no console aparece um erro como `Invalid column type Text ... position`). Se precisar mesmo voltar para a versão antiga, abra a v0.9.0 antes e torne todos os canais públicos (ou apague os privados): aí o servidor antigo volta a funcionar com o mesmo banco.
+**Do not downgrade with private channels present.** A database guard blocks servers v0.8.x
+and earlier, which would otherwise expose them. First use v0.9.0+ to make every channel
+public or delete the private channels.
 
-## Portas no roteador
+## Network
 
-Redirecione para o PC do host:
+For public hosting, forward these ports to the host PC:
 
-| Porta | Protocolo | Uso |
+| Port | Protocol | Purpose |
 |---|---|---|
-| 7890 | TCP | API e chat (hub) |
-| 7880 | TCP | sinalização do LiveKit |
-| 7881 | TCP | mídia do LiveKit (fallback quando UDP é bloqueado) |
-| 7882 | UDP | mídia do LiveKit (principal) |
+| 7890 | TCP | Hub API/chat |
+| 7880 | TCP | LiveKit signaling |
+| 7881 | TCP | LiveKit media fallback |
+| 7882 | UDP | LiveKit media |
 
-No servidor separado (zip `concord-servidor`, v1.0.2 em diante), rode o `liberar-firewall.bat` antes de ligar: ele cria regras de entrada no Firewall do Windows só para `bin\concord-server.exe` e `bin\livekit-server.exe` e só nas portas acima, em todas as redes (Domínio, Privada e Pública), em IPv4 e IPv6, e desliga bloqueios que o próprio Windows tenha criado para esses programas (o `remover-firewall.bat` desfaz tudo). Se o Firewall perguntar ao ligar o servidor, permita nas redes que você usa: se o Windows marcou a rede de casa como Pública, marque também redes públicas, senão ninguém de fora entra. Num notebook que se conecta a Wi-Fi público, desligue o servidor fora de casa. Uma VPN (Tailscale ou ZeroTier) é mais segura do que abrir portas; veja `SECURITY.md`.
+`allow-firewall.bat` permits only the server/LiveKit executables and configured ports on all
+Windows profiles, IPv4 and IPv6. Conflicting Windows block rules are disabled, not deleted;
+`remove-firewall.bat` restores them. A home network marked Public needs Public permission.
+Stop the server on public Wi-Fi.
 
-## IPv6 (v1.0.2)
+The default `bind = "[::]:7890"` accepts IPv4 and IPv6; old all-interface `0.0.0.0` configs
+also become dual-stack. Set `ipv6 = false` for IPv4 only. Global IPv6 permits direct access
+even behind IPv4 CGNAT, but routers may require an incoming IPv6 firewall exception. Invites
+include it when `public_host` is empty or `127.0.0.1`.
 
-O servidor escuta em IPv4 e IPv6 num socket só (`bind = "[::]:7890"`; um `config.toml` antigo com `0.0.0.0:7890` também passa a escutar nos dois). Amigos com IPv6 entram pelo IPv6 global do PC sem redirecionar portas, mesmo com CGNAT, e os convites criados no servidor já levam esse endereço quando `public_host` está vazio ou é `127.0.0.1` (o padrão). Alguns roteadores bloqueiam IPv6 vindo de fora: procure "firewall IPv6" nas configurações dele. Para voltar a só IPv4, acrescente `ipv6 = false` no `config.toml`. Alguns segundos depois de ligar, o servidor mostra um diagnóstico de conexão (IPv4/IPv6, CGNAT, Firewall do Windows); `--no-diag` desliga.
+IPv4 forwarding cannot bypass CGNAT (for example a WAN address in `100.64.x.x` or differing
+from the internet-visible address). Use IPv6, a mesh VPN with its IP in `public_host`, or a
+separately configured relay. Startup diagnostics report network/firewall status without changes.
 
-## CGNAT
+## Diagnostics
 
-Se a operadora usa CGNAT (o IP "público" do roteador não é o IP que sites como o ifconfig.me mostram, ou fica em 100.64.x.x), o redirecionamento de portas não funciona. Alternativas: IPv6 (veja acima), VPN mesh (Tailscale ou ZeroTier; use o IP da VPN em `public_host`) ou uma VPS pequena como relay.
-
-## Logs
-
-`%LOCALAPPDATA%\concord\logs\hub\hub.<data>.log`, rotação diária, 5 arquivos. Nível `info` por padrão; para investigar: `$env:VOX_LOG="debug"`. Segredos e tokens nunca são logados. As linhas de aviso e erro do LiveKit aparecem com o alvo `livekit`.
-
-## Testes
-
-```powershell
-cargo test -p voxhub-server
-```
-
-Sobem o servidor em porta efêmera, sem LiveKit, com diretório temporário.
+Windows logs: `%LOCALAPPDATA%\concord\logs\hub\hub.<date>.log`, daily rotation, five files.
+Use `$env:VOX_LOG="debug"` for detail. Logs may contain addresses, names and recovery codes.
+For tests, see [CONTRIBUTING.md](../CONTRIBUTING.md).

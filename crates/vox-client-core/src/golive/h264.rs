@@ -47,7 +47,10 @@ pub fn nal_units(data: &[u8]) -> Vec<Nal> {
             end -= 1;
         }
         if end > payload {
-            out.push(Nal { start: sc, unit: payload..end });
+            out.push(Nal {
+                start: sc,
+                unit: payload..end,
+            });
         }
     }
     out
@@ -79,11 +82,17 @@ pub fn access_units(data: &[u8]) -> Vec<AccessUnit> {
     let mut size: Option<(u32, u32)> = None;
     let mut cur_size: Option<(u32, u32)> = None;
 
-    let flush = |start: usize, end: usize, key: bool, sz: Option<(u32, u32)>, out: &mut Vec<AccessUnit>| {
-        if let Some((w, h)) = sz {
-            out.push(AccessUnit { range: start..end, keyframe: key, width: w, height: h });
-        }
-    };
+    let flush =
+        |start: usize, end: usize, key: bool, sz: Option<(u32, u32)>, out: &mut Vec<AccessUnit>| {
+            if let Some((w, h)) = sz {
+                out.push(AccessUnit {
+                    range: start..end,
+                    keyframe: key,
+                    width: w,
+                    height: h,
+                });
+            }
+        };
 
     for nal in &nals {
         let t = nal.nal_type(data);
@@ -179,13 +188,19 @@ pub fn sps_resolution(nal: &[u8]) -> Option<(u32, u32)> {
         return None;
     }
     let rbsp = unescape(&nal[1..]);
-    let mut b = Bits { data: &rbsp, pos: 0 };
+    let mut b = Bits {
+        data: &rbsp,
+        pos: 0,
+    };
     let profile_idc = b.bits(8)?;
     b.bits(16)?; // constraint flags + level_idc
     b.ue()?; // seq_parameter_set_id
     let mut chroma_format_idc = 1;
     let mut separate_colour_plane = 0;
-    if matches!(profile_idc, 100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135) {
+    if matches!(
+        profile_idc,
+        100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135
+    ) {
         chroma_format_idc = b.ue()?;
         if chroma_format_idc == 3 {
             separate_colour_plane = b.bit()?;
@@ -240,13 +255,21 @@ pub fn sps_resolution(nal: &[u8]) -> Option<(u32, u32)> {
         ct = b.ue()?;
         cb = b.ue()?;
     }
-    let chroma_array_type = if separate_colour_plane == 1 { 0 } else { chroma_format_idc };
+    let chroma_array_type = if separate_colour_plane == 1 {
+        0
+    } else {
+        chroma_format_idc
+    };
     let (sub_w, sub_h) = match chroma_format_idc {
         1 => (2, 2),
         2 => (2, 1),
         _ => (1, 1),
     };
-    let (crop_x, crop_y) = if chroma_array_type == 0 { (1, 2 - frame_mbs_only) } else { (sub_w, sub_h * (2 - frame_mbs_only)) };
+    let (crop_x, crop_y) = if chroma_array_type == 0 {
+        (1, 2 - frame_mbs_only)
+    } else {
+        (sub_w, sub_h * (2 - frame_mbs_only))
+    };
     let width = (w_mbs * 16).checked_sub(crop_x * (cl + cr))?;
     let height = ((2 - frame_mbs_only) * h_map * 16).checked_sub(crop_y * (ct + cb))?;
     (width > 0 && height > 0).then_some((width, height))
@@ -259,13 +282,13 @@ mod tests {
     // Real SPS NAL units written by ffmpeg/libx264 (with emulation-prevention bytes).
     // Baseline 1920x1080 (1088 coded rows, cropped by 8).
     const SPS_1080: [u8; 26] = [
-        0x67, 0x42, 0xc0, 0x28, 0xd9, 0x00, 0x78, 0x02, 0x27, 0xe5, 0xc0, 0x44, 0x00, 0x00, 0x03, 0x00, 0x04, 0x00, 0x00, 0x03, 0x00, 0xf2, 0x3c,
-        0x60, 0xc9, 0x20,
+        0x67, 0x42, 0xc0, 0x28, 0xd9, 0x00, 0x78, 0x02, 0x27, 0xe5, 0xc0, 0x44, 0x00, 0x00, 0x03,
+        0x00, 0x04, 0x00, 0x00, 0x03, 0x00, 0xf2, 0x3c, 0x60, 0xc9, 0x20,
     ];
     // High profile 1280x720.
     const SPS_720_HIGH: [u8; 24] = [
-        0x67, 0x64, 0x00, 0x1f, 0xac, 0xb2, 0x00, 0xa0, 0x0b, 0x76, 0x02, 0x20, 0x00, 0x00, 0x03, 0x00, 0x20, 0x00, 0x00, 0x07, 0x91, 0xe3, 0x06,
-        0x49,
+        0x67, 0x64, 0x00, 0x1f, 0xac, 0xb2, 0x00, 0xa0, 0x0b, 0x76, 0x02, 0x20, 0x00, 0x00, 0x03,
+        0x00, 0x20, 0x00, 0x00, 0x07, 0x91, 0xe3, 0x06, 0x49,
     ];
 
     #[test]
@@ -277,7 +300,10 @@ mod tests {
 
     #[test]
     fn unescape_removes_emulation_prevention() {
-        assert_eq!(unescape(&[0, 0, 3, 1, 0, 0, 3, 0, 5]), vec![0, 0, 1, 0, 0, 0, 5]);
+        assert_eq!(
+            unescape(&[0, 0, 3, 1, 0, 0, 3, 0, 5]),
+            vec![0, 0, 1, 0, 0, 0, 5]
+        );
     }
 
     fn stream() -> Vec<u8> {
@@ -292,7 +318,7 @@ mod tests {
         push(&mut s, false, &[0x06, 0x05, 0x01, 0x80]);
         push(&mut s, false, &[0x65, 0x88, 0x84, 0x80]); // first_mb = 0
         push(&mut s, false, &[0x65, 0x40, 0x84, 0x80]); // first_mb != 0 (same picture)
-        // AU 1: P slice
+                                                        // AU 1: P slice
         push(&mut s, false, &[0x41, 0x9a, 0x02, 0x80]);
         // AU 2: AUD + P slice
         push(&mut s, true, &[0x09, 0xf0]);
@@ -318,7 +344,10 @@ mod tests {
         assert_eq!(aus[2].range.end, s.len());
         // AU 0 contains both IDR slices; AU 2 starts with its AUD.
         assert_eq!(nal_units(&s[aus[0].range.clone()]).len(), 5);
-        assert_eq!(s[aus[2].range.start..aus[2].range.start + 5], [0, 0, 0, 1, 0x09]);
+        assert_eq!(
+            s[aus[2].range.start..aus[2].range.start + 5],
+            [0, 0, 0, 1, 0x09]
+        );
     }
 
     #[test]

@@ -122,7 +122,11 @@ impl LinkPreviews {
     }
 
     fn is_fresh(&self, row: &Row, now: i64) -> bool {
-        let ttl = if row.is_empty() { self.cfg.ttl_empty } else { self.cfg.ttl_ok };
+        let ttl = if row.is_empty() {
+            self.cfg.ttl_empty
+        } else {
+            self.cfg.ttl_ok
+        };
         now - row.fetched_at_ms < ttl.as_millis() as i64
     }
 
@@ -141,7 +145,8 @@ impl LinkPreviews {
         let now = Instant::now();
         let mut g = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
         let b = g.entry(user).or_insert((self.cfg.rate_burst, now));
-        b.0 = (b.0 + now.duration_since(b.1).as_secs_f64() * self.cfg.rate_per_sec).min(self.cfg.rate_burst);
+        b.0 = (b.0 + now.duration_since(b.1).as_secs_f64() * self.cfg.rate_per_sec)
+            .min(self.cfg.rate_burst);
         b.1 = now;
         if b.0 >= 1.0 {
             b.0 -= 1.0;
@@ -188,7 +193,11 @@ impl LinkPreviews {
         if !self.take_token(user) {
             return Err(RateLimited);
         }
-        let _slot = self.fetch_slots.acquire().await.expect("semaphore is never closed");
+        let _slot = self
+            .fetch_slots
+            .acquire()
+            .await
+            .expect("semaphore is never closed");
         self.refresh_own_addresses().await;
         let started = Instant::now();
         let built = self.build(url).await;
@@ -206,7 +215,10 @@ impl LinkPreviews {
         // A site that is down right now must not wipe a good older preview.
         if row.is_empty() {
             if let Some(old) = stale.filter(|o| !o.is_empty()) {
-                row = Row { fetched_at_ms: now, ..old };
+                row = Row {
+                    fetched_at_ms: now,
+                    ..old
+                };
             }
         }
         tracing::debug!(
@@ -262,7 +274,12 @@ impl LinkPreviews {
         let ips: Vec<IpAddr> = match host.parse::<IpAddr>() {
             Ok(ip) => vec![ip],
             Err(_) if host.is_empty() => Vec::new(),
-            Err(_) => match tokio::time::timeout(Duration::from_secs(2), tokio::net::lookup_host((host.as_str(), 0))).await {
+            Err(_) => match tokio::time::timeout(
+                Duration::from_secs(2),
+                tokio::net::lookup_host((host.as_str(), 0)),
+            )
+            .await
+            {
                 Ok(Ok(found)) => found.map(|a| a.ip()).collect(),
                 _ => Vec::new(),
             },
@@ -285,7 +302,11 @@ impl LinkPreviews {
         let page = self.fetcher.get(&oembed, Kind::Json).await.ok()?;
         let info = youtube::parse_oembed(&page.body)?;
         let mut thumb = None;
-        if let Some(t) = info.thumbnail_url.as_deref().and_then(|u| Url::parse(u).ok()) {
+        if let Some(t) = info
+            .thumbnail_url
+            .as_deref()
+            .and_then(|u| Url::parse(u).ok())
+        {
             // `maxresdefault` is a clean 16:9 frame but missing for some videos; the size the
             // oEmbed names always exists (and 4:3 variants are cropped to 16:9).
             for candidate in youtube::thumbnail_candidates(&t) {
@@ -295,19 +316,34 @@ impl LinkPreviews {
                 }
             }
         }
-        Some(Built { title: info.title, description: info.author, site_name: "YouTube".into(), thumb })
+        Some(Built {
+            title: info.title,
+            description: info.author,
+            site_name: "YouTube".into(),
+            thumb,
+        })
     }
 
     async fn build_generic(&self, url: &Url) -> Built {
         let Ok(page) = self.fetcher.get(url, Kind::Html).await else {
-            return Built { site_name: host_label(url), ..Built::default() };
+            return Built {
+                site_name: host_label(url),
+                ..Built::default()
+            };
         };
         let text = html::decode_body(&page.body, &page.content_type);
         let meta = html::parse(&text);
-        let site_name = if meta.site_name.is_empty() { host_label(&page.url) } else { meta.site_name.clone() };
+        let site_name = if meta.site_name.is_empty() {
+            host_label(&page.url)
+        } else {
+            meta.site_name.clone()
+        };
         // Instagram and friends serve scrapers a login wall: its generic title and logo are noise.
         if is_login_wall(&page.url, &meta.title, &self.cfg.wall_hosts) {
-            return Built { site_name, ..Built::default() };
+            return Built {
+                site_name,
+                ..Built::default()
+            };
         }
         let mut thumb = None;
         if let Some(raw) = meta.image.as_deref() {
@@ -315,7 +351,12 @@ impl LinkPreviews {
                 thumb = self.fetch_thumb(&img_url, false).await;
             }
         }
-        Built { title: meta.title, description: meta.description, site_name, thumb }
+        Built {
+            title: meta.title,
+            description: meta.description,
+            site_name,
+            thumb,
+        }
     }
 
     async fn fetch_thumb(&self, url: &Url, crop_16_9: bool) -> Option<Thumb> {
@@ -343,7 +384,12 @@ struct Flight<'a> {
 
 impl<'a> Flight<'a> {
     fn join(map: &'a FlightMap, key: String) -> Self {
-        let lock = map.lock().unwrap_or_else(|e| e.into_inner()).entry(key.clone()).or_default().clone();
+        let lock = map
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(key.clone())
+            .or_default()
+            .clone();
         Flight { map, key, lock }
     }
 }
@@ -352,7 +398,11 @@ impl Drop for Flight<'_> {
     fn drop(&mut self) {
         let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
         // The map's copy and ours: nobody else is waiting on this entry.
-        if Arc::strong_count(&self.lock) <= 2 && map.get(&self.key).is_some_and(|l| Arc::ptr_eq(l, &self.lock)) {
+        if Arc::strong_count(&self.lock) <= 2
+            && map
+                .get(&self.key)
+                .is_some_and(|l| Arc::ptr_eq(l, &self.lock))
+        {
             map.remove(&self.key);
         }
     }
@@ -366,7 +416,9 @@ fn host_label(url: &Url) -> String {
 
 fn is_login_wall(url: &Url, title: &str, wall_hosts: &[String]) -> bool {
     let host = url.host_str().unwrap_or("").to_ascii_lowercase();
-    let walled = wall_hosts.iter().any(|w| host == *w || host.ends_with(&format!(".{w}")));
+    let walled = wall_hosts
+        .iter()
+        .any(|w| host == *w || host.ends_with(&format!(".{w}")));
     let t = title.to_lowercase();
     walled && (t.is_empty() || t == "instagram" || t.contains("login") || t.contains("log in"))
 }
@@ -384,7 +436,11 @@ mod tests {
         assert!(LinkPreviews::parse_url("file:///etc/passwd").is_none());
         assert!(LinkPreviews::parse_url("not a url").is_none());
         assert!(LinkPreviews::parse_url("").is_none());
-        assert!(LinkPreviews::parse_url(&format!("https://example.com/{}", "a".repeat(MAX_URL_LEN))).is_none());
+        assert!(LinkPreviews::parse_url(&format!(
+            "https://example.com/{}",
+            "a".repeat(MAX_URL_LEN)
+        ))
+        .is_none());
     }
 
     /// Requests that are cancelled while they wait (the client hung up) leave nothing behind in
@@ -393,7 +449,11 @@ mod tests {
     async fn cancelled_requests_leave_no_single_flight_entries() {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open(&dir.path().join("t.db")).unwrap();
-        let cfg = PreviewConfig { allow_ips: vec!["127.0.0.1".parse().unwrap()], rate_burst: 1000.0, ..PreviewConfig::default() };
+        let cfg = PreviewConfig {
+            allow_ips: vec!["127.0.0.1".parse().unwrap()],
+            rate_burst: 1000.0,
+            ..PreviewConfig::default()
+        };
         let previews = Arc::new(LinkPreviews::new(cfg, db, "").unwrap());
         // A server that accepts and never answers.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -407,18 +467,25 @@ mod tests {
         let mut tasks = Vec::new();
         for i in 0..20 {
             let p = previews.clone();
-            let url = LinkPreviews::parse_url(&format!("http://127.0.0.1:{port}/{}", i % 10)).unwrap();
+            let url =
+                LinkPreviews::parse_url(&format!("http://127.0.0.1:{port}/{}", i % 10)).unwrap();
             tasks.push(tokio::spawn(async move { p.get(1, &url).await }));
         }
         tokio::time::sleep(Duration::from_millis(300)).await;
-        assert!(!previews.inflight.lock().unwrap().is_empty(), "the requests are waiting");
+        assert!(
+            !previews.inflight.lock().unwrap().is_empty(),
+            "the requests are waiting"
+        );
         for t in &tasks {
             t.abort();
         }
         for t in tasks {
             let _ = t.await;
         }
-        assert!(previews.inflight.lock().unwrap().is_empty(), "every entry left with its last request");
+        assert!(
+            previews.inflight.lock().unwrap().is_empty(),
+            "every entry left with its last request"
+        );
         hold.abort();
     }
 
@@ -430,7 +497,15 @@ mod tests {
         assert!(is_login_wall(&ig, "Instagram", &w));
         assert!(is_login_wall(&ig, "Login • Instagram", &w));
         assert!(!is_login_wall(&ig, "Fulano on Instagram: \"bom dia\"", &w));
-        assert!(!is_login_wall(&Url::parse("https://example.com/").unwrap(), "Login", &w));
-        assert!(!is_login_wall(&Url::parse("https://notinstagram.com/").unwrap(), "Instagram", &w));
+        assert!(!is_login_wall(
+            &Url::parse("https://example.com/").unwrap(),
+            "Login",
+            &w
+        ));
+        assert!(!is_login_wall(
+            &Url::parse("https://notinstagram.com/").unwrap(),
+            "Instagram",
+            &w
+        ));
     }
 }

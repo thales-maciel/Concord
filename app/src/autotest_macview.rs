@@ -14,34 +14,49 @@ use crate::call::TileKey;
 /// framebuffer, nothing else on the screen); [`save_shots`] writes it as `<dir>/<name>.png`.
 fn shot(app: &App, name: &str) {
     if std::env::var_os("VOX_AUTOTEST_SHOT_DIR").is_some() {
-        app.repaint_ctx().send_viewport_cmd(eframe::egui::ViewportCommand::Screenshot(eframe::egui::UserData::new(name.to_string())));
+        app.repaint_ctx()
+            .send_viewport_cmd(eframe::egui::ViewportCommand::Screenshot(
+                eframe::egui::UserData::new(name.to_string()),
+            ));
     }
 }
 
 /// Write the window pictures egui handed back this pass.
 fn save_shots(app: &App) {
-    let Some(dir) = std::env::var_os("VOX_AUTOTEST_SHOT_DIR") else { return };
-    let shots: Vec<(String, std::sync::Arc<eframe::egui::ColorImage>)> = app.repaint_ctx().input(|i| {
-        i.raw
-            .events
-            .iter()
-            .filter_map(|e| match e {
-                eframe::egui::Event::Screenshot { user_data, image, .. } => Some((user_data.data.as_ref()?.downcast_ref::<String>()?.clone(), image.clone())),
-                _ => None,
-            })
-            .collect()
-    });
+    let Some(dir) = std::env::var_os("VOX_AUTOTEST_SHOT_DIR") else {
+        return;
+    };
+    let shots: Vec<(String, std::sync::Arc<eframe::egui::ColorImage>)> =
+        app.repaint_ctx().input(|i| {
+            i.raw
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    eframe::egui::Event::Screenshot {
+                        user_data, image, ..
+                    } => Some((
+                        user_data.data.as_ref()?.downcast_ref::<String>()?.clone(),
+                        image.clone(),
+                    )),
+                    _ => None,
+                })
+                .collect()
+        });
     for (name, img) in shots {
         let path = std::path::Path::new(&dir).join(format!("{name}.png"));
         let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
-        let res = image::RgbaImage::from_raw(img.size[0] as u32, img.size[1] as u32, rgba).map(|i| i.save(&path));
+        let res = image::RgbaImage::from_raw(img.size[0] as u32, img.size[1] as u32, rgba)
+            .map(|i| i.save(&path));
         tracing::info!(target: "autotest", "AUTOTEST mac-view: window picture {} ({:?})", path.display(), res.map(|r| r.is_ok()));
     }
 }
 
 /// Frames drawn for the watched stream so far (the viewer counts what the app uploaded).
 fn presented(key: &str) -> u64 {
-    vox_client_core::golive::Viewer::get().ok().and_then(|v| v.state(key)).map_or(0, |s| s.presented)
+    vox_client_core::golive::Viewer::get()
+        .ok()
+        .and_then(|v| v.state(key))
+        .map_or(0, |s| s.presented)
 }
 
 impl Auto {
@@ -53,7 +68,9 @@ impl Auto {
             0 => self.connect(app),
             1 => {
                 if app.screen == Screen::Main && app.ready && app.hub_up {
-                    let Some(vc) = Self::first_voice(app) else { return self.fail("no voice channel") };
+                    let Some(vc) = Self::first_voice(app) else {
+                        return self.fail("no voice channel");
+                    };
                     app.join_voice(vc);
                     self.goto(2, "logged in; joining voice");
                 } else if self.waited(30) {
@@ -62,7 +79,11 @@ impl Auto {
             }
             2 => {
                 let me = app.my_id();
-                let live = app.members_here().iter().find(|m| m.streaming && Some(m.user.id) != me).map(|m| m.user.id);
+                let live = app
+                    .members_here()
+                    .iter()
+                    .find(|m| m.streaming && Some(m.user.id) != me)
+                    .map(|m| m.user.id);
                 if let Some(id) = live.filter(|_| self.waited(2)) {
                     app.watch_focused(&id.to_string());
                     self.goto(3, "someone is live; watching (focused)");
@@ -75,7 +96,9 @@ impl Auto {
             // request with its last frame).
             3 if self.args.mode.as_deref() == Some("static") => {
                 if shown >= 1 {
-                    let st = key.as_deref().and_then(|k| vox_client_core::golive::Viewer::get().ok()?.state(k));
+                    let st = key
+                        .as_deref()
+                        .and_then(|k| vox_client_core::golive::Viewer::get().ok()?.state(k));
                     tracing::info!(target: "autotest", "AUTOTEST mac-view: static stream: first picture drawn {:.1} s after watching ({shown} drawn), video {:?}", self.step_at.elapsed().as_secs_f32(), st.map(|s| s.video));
                     shot(app, "mac-view-static");
                     app.leave_voice();
@@ -87,7 +110,9 @@ impl Auto {
             3 => {
                 if shown >= 30 {
                     self.frames_first = shown;
-                    let st = key.as_deref().and_then(|k| vox_client_core::golive::Viewer::get().ok()?.state(k));
+                    let st = key
+                        .as_deref()
+                        .and_then(|k| vox_client_core::golive::Viewer::get().ok()?.state(k));
                     tracing::info!(target: "autotest", "AUTOTEST mac-view: frames drawn inside the app: {shown}, video {:?}", st.map(|s| s.video));
                     // `--mode decode-only`: the window is redrawn once a second during the measurement
                     // (the stream is still received and decoded at full rate): the decode cost alone.
@@ -136,7 +161,11 @@ impl Auto {
             6 if self.waited(3) => {
                 self.quiet_frames = 0;
                 if !app.call.fullscreen || shown < self.frames_first + 20 {
-                    return self.fail(&format!("fullscreen {} with {} new frames", app.call.fullscreen, shown - self.frames_first));
+                    return self.fail(&format!(
+                        "fullscreen {} with {} new frames",
+                        app.call.fullscreen,
+                        shown - self.frames_first
+                    ));
                 }
                 self.frames_first = shown;
                 let ctx = app.repaint_ctx();
@@ -149,7 +178,10 @@ impl Auto {
             7 if self.waited(4) => {
                 let popped = key.as_deref().is_some_and(|k| app.stream_popped(k));
                 if !popped || shown < self.frames_first + 20 {
-                    return self.fail(&format!("pop-out: popped {popped}, {} new frames", shown - self.frames_first));
+                    return self.fail(&format!(
+                        "pop-out: popped {popped}, {} new frames",
+                        shown - self.frames_first
+                    ));
                 }
                 self.frames_first = shown;
                 if let Some(k) = &key {
@@ -160,7 +192,10 @@ impl Auto {
             8 if self.waited(3) => {
                 let popped = key.as_deref().is_some_and(|k| app.stream_popped(k));
                 if popped || shown < self.frames_first + 20 {
-                    return self.fail(&format!("back inside: popped {popped}, {} new frames", shown - self.frames_first));
+                    return self.fail(&format!(
+                        "back inside: popped {popped}, {} new frames",
+                        shown - self.frames_first
+                    ));
                 }
                 tracing::info!(target: "autotest", "AUTOTEST mac-view: inline, pinned, fullscreen and pop-out all drew frames ({shown} in total)");
                 app.leave_voice();

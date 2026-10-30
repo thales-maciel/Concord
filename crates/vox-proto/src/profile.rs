@@ -1,4 +1,4 @@
-//! User profiles (v0.6, no protocol bump): display name, "Sobre mim", accent colour, custom
+//! User profiles (v0.6, no protocol bump): display name, "About me", accent colour, custom
 //! status and presence. Everything here is optional on the wire, so a hub or a client that
 //! predates it keeps working: older clients ignore the new fields and events, a newer client on an
 //! older hub gets `404` and hides the profile features.
@@ -18,7 +18,7 @@
 //! - `PUT    /api/me/status`            [`StatusUpdate`] -> [`StatusResponse`] (an empty emoji and text
 //!   clears it); `DELETE /api/me/status` -> [`StatusResponse`]
 //! - `POST   /api/mod/users/{id}/clear-profile` [`ModClearProfileRequest`] -> [`OkResponse`](crate::OkResponse)
-//!   (Moderador+, above the target's role; audited as [`AUDIT_CLEAR_PROFILE`])
+//!   (Moderator+, above the target's role; audited as [`AUDIT_CLEAR_PROFILE`])
 //!
 //! Presence is *per person*, not per connection. A person who is [`Presence::Invisible`] is, for
 //! everybody else, offline: the hub leaves them out of the online list, announces their going
@@ -34,7 +34,7 @@ use crate::User;
 
 /// Display names: 1 to this many characters, or none.
 pub const DISPLAY_NAME_MAX: usize = 32;
-/// "Sobre mim".
+/// "About me".
 pub const BIO_MAX: usize = 190;
 /// Most line breaks a bio may have.
 pub const BIO_MAX_LINES: usize = 8;
@@ -61,11 +61,11 @@ pub const AUDIT_CLEAR_PROFILE: &str = "clear_profile";
 pub enum Presence {
     #[default]
     Online,
-    /// "Ausente".
+    /// "Away".
     Away,
-    /// "Não perturbe": the client mutes its own alert sounds and direct-message notifications.
+    /// "Do not disturb": the client mutes its own alert sounds and direct-message notifications.
     Dnd,
-    /// "Invisível": everybody else sees this person as offline.
+    /// "Invisible": everybody else sees this person as offline.
     Invisible,
 }
 
@@ -77,7 +77,12 @@ impl<'de> Deserialize<'de> for Presence {
 }
 
 impl Presence {
-    pub const ALL: [Presence; 4] = [Presence::Online, Presence::Away, Presence::Dnd, Presence::Invisible];
+    pub const ALL: [Presence; 4] = [
+        Presence::Online,
+        Presence::Away,
+        Presence::Dnd,
+        Presence::Invisible,
+    ];
 
     pub fn wire_name(self) -> &'static str {
         match self {
@@ -108,7 +113,7 @@ impl Presence {
     }
 }
 
-/// "Status personalizado": an emoji and/or a line of text, optionally clearing itself.
+/// "Custom status": an emoji and/or a line of text, optionally clearing itself.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct CustomStatus {
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -139,7 +144,7 @@ impl CustomStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserProfile {
     pub user: User,
-    /// "Sobre mim": plain text, at most [`BIO_MAX`] characters.
+    /// "About me": plain text, at most [`BIO_MAX`] characters.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub bio: String,
     /// The profile colour as `#rrggbb` (lowercase).
@@ -224,7 +229,11 @@ impl ModClearProfileRequest {
 impl User {
     /// What people see: the display name when there is one, else the username.
     pub fn shown_name(&self) -> &str {
-        self.display_name.as_deref().map(str::trim).filter(|n| !n.is_empty()).unwrap_or(&self.username)
+        self.display_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .unwrap_or(&self.username)
     }
 
     /// Does this person show a name other than their username?
@@ -252,15 +261,31 @@ pub enum ProfileError {
 impl std::fmt::Display for ProfileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ProfileError::DisplayNameLength => write!(f, "display name must be 1-{DISPLAY_NAME_MAX} characters"),
-            ProfileError::DisplayNameChars => write!(f, "display name has characters that are not allowed"),
-            ProfileError::BioLength => write!(f, "bio must be at most {BIO_MAX} characters and {BIO_MAX_LINES} lines"),
+            ProfileError::DisplayNameLength => {
+                write!(f, "display name must be 1-{DISPLAY_NAME_MAX} characters")
+            }
+            ProfileError::DisplayNameChars => {
+                write!(f, "display name has characters that are not allowed")
+            }
+            ProfileError::BioLength => write!(
+                f,
+                "bio must be at most {BIO_MAX} characters and {BIO_MAX_LINES} lines"
+            ),
             ProfileError::BioChars => write!(f, "bio has characters that are not allowed"),
             ProfileError::AccentFormat => write!(f, "colour must look like #rrggbb"),
-            ProfileError::StatusTextLength => write!(f, "status text must be at most {STATUS_TEXT_MAX} characters"),
-            ProfileError::StatusTextChars => write!(f, "status text has characters that are not allowed"),
+            ProfileError::StatusTextLength => write!(
+                f,
+                "status text must be at most {STATUS_TEXT_MAX} characters"
+            ),
+            ProfileError::StatusTextChars => {
+                write!(f, "status text has characters that are not allowed")
+            }
             ProfileError::EmojiInvalid => write!(f, "status emoji must be a single emoji"),
-            ProfileError::ExpiryTooLong => write!(f, "a status can clear itself after at most {} days", STATUS_MAX_SECS / 86_400),
+            ProfileError::ExpiryTooLong => write!(
+                f,
+                "a status can clear itself after at most {} days",
+                STATUS_MAX_SECS / 86_400
+            ),
         }
     }
 }
@@ -298,7 +323,7 @@ pub fn clean_display_name(raw: &str) -> Result<Option<String>, ProfileError> {
     Ok(Some(name.to_string()))
 }
 
-/// "Sobre mim" as stored: trimmed, `\r\n` as `\n`; `Ok("")` for an empty one.
+/// "About me" as stored: trimmed, `\r\n` as `\n`; `Ok("")` for an empty one.
 pub fn clean_bio(raw: &str) -> Result<String, ProfileError> {
     let text = raw.replace("\r\n", "\n").replace('\r', "\n");
     let text = text.trim();
@@ -323,7 +348,13 @@ pub fn clean_accent(raw: &str) -> Result<Option<String>, ProfileError> {
     }
     match hex.len() {
         6 => Ok(Some(format!("#{}", hex.to_ascii_lowercase()))),
-        3 => Ok(Some(format!("#{}", hex.chars().flat_map(|c| [c, c]).collect::<String>().to_ascii_lowercase()))),
+        3 => Ok(Some(format!(
+            "#{}",
+            hex.chars()
+                .flat_map(|c| [c, c])
+                .collect::<String>()
+                .to_ascii_lowercase()
+        ))),
         _ => Err(ProfileError::AccentFormat),
     }
 }
@@ -363,7 +394,12 @@ pub fn clean_status_emoji(raw: &str) -> Result<String, ProfileError> {
 }
 
 /// A status as stored from the request fields: `Ok(None)` when both are empty.
-pub fn clean_status(emoji: &str, text: &str, expires_in_secs: Option<u64>, now_ms: i64) -> Result<Option<CustomStatus>, ProfileError> {
+pub fn clean_status(
+    emoji: &str,
+    text: &str,
+    expires_in_secs: Option<u64>,
+    now_ms: i64,
+) -> Result<Option<CustomStatus>, ProfileError> {
     let emoji = clean_status_emoji(emoji)?;
     let text = text.trim();
     if text.chars().any(is_forbidden_char) {
@@ -380,7 +416,11 @@ pub fn clean_status(emoji: &str, text: &str, expires_in_secs: Option<u64>, now_m
         Some(s) if s > STATUS_MAX_SECS => return Err(ProfileError::ExpiryTooLong),
         Some(s) => Some(now_ms.saturating_add((s as i64).saturating_mul(1000))),
     };
-    Ok(Some(CustomStatus { emoji, text: text.to_string(), expires_at_ms }))
+    Ok(Some(CustomStatus {
+        emoji,
+        text: text.to_string(),
+        expires_at_ms,
+    }))
 }
 
 #[cfg(test)]
@@ -396,29 +436,66 @@ mod tests {
         assert_eq!(u.shown_name(), "Ana Maria");
         assert!(u.has_display_name());
         u.display_name = Some("   ".into());
-        assert_eq!(u.shown_name(), "ana", "a blank display name is no display name");
+        assert_eq!(
+            u.shown_name(),
+            "ana",
+            "a blank display name is no display name"
+        );
         u.display_name = Some(String::new());
         assert!(!u.has_display_name());
     }
 
     #[test]
     fn display_names() {
-        assert_eq!(clean_display_name("  Ana Maria "), Ok(Some("Ana Maria".into())));
+        assert_eq!(
+            clean_display_name("  Ana Maria "),
+            Ok(Some("Ana Maria".into()))
+        );
         assert_eq!(clean_display_name("   "), Ok(None));
         assert_eq!(clean_display_name(""), Ok(None));
-        assert_eq!(clean_display_name("Ünï 😀 çödé"), Ok(Some("Ünï 😀 çödé".into())));
-        assert_eq!(clean_display_name(&"a".repeat(32)).unwrap().unwrap().len(), 32);
-        assert_eq!(clean_display_name(&"a".repeat(33)), Err(ProfileError::DisplayNameLength));
-        assert_eq!(clean_display_name("a\nb"), Err(ProfileError::DisplayNameChars));
-        assert_eq!(clean_display_name("a\tb"), Err(ProfileError::DisplayNameChars));
-        assert_eq!(clean_display_name("a\u{0}b"), Err(ProfileError::DisplayNameChars));
+        assert_eq!(
+            clean_display_name("Ünï 😀 çödé"),
+            Ok(Some("Ünï 😀 çödé".into()))
+        );
+        assert_eq!(
+            clean_display_name(&"a".repeat(32)).unwrap().unwrap().len(),
+            32
+        );
+        assert_eq!(
+            clean_display_name(&"a".repeat(33)),
+            Err(ProfileError::DisplayNameLength)
+        );
+        assert_eq!(
+            clean_display_name("a\nb"),
+            Err(ProfileError::DisplayNameChars)
+        );
+        assert_eq!(
+            clean_display_name("a\tb"),
+            Err(ProfileError::DisplayNameChars)
+        );
+        assert_eq!(
+            clean_display_name("a\u{0}b"),
+            Err(ProfileError::DisplayNameChars)
+        );
         // Direction overrides and zero-width characters are spoofing tools.
-        assert_eq!(clean_display_name("evil\u{202E}gpj"), Err(ProfileError::DisplayNameChars));
-        assert_eq!(clean_display_name("ad\u{200B}min"), Err(ProfileError::DisplayNameChars));
-        assert_eq!(clean_display_name("\u{3164}"), Err(ProfileError::DisplayNameChars));
+        assert_eq!(
+            clean_display_name("evil\u{202E}gpj"),
+            Err(ProfileError::DisplayNameChars)
+        );
+        assert_eq!(
+            clean_display_name("ad\u{200B}min"),
+            Err(ProfileError::DisplayNameChars)
+        );
+        assert_eq!(
+            clean_display_name("\u{3164}"),
+            Err(ProfileError::DisplayNameChars)
+        );
         // The emoji joiner is allowed inside a name.
         assert!(clean_display_name("👨\u{200D}👩").is_ok());
-        assert_eq!(clean_display_name("\u{200D}"), Err(ProfileError::DisplayNameChars));
+        assert_eq!(
+            clean_display_name("\u{200D}"),
+            Err(ProfileError::DisplayNameChars)
+        );
     }
 
     #[test]
@@ -427,7 +504,11 @@ mod tests {
         assert_eq!(clean_bio(" oi\r\nlinha 2 "), Ok("oi\nlinha 2".into()));
         assert_eq!(clean_bio(&"x".repeat(190)).unwrap().len(), 190);
         assert_eq!(clean_bio(&"x".repeat(191)), Err(ProfileError::BioLength));
-        assert_eq!(clean_bio(&"é".repeat(190)).unwrap().chars().count(), 190, "characters, not bytes");
+        assert_eq!(
+            clean_bio(&"é".repeat(190)).unwrap().chars().count(),
+            190,
+            "characters, not bytes"
+        );
         assert_eq!(clean_bio(&"a\n".repeat(11)), Err(ProfileError::BioLength));
         assert_eq!(clean_bio("a\u{7}b"), Err(ProfileError::BioChars));
         assert_eq!(clean_bio("a\u{202E}b"), Err(ProfileError::BioChars));
@@ -440,7 +521,14 @@ mod tests {
         assert_eq!(clean_accent("ff8800"), Ok(Some("#ff8800".into())));
         assert_eq!(clean_accent("#f80"), Ok(Some("#ff8800".into())));
         assert_eq!(clean_accent(""), Ok(None));
-        for bad in ["#ff88", "#gg0000", "red", "#ff880000", "rgb(1,2,3)", "#ff 800"] {
+        for bad in [
+            "#ff88",
+            "#gg0000",
+            "red",
+            "#ff880000",
+            "rgb(1,2,3)",
+            "#ff 800",
+        ] {
             assert_eq!(clean_accent(bad), Err(ProfileError::AccentFormat), "{bad}");
         }
         assert_eq!(accent_rgb("#ff8800"), Some([255, 136, 0]));
@@ -450,11 +538,36 @@ mod tests {
 
     #[test]
     fn status_emoji_sanity() {
-        for good in ["🎮", "😀", "👨\u{200D}👩\u{200D}👧\u{200D}👦", "❤\u{FE0F}", "1\u{FE0F}\u{20E3}", "🇧🇷", "👍🏽", ""] {
+        for good in [
+            "🎮",
+            "😀",
+            "👨\u{200D}👩\u{200D}👧\u{200D}👦",
+            "❤\u{FE0F}",
+            "1\u{FE0F}\u{20E3}",
+            "🇧🇷",
+            "👍🏽",
+            "",
+        ] {
             assert!(clean_status_emoji(good).is_ok(), "{good:?}");
         }
-        for bad in ["a", "oi", "game", "🎮 🎮", "🎮\n🎮","1", "#", "ab😀", &"😀".repeat(9), "é", "\u{202E}😀"] {
-            assert_eq!(clean_status_emoji(bad), Err(ProfileError::EmojiInvalid), "{bad:?}");
+        for bad in [
+            "a",
+            "oi",
+            "game",
+            "🎮 🎮",
+            "🎮\n🎮",
+            "1",
+            "#",
+            "ab😀",
+            &"😀".repeat(9),
+            "é",
+            "\u{202E}😀",
+        ] {
+            assert_eq!(
+                clean_status_emoji(bad),
+                Err(ProfileError::EmojiInvalid),
+                "{bad:?}"
+            );
         }
     }
 
@@ -462,16 +575,43 @@ mod tests {
     fn statuses() {
         let now = 1_000_000;
         assert_eq!(clean_status("", "", None, now), Ok(None));
-        assert_eq!(clean_status("  ", "  ", Some(60), now), Ok(None), "nothing to show is no status");
-        let s = clean_status("🎮", " jogando ", Some(1800), now).unwrap().unwrap();
-        assert_eq!((s.emoji.as_str(), s.text.as_str(), s.expires_at_ms), ("🎮", "jogando", Some(now + 1_800_000)));
+        assert_eq!(
+            clean_status("  ", "  ", Some(60), now),
+            Ok(None),
+            "nothing to show is no status"
+        );
+        let s = clean_status("🎮", " jogando ", Some(1800), now)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (s.emoji.as_str(), s.text.as_str(), s.expires_at_ms),
+            ("🎮", "jogando", Some(now + 1_800_000))
+        );
         assert!(!s.is_expired(now + 1_799_999) && s.is_expired(now + 1_800_000));
         assert!(s.live(now).is_some() && s.live(now + 1_800_000).is_none());
-        assert_eq!(clean_status("", &"x".repeat(60), None, now).unwrap().unwrap().expires_at_ms, None);
-        assert_eq!(clean_status("", &"x".repeat(61), None, now), Err(ProfileError::StatusTextLength));
-        assert_eq!(clean_status("", "a\nb", None, now), Err(ProfileError::StatusTextChars));
-        assert_eq!(clean_status("abc", "x", None, now), Err(ProfileError::EmojiInvalid));
-        assert_eq!(clean_status("🎮", "x", Some(STATUS_MAX_SECS + 1), now), Err(ProfileError::ExpiryTooLong));
+        assert_eq!(
+            clean_status("", &"x".repeat(60), None, now)
+                .unwrap()
+                .unwrap()
+                .expires_at_ms,
+            None
+        );
+        assert_eq!(
+            clean_status("", &"x".repeat(61), None, now),
+            Err(ProfileError::StatusTextLength)
+        );
+        assert_eq!(
+            clean_status("", "a\nb", None, now),
+            Err(ProfileError::StatusTextChars)
+        );
+        assert_eq!(
+            clean_status("abc", "x", None, now),
+            Err(ProfileError::EmojiInvalid)
+        );
+        assert_eq!(
+            clean_status("🎮", "x", Some(STATUS_MAX_SECS + 1), now),
+            Err(ProfileError::ExpiryTooLong)
+        );
         assert!(clean_status("🎮", "x", Some(STATUS_MAX_SECS), now).is_ok());
         assert!(CustomStatus::default().live(now).is_none());
     }
@@ -479,21 +619,62 @@ mod tests {
     #[test]
     fn wire_shapes() {
         assert_eq!(serde_json::to_string(&Presence::Dnd).unwrap(), "\"dnd\"");
-        assert_eq!(serde_json::from_str::<Presence>("\"invisible\"").unwrap(), Presence::Invisible);
-        assert_eq!(serde_json::from_str::<Presence>("\"sleeping\"").unwrap(), Presence::Online, "an unknown value reads as online");
+        assert_eq!(
+            serde_json::from_str::<Presence>("\"invisible\"").unwrap(),
+            Presence::Invisible
+        );
+        assert_eq!(
+            serde_json::from_str::<Presence>("\"sleeping\"").unwrap(),
+            Presence::Online,
+            "an unknown value reads as online"
+        );
         assert!(Presence::Online.is_online() && !Presence::Away.is_online());
         assert!(Presence::Dnd.visible_to_others() && !Presence::Invisible.visible_to_others());
-        assert_eq!(serde_json::to_string(&PresenceUpdate { presence: Presence::Away, auto: false }).unwrap(), r#"{"presence":"away"}"#);
-        assert_eq!(serde_json::to_string(&PresenceUpdate { presence: Presence::Away, auto: true }).unwrap(), r#"{"presence":"away","auto":true}"#);
+        assert_eq!(
+            serde_json::to_string(&PresenceUpdate {
+                presence: Presence::Away,
+                auto: false
+            })
+            .unwrap(),
+            r#"{"presence":"away"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&PresenceUpdate {
+                presence: Presence::Away,
+                auto: true
+            })
+            .unwrap(),
+            r#"{"presence":"away","auto":true}"#
+        );
         let u: PresenceUpdate = serde_json::from_str(r#"{"presence":"dnd"}"#).unwrap();
         assert_eq!((u.presence, u.auto), (Presence::Dnd, false));
-        assert_eq!(serde_json::to_string(&ProfileUpdate::default()).unwrap(), "{}");
+        assert_eq!(
+            serde_json::to_string(&ProfileUpdate::default()).unwrap(),
+            "{}"
+        );
         let p: ProfileUpdate = serde_json::from_str(r##"{"bio":"","accent":"#fff"}"##).unwrap();
-        assert_eq!((p.display_name, p.bio.as_deref(), p.accent.as_deref()), (None, Some(""), Some("#fff")));
-        let s = CustomStatus { emoji: "🎮".into(), text: "".into(), expires_at_ms: None };
+        assert_eq!(
+            (p.display_name, p.bio.as_deref(), p.accent.as_deref()),
+            (None, Some(""), Some("#fff"))
+        );
+        let s = CustomStatus {
+            emoji: "🎮".into(),
+            text: "".into(),
+            expires_at_ms: None,
+        };
         assert_eq!(serde_json::to_string(&s).unwrap(), r#"{"emoji":"🎮"}"#);
-        assert_eq!(serde_json::from_str::<CustomStatus>("{}").unwrap(), CustomStatus::default());
-        assert!(ModClearProfileRequest::default().is_empty() && !ModClearProfileRequest { bio: true, ..Default::default() }.is_empty());
+        assert_eq!(
+            serde_json::from_str::<CustomStatus>("{}").unwrap(),
+            CustomStatus::default()
+        );
+        assert!(
+            ModClearProfileRequest::default().is_empty()
+                && !ModClearProfileRequest {
+                    bio: true,
+                    ..Default::default()
+                }
+                .is_empty()
+        );
         assert_eq!(AUDIT_CLEAR_PROFILE, "clear_profile");
     }
 
@@ -501,17 +682,40 @@ mod tests {
     fn a_profile_reads_with_only_the_user() {
         // What a sparse (or future, trimmed) hub could send.
         let p: UserProfile = serde_json::from_str(r#"{"user":{"id":3,"username":"ana"}}"#).unwrap();
-        assert_eq!((p.bio.as_str(), p.accent, p.status, p.presence, p.online, p.member_since_ms), ("", None, None, Presence::Online, false, 0));
+        assert_eq!(
+            (
+                p.bio.as_str(),
+                p.accent,
+                p.status,
+                p.presence,
+                p.online,
+                p.member_since_ms
+            ),
+            ("", None, None, Presence::Online, false, 0)
+        );
         let full = UserProfile {
-            user: User { id: 3, username: "ana".into(), role: Role::Admin, avatar: None, display_name: Some("Ana".into()) },
+            user: User {
+                id: 3,
+                username: "ana".into(),
+                role: Role::Admin,
+                avatar: None,
+                display_name: Some("Ana".into()),
+            },
             bio: "oi".into(),
             accent: Some("#112233".into()),
-            status: Some(CustomStatus { emoji: "🎮".into(), text: "x".into(), expires_at_ms: Some(5) }),
+            status: Some(CustomStatus {
+                emoji: "🎮".into(),
+                text: "x".into(),
+                expires_at_ms: Some(5),
+            }),
             presence: Presence::Dnd,
             online: true,
             member_since_ms: 99,
         };
-        assert_eq!(serde_json::from_str::<UserProfile>(&serde_json::to_string(&full).unwrap()).unwrap(), full);
+        assert_eq!(
+            serde_json::from_str::<UserProfile>(&serde_json::to_string(&full).unwrap()).unwrap(),
+            full
+        );
     }
 
     /// The shapes of v0.5.2, the last release before profiles.
@@ -533,21 +737,53 @@ mod tests {
         #[serde(tag = "type", rename_all = "snake_case")]
         #[allow(clippy::large_enum_variant)]
         pub enum ServerEvent {
-            Ready { user: User, channels: Vec<crate::Channel>, online: Vec<User>, voice: Vec<crate::VoiceMember> },
-            MessageCreated { message: crate::Message },
-            UserOnline { user: User },
-            UserOffline { user_id: UserId },
-            UserUpdated { user: User },
-            Pong { nonce: u64 },
+            Ready {
+                user: User,
+                channels: Vec<crate::Channel>,
+                online: Vec<User>,
+                voice: Vec<crate::VoiceMember>,
+            },
+            MessageCreated {
+                message: crate::Message,
+            },
+            UserOnline {
+                user: User,
+            },
+            UserOffline {
+                user_id: UserId,
+            },
+            UserUpdated {
+                user: User,
+            },
+            Pong {
+                nonce: u64,
+            },
         }
     }
 
     #[test]
     fn a_user_without_a_display_name_serialises_exactly_as_v052() {
-        let new = User { id: 7, username: "Ana".into(), role: Role::Moderator, avatar: Some("ab".into()), display_name: None };
-        let old = v052::User { id: 7, username: "Ana".into(), role: Role::Moderator, avatar: Some("ab".into()) };
-        assert_eq!(serde_json::to_string(&new).unwrap(), serde_json::to_string(&old).unwrap());
-        assert_eq!(serde_json::to_string(&User::new(7, "Ana")).unwrap(), r#"{"id":7,"username":"Ana"}"#);
+        let new = User {
+            id: 7,
+            username: "Ana".into(),
+            role: Role::Moderator,
+            avatar: Some("ab".into()),
+            display_name: None,
+        };
+        let old = v052::User {
+            id: 7,
+            username: "Ana".into(),
+            role: Role::Moderator,
+            avatar: Some("ab".into()),
+        };
+        assert_eq!(
+            serde_json::to_string(&new).unwrap(),
+            serde_json::to_string(&old).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_string(&User::new(7, "Ana")).unwrap(),
+            r#"{"id":7,"username":"Ana"}"#
+        );
         // And an old hub's JSON reads with no display name.
         let back: User = serde_json::from_str(&serde_json::to_string(&old).unwrap()).unwrap();
         assert_eq!(back, new);
@@ -566,31 +802,87 @@ mod tests {
         for ev in [
             ServerEvent::UserOnline { user: u.clone() },
             ServerEvent::UserUpdated { user: u.clone() },
-            ServerEvent::Ready { user: u.clone(), channels: vec![], online: vec![u.clone()], voice: vec![], account: None, chat: None, server_id: None },
-            ServerEvent::MessageCreated { message: crate::Message { id: 1, channel_id: 2, author: u.clone(), content: "oi".into(), created_at_ms: 3, attachments: vec![], mentions: vec![], mention_everyone: false, reply: None, reactions: vec![] } },
+            ServerEvent::Ready {
+                user: u.clone(),
+                channels: vec![],
+                online: vec![u.clone()],
+                voice: vec![],
+                account: None,
+                chat: None,
+                server_id: None,
+            },
+            ServerEvent::MessageCreated {
+                message: crate::Message {
+                    id: 1,
+                    channel_id: 2,
+                    author: u.clone(),
+                    content: "oi".into(),
+                    created_at_ms: 3,
+                    attachments: vec![],
+                    mentions: vec![],
+                    mention_everyone: false,
+                    reply: None,
+                    reactions: vec![],
+                },
+            },
         ] {
             let json = serde_json::to_string(&ev).unwrap();
-            assert!(serde_json::from_str::<v052::ServerEvent>(&json).is_ok(), "{json}");
+            assert!(
+                serde_json::from_str::<v052::ServerEvent>(&json).is_ok(),
+                "{json}"
+            );
         }
     }
 
     #[test]
     fn presence_changed_is_unknown_to_v052_clients_which_skip_it() {
-        let ev = ServerEvent::PresenceChanged { user_id: 4, presence: Presence::Dnd, status: Some(CustomStatus { text: "x".into(), ..Default::default() }) };
+        let ev = ServerEvent::PresenceChanged {
+            user_id: 4,
+            presence: Presence::Dnd,
+            status: Some(CustomStatus {
+                text: "x".into(),
+                ..Default::default()
+            }),
+        };
         let json = serde_json::to_string(&ev).unwrap();
         assert!(serde_json::from_str::<v052::ServerEvent>(&json).is_err());
         assert!(serde_json::from_str::<ServerEvent>(&json).is_ok());
         // Every other event keeps its shape: Ready has no presence field at all.
-        let ready = ServerEvent::Ready { user: User::new(1, "a"), channels: vec![], online: vec![], voice: vec![], account: None, chat: None, server_id: None };
+        let ready = ServerEvent::Ready {
+            user: User::new(1, "a"),
+            channels: vec![],
+            online: vec![],
+            voice: vec![],
+            account: None,
+            chat: None,
+            server_id: None,
+        };
         assert!(!serde_json::to_string(&ready).unwrap().contains("presence"));
     }
 
     #[test]
     fn presence_changed_wire_shape() {
-        let ev = ServerEvent::PresenceChanged { user_id: 4, presence: Presence::Away, status: None };
-        assert_eq!(serde_json::to_string(&ev).unwrap(), r#"{"type":"presence_changed","user_id":4,"presence":"away"}"#);
-        let with = ServerEvent::PresenceChanged { user_id: 4, presence: Presence::Online, status: Some(CustomStatus { emoji: "🎮".into(), ..Default::default() }) };
-        let back: ServerEvent = serde_json::from_str(&serde_json::to_string(&with).unwrap()).unwrap();
-        assert!(matches!(back, ServerEvent::PresenceChanged { user_id: 4, status: Some(s), .. } if s.emoji == "🎮"));
+        let ev = ServerEvent::PresenceChanged {
+            user_id: 4,
+            presence: Presence::Away,
+            status: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&ev).unwrap(),
+            r#"{"type":"presence_changed","user_id":4,"presence":"away"}"#
+        );
+        let with = ServerEvent::PresenceChanged {
+            user_id: 4,
+            presence: Presence::Online,
+            status: Some(CustomStatus {
+                emoji: "🎮".into(),
+                ..Default::default()
+            }),
+        };
+        let back: ServerEvent =
+            serde_json::from_str(&serde_json::to_string(&with).unwrap()).unwrap();
+        assert!(
+            matches!(back, ServerEvent::PresenceChanged { user_id: 4, status: Some(s), .. } if s.emoji == "🎮")
+        );
     }
 }

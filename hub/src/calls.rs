@@ -1,4 +1,4 @@
-//! Private 1:1 calls from a DM ("Ligar"). The wire contract is in `vox_proto::dm`.
+//! Private 1:1 calls from a DM ("Call"). The wire contract is in `vox_proto::dm`.
 //!
 //! A call lives only in memory (a hub restart drops it; the apps then leave the room). The hub
 //! creates nothing at LiveKit: it hands out tokens for the private room `dm-<lo>-<hi>`, and only
@@ -79,7 +79,9 @@ struct Live {
 
 impl Inner {
     fn of_user(&self, user: UserId) -> Option<&Live> {
-        self.calls.values().find(|l| l.call.caller.id == user || l.call.callee.id == user)
+        self.calls
+            .values()
+            .find(|l| l.call.caller.id == user || l.call.callee.id == user)
     }
 
     fn of_dm(&self, dm: DmId) -> Option<&Live> {
@@ -89,7 +91,10 @@ impl Inner {
     fn allow_start(&mut self, user: UserId, now: Instant) -> bool {
         let window = Duration::from_secs(CALL_RATE_WINDOW_SECS);
         let q = self.starts.entry(user).or_default();
-        while q.front().is_some_and(|t| now.saturating_duration_since(*t) >= window) {
+        while q
+            .front()
+            .is_some_and(|t| now.saturating_duration_since(*t) >= window)
+        {
             q.pop_front();
         }
         if q.len() >= CALL_RATE_LIMIT {
@@ -112,7 +117,12 @@ impl CallsState {
 
     /// May `user` be in room `dm-<lo>-<hi>`: a live call of that pair, and they are one of it.
     pub fn allows(&self, user: UserId, lo: UserId, hi: UserId) -> bool {
-        (user == lo || user == hi) && self.lock().calls.values().any(|l| l.conv.lo == lo && l.conv.hi == hi)
+        (user == lo || user == hi)
+            && self
+                .lock()
+                .calls
+                .values()
+                .any(|l| l.conv.lo == lo && l.conv.hi == hi)
     }
 
     /// Take the call out if it is still the one we mean (`id`); the one taking it out ends it.
@@ -128,23 +138,46 @@ pub fn in_call_room(s: &AppState, user: UserId, lo: UserId, hi: UserId) -> bool 
 
 /// The LiveKit room of `user`'s call, if they are in one.
 pub fn room_of(s: &AppState, user: UserId) -> Option<String> {
-    s.calls.lock().of_user(user).map(|l| dm_room(l.conv.lo, l.conv.hi))
+    s.calls
+        .lock()
+        .of_user(user)
+        .map(|l| dm_room(l.conv.lo, l.conv.hi))
 }
 
 // ---------------------------------------------------------------- tokens
 
-fn join_response(s: &AppState, me: &User, conv: &ConvRow, headers: &HeaderMap) -> VoiceJoinResponse {
+fn join_response(
+    s: &AppState,
+    me: &User,
+    conv: &ConvRow,
+    headers: &HeaderMap,
+) -> VoiceJoinResponse {
     let room = dm_room(conv.lo, conv.hi);
     let lk = &s.cfg.livekit;
     // A server mute holds in private calls too: no microphone in the token.
     let muted = s.is_server_muted(me.id);
-    let token = livekit_token::join_token_with(&lk.api_key, &lk.api_secret, &room, &me.id.to_string(), &me.username, now_ms() / 1000, muted);
+    let token = livekit_token::join_token_with(
+        &lk.api_key,
+        &lk.api_secret,
+        &room,
+        &me.id.to_string(),
+        &me.username,
+        now_ms() / 1000,
+        muted,
+    );
     s.voice_guard.issued(me.id);
-    VoiceJoinResponse { livekit_url: dms::livekit_url(s, headers), livekit_token: token, room }
+    VoiceJoinResponse {
+        livekit_url: dms::livekit_url(s, headers),
+        livekit_token: token,
+        room,
+    }
 }
 
 fn answer(s: &AppState, me: &User, live: &Live, headers: &HeaderMap) -> Json<DmCallResponse> {
-    Json(DmCallResponse { call: live.call.clone(), join: join_response(s, me, &live.conv, headers) })
+    Json(DmCallResponse {
+        call: live.call.clone(),
+        join: join_response(s, me, &live.conv, headers),
+    })
 }
 
 fn conflict(msg: &str) -> ApiErr {
@@ -170,7 +203,10 @@ async fn close(s: &AppState, live: Live, how: Close) {
     let call = &live.call;
     let (kind, secs) = match (how, live.answered) {
         (Close::Declined, _) => (DmMessageKind::CallDeclined, 0),
-        (_, Some(at)) => (DmMessageKind::CallEnded, at.elapsed().as_secs().clamp(1, u32::MAX as u64) as u32),
+        (_, Some(at)) => (
+            DmMessageKind::CallEnded,
+            at.elapsed().as_secs().clamp(1, u32::MAX as u64) as u32,
+        ),
         (_, None) => (DmMessageKind::CallMissed, 0),
     };
     tracing::info!(call = call.id, dm = call.dm_id, caller = %call.caller.username, callee = %call.callee.username, ?how, ?kind, secs, "dm call closed");
@@ -178,11 +214,40 @@ async fn close(s: &AppState, live: Live, how: Close) {
         tracing::error!("writing the call line failed: {}", e.1);
     }
     match how {
-        Close::Declined => dms::tell_both(s, &live.conv, &ServerEvent::CallDeclined { dm_id: call.dm_id, call_id: call.id }),
-        Close::Ended(reason) => dms::tell_both(s, &live.conv, &ServerEvent::CallEnded { dm_id: call.dm_id, call_id: call.id, reason }),
+        Close::Declined => dms::tell_both(
+            s,
+            &live.conv,
+            &ServerEvent::CallDeclined {
+                dm_id: call.dm_id,
+                call_id: call.id,
+            },
+        ),
+        Close::Ended(reason) => dms::tell_both(
+            s,
+            &live.conv,
+            &ServerEvent::CallEnded {
+                dm_id: call.dm_id,
+                call_id: call.id,
+                reason,
+            },
+        ),
         Close::JoinedHidden(by) => {
-            s.send_to(by, &ServerEvent::CallEnded { dm_id: call.dm_id, call_id: call.id, reason: CallEndReason::JoinedVoice });
-            s.send_to(live.conv.peer_of(by), &ServerEvent::CallEnded { dm_id: call.dm_id, call_id: call.id, reason: CallEndReason::Hangup });
+            s.send_to(
+                by,
+                &ServerEvent::CallEnded {
+                    dm_id: call.dm_id,
+                    call_id: call.id,
+                    reason: CallEndReason::JoinedVoice,
+                },
+            );
+            s.send_to(
+                live.conv.peer_of(by),
+                &ServerEvent::CallEnded {
+                    dm_id: call.dm_id,
+                    call_id: call.id,
+                    reason: CallEndReason::Hangup,
+                },
+            );
         }
     }
     if live.answered.is_some() {
@@ -193,7 +258,9 @@ async fn close(s: &AppState, live: Live, how: Close) {
             for id in who {
                 match s2.livekit.remove(&room, &id.to_string()).await {
                     Ok(()) | Err(LkError::NotFound) | Err(LkError::Disabled) => {}
-                    Err(LkError::Other(e)) => tracing::warn!(room, error = %e, "removing a dm call participant failed"),
+                    Err(LkError::Other(e)) => {
+                        tracing::warn!(room, error = %e, "removing a dm call participant failed")
+                    }
                 }
             }
         });
@@ -202,7 +269,9 @@ async fn close(s: &AppState, live: Live, how: Close) {
 
 /// End whatever call `user` is in (`reason` from their side).
 async fn end_for(s: &AppState, user: UserId, reason: CallEndReason) {
-    let Some(id) = s.calls.lock().of_user(user).map(|l| l.call.id) else { return };
+    let Some(id) = s.calls.lock().of_user(user).map(|l| l.call.id) else {
+        return;
+    };
     if let Some(live) = s.calls.take(id) {
         close(s, live, Close::Ended(reason)).await;
     }
@@ -210,7 +279,13 @@ async fn end_for(s: &AppState, user: UserId, reason: CallEndReason) {
 
 /// The call between `a` and `b`, if there is one, ends (one of them blocked the other).
 pub async fn end_between(s: &AppState, a: UserId, b: UserId) {
-    let id = s.calls.lock().calls.values().find(|l| l.conv.has(a) && l.conv.has(b)).map(|l| l.call.id);
+    let id = s
+        .calls
+        .lock()
+        .calls
+        .values()
+        .find(|l| l.conv.has(a) && l.conv.has(b))
+        .map(|l| l.call.id);
     if let Some(live) = id.and_then(|id| s.calls.take(id)) {
         close(s, live, Close::Ended(CallEndReason::Hangup)).await;
     }
@@ -221,7 +296,12 @@ fn arm_ring_timeout(s: &AppState, id: CallId) {
     let s = s.clone();
     tokio::spawn(async move {
         tokio::time::sleep(ring_timeout()).await;
-        let still_ringing = s.calls.lock().calls.get(&id).is_some_and(|l| l.answered.is_none());
+        let still_ringing = s
+            .calls
+            .lock()
+            .calls
+            .get(&id)
+            .is_some_and(|l| l.answered.is_none());
         if still_ringing {
             if let Some(live) = s.calls.take(id) {
                 close(&s, live, Close::Ended(CallEndReason::Missed)).await;
@@ -238,7 +318,13 @@ pub fn on_connect(s: &AppState, user: UserId) {
     let ringing: Vec<DmCall> = {
         let mut g = s.calls.lock();
         *g.conns.entry(user).or_default() += 1;
-        g.calls.values().filter(|l| l.answered.is_none() && (l.call.callee.id == user || l.call.caller.id == user)).map(|l| l.call.clone()).collect()
+        g.calls
+            .values()
+            .filter(|l| {
+                l.answered.is_none() && (l.call.callee.id == user || l.call.caller.id == user)
+            })
+            .map(|l| l.call.clone())
+            .collect()
     };
     for call in ringing {
         s.send_to(user, &ServerEvent::CallInvite { call });
@@ -281,8 +367,19 @@ pub fn on_disconnect(s: &AppState, user: UserId) {
 /// other person hears why only when they may see that channel (v1.0.1); otherwise it is a plain
 /// hang-up for them.
 pub async fn on_voice_join(s: &AppState, user: UserId, channel: ChannelId) {
-    let Some((id, peer)) = s.calls.lock().of_user(user).map(|l| (l.call.id, l.conv.peer_of(user))) else { return };
-    let how = if s.can_see(peer, channel) { Close::Ended(CallEndReason::JoinedVoice) } else { Close::JoinedHidden(user) };
+    let Some((id, peer)) = s
+        .calls
+        .lock()
+        .of_user(user)
+        .map(|l| (l.call.id, l.conv.peer_of(user)))
+    else {
+        return;
+    };
+    let how = if s.can_see(peer, channel) {
+        Close::Ended(CallEndReason::JoinedVoice)
+    } else {
+        Close::JoinedHidden(user)
+    };
     if let Some(live) = s.calls.take(id) {
         close(s, live, how).await;
     }
@@ -291,7 +388,12 @@ pub async fn on_voice_join(s: &AppState, user: UserId, channel: ChannelId) {
 // ---------------------------------------------------------------- handlers
 
 /// `POST /api/dms/{id}/call`: ring the other person, or join this DM's call if there is one.
-pub async fn call(State(s): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<DmId>, headers: HeaderMap) -> ApiResult<DmCallResponse> {
+pub async fn call(
+    State(s): State<AppState>,
+    AuthUser(me): AuthUser,
+    Path(id): Path<DmId>,
+    headers: HeaderMap,
+) -> ApiResult<DmCallResponse> {
     let conv = dms::conversation_of(&s, me.id, id).await?;
     let peer_id = conv.peer_of(me.id);
     let (a, b) = (me.id, peer_id);
@@ -309,12 +411,11 @@ pub async fn call(State(s): State<AppState>, AuthUser(me): AuthUser, Path(id): P
     // A call elsewhere: mine ends (I am calling someone else now); theirs means busy.
     end_for(&s, me.id, CallEndReason::Hangup).await;
     let owner = s.owner();
-    let peer = s
-        .db
-        .call(move |c| crate::db::get_user(c, peer_id))
-        .await?
-        .map(|r| r.user(&owner))
-        .ok_or_else(|| ApiErr::new(StatusCode::NOT_FOUND, "user not found"))?;
+    let peer =
+        s.db.call(move |c| crate::db::get_user(c, peer_id))
+            .await?
+            .map(|r| r.user(&owner))
+            .ok_or_else(|| ApiErr::new(StatusCode::NOT_FOUND, "user not found"))?;
     let me_now = s.current_user(&me);
     // `Err(first)`: busy (`first`: the first time I hit this busy call).
     let live: Result<Live, bool> = {
@@ -322,7 +423,10 @@ pub async fn call(State(s): State<AppState>, AuthUser(me): AuthUser, Path(id): P
         // Every attempt counts against the call budget, a busy one too: retrying a busy person
         // cannot write lines and events without limit.
         if !g.allow_start(me.id, Instant::now()) {
-            return Err(ApiErr::new(StatusCode::TOO_MANY_REQUESTS, "too many calls, wait a little"));
+            return Err(ApiErr::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many calls, wait a little",
+            ));
         }
         let busy_id = g.of_user(peer_id).map(|l| l.call.id);
         if let Some(busy) = busy_id.and_then(|cid| g.calls.get_mut(&cid)) {
@@ -333,8 +437,20 @@ pub async fn call(State(s): State<AppState>, AuthUser(me): AuthUser, Path(id): P
             Err(first)
         } else {
             g.next_id += 1;
-            let call = DmCall { id: g.next_id, dm_id: id, caller: me_now, callee: peer, state: CallState::Ringing, started_at_ms: now_ms() };
-            let live = Live { call, conv: conv.clone(), answered: None, busy_noted: Vec::new() };
+            let call = DmCall {
+                id: g.next_id,
+                dm_id: id,
+                caller: me_now,
+                callee: peer,
+                state: CallState::Ringing,
+                started_at_ms: now_ms(),
+            };
+            let live = Live {
+                call,
+                conv: conv.clone(),
+                answered: None,
+                busy_noted: Vec::new(),
+            };
             g.calls.insert(live.call.id, live.clone());
             Ok(live)
         }
@@ -345,22 +461,43 @@ pub async fn call(State(s): State<AppState>, AuthUser(me): AuthUser, Path(id): P
             // They are in another call: they see a missed call from me later (once per call).
             tracing::info!(caller = %me.username, dm = id, first, "dm call: the other person is busy");
             if first {
-                let _ = dms::add_line(&s, &conv, me.id, DmMessageKind::CallMissed, String::new(), 0).await;
+                let _ = dms::add_line(
+                    &s,
+                    &conv,
+                    me.id,
+                    DmMessageKind::CallMissed,
+                    String::new(),
+                    0,
+                )
+                .await;
             }
             return Err(conflict(ERR_CALL_BUSY));
         }
     };
     tracing::info!(call = live.call.id, dm = id, caller = %me.username, callee = %live.call.callee.username, "dm call ringing");
-    dms::tell_both(&s, &conv, &ServerEvent::CallInvite { call: live.call.clone() });
+    dms::tell_both(
+        &s,
+        &conv,
+        &ServerEvent::CallInvite {
+            call: live.call.clone(),
+        },
+    );
     arm_ring_timeout(&s, live.call.id);
     Ok(answer(&s, &me, &live, &headers))
 }
 
 /// The callee answers call `id`.
-fn accept_live(s: &AppState, me: &User, id: CallId, headers: &HeaderMap) -> ApiResult<DmCallResponse> {
+fn accept_live(
+    s: &AppState,
+    me: &User,
+    id: CallId,
+    headers: &HeaderMap,
+) -> ApiResult<DmCallResponse> {
     let live = {
         let mut g = s.calls.lock();
-        let Some(live) = g.calls.get_mut(&id) else { return Err(conflict("no call")) };
+        let Some(live) = g.calls.get_mut(&id) else {
+            return Err(conflict("no call"));
+        };
         if live.answered.is_none() {
             live.answered = Some(Instant::now());
             live.call.state = CallState::Active;
@@ -368,14 +505,27 @@ fn accept_live(s: &AppState, me: &User, id: CallId, headers: &HeaderMap) -> ApiR
         live.clone()
     };
     tracing::info!(call = id, dm = live.call.dm_id, callee = %me.username, "dm call answered");
-    dms::tell_both(s, &live.conv, &ServerEvent::CallAccepted { call: live.call.clone() });
+    dms::tell_both(
+        s,
+        &live.conv,
+        &ServerEvent::CallAccepted {
+            call: live.call.clone(),
+        },
+    );
     Ok(answer(s, me, &live, headers))
 }
 
 /// `POST /api/dms/{id}/call/accept`
-pub async fn accept(State(s): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<DmId>, headers: HeaderMap) -> ApiResult<DmCallResponse> {
+pub async fn accept(
+    State(s): State<AppState>,
+    AuthUser(me): AuthUser,
+    Path(id): Path<DmId>,
+    headers: HeaderMap,
+) -> ApiResult<DmCallResponse> {
     dms::conversation_of(&s, me.id, id).await?;
-    let Some(live) = s.calls.lock().of_dm(id).cloned() else { return Err(conflict("no call")) };
+    let Some(live) = s.calls.lock().of_dm(id).cloned() else {
+        return Err(conflict("no call"));
+    };
     if live.answered.is_none() {
         if live.call.callee.id != me.id {
             return Err(conflict("only the person being called can answer"));
@@ -386,9 +536,17 @@ pub async fn accept(State(s): State<AppState>, AuthUser(me): AuthUser, Path(id):
 }
 
 /// `POST /api/dms/{id}/call/decline`
-pub async fn decline(State(s): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<DmId>) -> ApiResult<OkResponse> {
+pub async fn decline(
+    State(s): State<AppState>,
+    AuthUser(me): AuthUser,
+    Path(id): Path<DmId>,
+) -> ApiResult<OkResponse> {
     dms::conversation_of(&s, me.id, id).await?;
-    let found = s.calls.lock().of_dm(id).map(|l| (l.call.id, l.answered.is_none() && l.call.callee.id == me.id));
+    let found = s
+        .calls
+        .lock()
+        .of_dm(id)
+        .map(|l| (l.call.id, l.answered.is_none() && l.call.callee.id == me.id));
     match found {
         Some((call_id, true)) => {
             if let Some(live) = s.calls.take(call_id) {
@@ -396,15 +554,26 @@ pub async fn decline(State(s): State<AppState>, AuthUser(me): AuthUser, Path(id)
             }
             Ok(Json(OkResponse { ok: true }))
         }
-        Some(_) => Err(conflict("only a ringing call can be declined, by the person being called")),
+        Some(_) => Err(conflict(
+            "only a ringing call can be declined, by the person being called",
+        )),
         None => Err(conflict("no call")),
     }
 }
 
 /// `POST /api/dms/{id}/call/end`: hang up (or, before an answer, give up / decline).
-pub async fn end(State(s): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<DmId>) -> ApiResult<OkResponse> {
+pub async fn end(
+    State(s): State<AppState>,
+    AuthUser(me): AuthUser,
+    Path(id): Path<DmId>,
+) -> ApiResult<OkResponse> {
     dms::conversation_of(&s, me.id, id).await?;
-    let Some((call_id, ringing, caller)) = s.calls.lock().of_dm(id).map(|l| (l.call.id, l.answered.is_none(), l.call.caller.id)) else {
+    let Some((call_id, ringing, caller)) = s
+        .calls
+        .lock()
+        .of_dm(id)
+        .map(|l| (l.call.id, l.answered.is_none(), l.call.caller.id))
+    else {
         // Already over (the other side ended it first): nothing to do.
         return Ok(Json(OkResponse { ok: true }));
     };

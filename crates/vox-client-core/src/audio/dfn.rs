@@ -1,4 +1,4 @@
-//! "IA máxima": DeepFilterNet3 (the vendored libDF `deep_filter` crate, inference through
+//! "Maximum AI": DeepFilterNet3 (the vendored libDF `deep_filter` crate, inference through
 //! `tract`, model embedded in the executable) on a worker thread of its own.
 //!
 //! The network costs 0.5 to 0.9 ms per 10 ms frame (5 to 9% of one core of an 8-core desktop CPU) and
@@ -9,10 +9,10 @@
 //! 40 ms in all. A frame that is not back in time (a scheduling hiccup, a slow machine) is
 //! replaced by the unprocessed input, time-aligned, and the hand-off grows by one frame (up to
 //! [`MAX_DEPTH`]). Too many late frames, or a worker that needs more than [`BUDGET_NS`] per
-//! frame, and the chain falls back to "IA leve" (see [`DfnClient::overloaded`]).
+//! frame, and the chain falls back to "Light AI" (see [`DfnClient::overloaded`]).
 //!
 //! The model is loaded lazily: the worker thread is started (by [`super::NoiseControl`]) only
-//! while "IA máxima" is selected and a mic chain exists, loads the model (about 0.3 s, during
+//! while "Maximum AI" is selected and a mic chain exists, loads the model (about 0.3 s, during
 //! which the chain keeps running RNNoise) and exits, freeing it, as soon as another level is
 //! selected or the chain is dropped. Users of the other levels pay nothing but the two rings.
 
@@ -75,8 +75,20 @@ unsafe impl Sync for BlockRing {}
 
 impl BlockRing {
     fn new() -> Self {
-        let slots = (0..RING).map(|_| UnsafeCell::new(Block { seq: 0, epoch: 0, data: [0.0; FRAME] })).collect();
-        Self { slots, written: AtomicUsize::new(0), read: AtomicUsize::new(0) }
+        let slots = (0..RING)
+            .map(|_| {
+                UnsafeCell::new(Block {
+                    seq: 0,
+                    epoch: 0,
+                    data: [0.0; FRAME],
+                })
+            })
+            .collect();
+        Self {
+            slots,
+            written: AtomicUsize::new(0),
+            read: AtomicUsize::new(0),
+        }
     }
 
     /// Producer: append a frame (scaled by `gain`). False when the ring is full.
@@ -130,7 +142,7 @@ impl BlockRing {
 /// What the callback and the worker share. Created with the mic chain (off the audio thread).
 pub struct DfnShared {
     /// The selected level (shared with [`super::NoiseControl`]); the worker exits when it is not
-    /// "IA máxima".
+    /// "Maximum AI".
     level: Arc<AtomicU8>,
     level_max: u8,
     input: BlockRing,
@@ -183,13 +195,16 @@ impl DfnShared {
         self.failed.store(false, Ordering::Relaxed);
         self.frame_ns.store(0, Ordering::Relaxed);
         let me = self.clone();
-        match std::thread::Builder::new().name("vox-dfn".into()).spawn(move || worker(me)) {
+        match std::thread::Builder::new()
+            .name("vox-dfn".into())
+            .spawn(move || worker(me))
+        {
             Ok(_) => {
                 *running = true;
                 self.starts.fetch_add(1, Ordering::Relaxed);
             }
             Err(e) => {
-                warn!(error = %e, "IA máxima: could not start the worker thread");
+                warn!(error = %e, "Maximum AI: could not start the worker thread");
                 self.failed.store(true, Ordering::Release);
             }
         }
@@ -219,7 +234,10 @@ impl DfnShared {
     }
 
     pub fn set_slowdown(&self, extra: Duration) {
-        self.slowdown_us.store(extra.as_micros().min(u32::MAX as u128) as u32, Ordering::Relaxed);
+        self.slowdown_us.store(
+            extra.as_micros().min(u32::MAX as u128) as u32,
+            Ordering::Relaxed,
+        );
     }
 
     /// Wake the worker. Allocation-free (callback side).
@@ -231,7 +249,7 @@ impl DfnShared {
         }
     }
 
-    /// Let the worker re-check the level now (it exits when "IA máxima" is no longer selected).
+    /// Let the worker re-check the level now (it exits when "Maximum AI" is no longer selected).
     pub(crate) fn wake_to_exit(&self) {
         if let Some(t) = self.thread.lock().as_ref() {
             t.unpark();
@@ -249,13 +267,17 @@ impl DfnShared {
 
 impl std::fmt::Debug for DfnShared {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DfnShared").field("loaded", &self.loaded()).finish()
+        f.debug_struct("DfnShared")
+            .field("loaded", &self.loaded())
+            .finish()
     }
 }
 
 #[cfg(windows)]
 fn raise_priority() {
-    use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_HIGHEST};
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_HIGHEST,
+    };
     // SAFETY: pseudo-handle of the calling thread.
     unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST) };
 }
@@ -264,8 +286,8 @@ fn raise_priority() {
 fn raise_priority() {}
 
 fn worker(sh: Arc<DfnShared>) {
-    use df::tract::{DfParams, DfTract, RuntimeParams, DEFAULT_MODEL};
     use df::ndarray::Array2;
+    use df::tract::{DfParams, DfTract, RuntimeParams, DEFAULT_MODEL};
 
     raise_priority();
     let me = std::thread::current();
@@ -278,11 +300,14 @@ fn worker(sh: Arc<DfnShared>) {
     let model = DfParams::from_bytes(DEFAULT_MODEL).and_then(|p| DfTract::new(p, &params));
     let mut model = match model {
         Ok(m) => {
-            info!(load_ms = t0.elapsed().as_millis() as u64, "IA máxima: DeepFilterNet3 loaded");
+            info!(
+                load_ms = t0.elapsed().as_millis() as u64,
+                "Maximum AI: DeepFilterNet3 loaded"
+            );
             Some(m)
         }
         Err(e) => {
-            warn!(error = %e, "IA máxima: could not load DeepFilterNet3");
+            warn!(error = %e, "Maximum AI: could not load DeepFilterNet3");
             sh.failed.store(true, Ordering::Release);
             None
         }
@@ -303,14 +328,17 @@ fn worker(sh: Arc<DfnShared>) {
                 if epoch != Some(ep) {
                     epoch = Some(ep);
                     if let Err(e) = m.reset() {
-                        warn!(error = %e, "IA máxima: model reset failed");
+                        warn!(error = %e, "Maximum AI: model reset failed");
                     }
                 }
-                noisy.as_slice_mut().expect("contiguous").copy_from_slice(&frame);
+                noisy
+                    .as_slice_mut()
+                    .expect("contiguous")
+                    .copy_from_slice(&frame);
                 if let Err(e) = m.process(noisy.view(), enh.view_mut()) {
                     errors += 1;
                     if errors == 1 {
-                        warn!(error = %e, "IA máxima: inference failed (passing the frame through)");
+                        warn!(error = %e, "Maximum AI: inference failed (passing the frame through)");
                     }
                     enh.assign(&noisy);
                 }
@@ -320,7 +348,11 @@ fn worker(sh: Arc<DfnShared>) {
                 }
                 let ns = t.elapsed().as_nanos().min(u32::MAX as u128) as u32;
                 let avg = sh.frame_ns.load(Ordering::Relaxed);
-                let avg = if avg == 0 { ns } else { (avg as u64 * 19 / 20 + ns as u64 / 20) as u32 };
+                let avg = if avg == 0 {
+                    ns
+                } else {
+                    (avg as u64 * 19 / 20 + ns as u64 / 20) as u32
+                };
                 sh.frame_ns.store(avg, Ordering::Relaxed);
                 frame.copy_from_slice(enh.as_slice().expect("contiguous"));
                 // A full output ring means the callback stopped taking frames: drop this one.
@@ -345,10 +377,10 @@ fn worker(sh: Arc<DfnShared>) {
         }
     }
     drop(model);
-    info!("IA máxima: DeepFilterNet3 unloaded");
+    info!("Maximum AI: DeepFilterNet3 unloaded");
 }
 
-/// The callback side of "IA máxima" for one mic chain. Allocation-free.
+/// The callback side of "Maximum AI" for one mic chain. Allocation-free.
 pub(crate) struct DfnClient {
     pub(crate) sh: Arc<DfnShared>,
     /// Frames are being fed to the worker.
@@ -401,14 +433,21 @@ impl DfnClient {
     /// Offline: wait (at most 10 s) for the model to load.
     pub(crate) fn wait_loaded(&self) {
         let t = Instant::now();
-        while !self.sh.loaded() && !self.sh.failed.load(Ordering::Acquire) && t.elapsed() < Duration::from_secs(10) {
+        while !self.sh.loaded()
+            && !self.sh.failed.load(Ordering::Acquire)
+            && t.elapsed() < Duration::from_secs(10)
+        {
             std::thread::sleep(Duration::from_millis(2));
         }
     }
 
     /// Start feeding from scratch: new epoch (the worker resets the model), empty hand-off.
     pub(crate) fn restart(&mut self) {
-        self.epoch = self.sh.epoch.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+        self.epoch = self
+            .sh
+            .epoch
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1);
         self.engaged = true;
         self.seq = 0;
         self.depth = 1;
@@ -430,11 +469,13 @@ impl DfnClient {
         self.engaged && self.seq >= WARM_FRAMES + self.depth && self.last_wet
     }
 
-    /// The machine cannot keep up (or the model failed): fall back to "IA leve".
+    /// The machine cannot keep up (or the model failed): fall back to "Light AI".
     pub(crate) fn overloaded(&self) -> bool {
         self.sh.failed.load(Ordering::Acquire)
             || self.overload
-            || (self.engaged && self.seq > GRACE_FRAMES && self.sh.frame_ns.load(Ordering::Relaxed) > BUDGET_NS)
+            || (self.engaged
+                && self.seq > GRACE_FRAMES
+                && self.sh.frame_ns.load(Ordering::Relaxed) > BUDGET_NS)
     }
 
     /// Feed one frame (i16-range samples) and get the denoised frame from `depth` frames ago
@@ -457,7 +498,10 @@ impl DfnClient {
         let target = s - self.depth;
         if self.wait {
             let t = Instant::now();
-            while !self.has(target) && t.elapsed() < Duration::from_secs(5) && !self.sh.failed.load(Ordering::Acquire) {
+            while !self.has(target)
+                && t.elapsed() < Duration::from_secs(5)
+                && !self.sh.failed.load(Ordering::Acquire)
+            {
                 std::thread::yield_now();
             }
         }
@@ -539,7 +583,6 @@ impl Drop for DfnClient {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -567,7 +610,7 @@ mod tests {
         assert_eq!(r.peek(), None);
     }
 
-    /// Real-time behaviour of "IA máxima" on this machine: frames fed every 10 ms like a mic,
+    /// Real-time behaviour of "Maximum AI" on this machine: frames fed every 10 ms like a mic,
     /// with the CPU, lateness, latency and memory it costs. Run by hand:
     /// `cargo test -p vox-client-core --release --lib ai_max_realtime -- --ignored --nocapture`.
     #[test]
@@ -584,7 +627,11 @@ mod tests {
         while !d.dfn().loaded() {
             std::thread::sleep(Duration::from_millis(1));
         }
-        println!("model load: {:?}, private memory +{:.1} MB", t.elapsed(), mem() - base);
+        println!(
+            "model load: {:?}, private memory +{:.1} MB",
+            t.elapsed(),
+            mem() - base
+        );
         let mut x = 1u32;
         let mut chunk = [0i16; FRAME];
         let mut cb = Duration::ZERO;
@@ -598,7 +645,8 @@ mod tests {
                 x ^= x << 5;
                 let t = (k as usize * FRAME + i) as f32 / 48_000.0;
                 let env = (0.5 - 0.5 * (t * 2.0 * std::f32::consts::PI * 3.0).cos()).powi(2);
-                *s = ((t * 2.0 * std::f32::consts::PI * 180.0).sin() * 6000.0 * env + (x as f32 / u32::MAX as f32 - 0.5) * 2000.0) as i16;
+                *s = ((t * 2.0 * std::f32::consts::PI * 180.0).sin() * 6000.0 * env
+                    + (x as f32 / u32::MAX as f32 - 0.5) * 2000.0) as i16;
             }
             let t = Instant::now();
             d.process(&mut chunk);
@@ -623,13 +671,20 @@ mod tests {
             d.inner_depth(),
             (MODEL_DELAY_FRAMES + d.inner_depth()) * 10
         );
-        println!("in use: private memory +{:.1} MB, level still {:?}", mem() - base, ctl.level());
+        println!(
+            "in use: private memory +{:.1} MB, level still {:?}",
+            mem() - base,
+            ctl.level()
+        );
         ctl.set_level(NoiseLevel::AiLight);
         d.process(&mut chunk);
         while d.dfn().worker_running() {
             std::thread::sleep(Duration::from_millis(1));
         }
         crate::stats::trim_memory(false);
-        println!("after switching away: private memory +{:.1} MB", mem() - base);
+        println!(
+            "after switching away: private memory +{:.1} MB",
+            mem() - base
+        );
     }
 }

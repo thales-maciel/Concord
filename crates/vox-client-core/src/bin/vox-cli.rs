@@ -15,7 +15,9 @@ use clap::{ArgGroup, Parser};
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
-use vox_client_core::golive::{capture_call, pattern::parse_geometry, EncoderChoice, H264FileSource, SwitchRequest};
+use vox_client_core::golive::{
+    capture_call, pattern::parse_geometry, EncoderChoice, H264FileSource, SwitchRequest,
+};
 use vox_client_core::hub::{HubClient, HubEvent, HubSender};
 use vox_client_core::stats::Reporter;
 use vox_client_core::token::mint_token;
@@ -176,11 +178,16 @@ async fn run(args: Args) -> Result<()> {
     if let Some(url) = app.args.hub.clone() {
         let hub = Arc::new(HubClient::new(&url)?);
         match hub.health().await {
-            Ok(h) => info!(version = %h.version, protocol = h.protocol_version, livekit_ok = h.livekit_ok, "hub health"),
+            Ok(h) => {
+                info!(version = %h.version, protocol = h.protocol_version, livekit_ok = h.livekit_ok, "hub health")
+            }
             Err(e) => warn!(error = %format!("{e:#}"), "hub health check failed"),
         }
         let login = hub.login(&app.args.user, &app.args.password).await?;
-        println!("logged in as {} (id {}) on '{}'", login.user.username, login.user.id, login.server_name);
+        println!(
+            "logged in as {} (id {}) on '{}'",
+            login.user.username, login.user.id, login.server_name
+        );
         match hub.channels().await {
             Ok(ch) => {
                 print_channels(&ch);
@@ -289,11 +296,26 @@ impl App {
     }
 
     async fn join_direct(&mut self, room: &str) -> Result<()> {
-        let url = self.args.direct.clone().ok_or_else(|| anyhow!("not in direct mode"))?;
-        let token = mint_token(&self.args.api_key, &self.args.api_secret, room, &self.args.user, Some(&self.args.user), Duration::from_secs(6 * 3600))?;
+        let url = self
+            .args
+            .direct
+            .clone()
+            .ok_or_else(|| anyhow!("not in direct mode"))?;
+        let token = mint_token(
+            &self.args.api_key,
+            &self.args.api_secret,
+            room,
+            &self.args.user,
+            Some(&self.args.user),
+            Duration::from_secs(6 * 3600),
+        )?;
         self.leave().await;
         let (session, rx) = VoiceSession::connect(&url, &token, self.voice_config()).await?;
-        println!("joined room '{}' as '{}'", session.room_name(), session.identity());
+        println!(
+            "joined room '{}' as '{}'",
+            session.room_name(),
+            session.identity()
+        );
         self.voice = Some(session);
         self.new_voice_rx = Some(rx);
         Ok(())
@@ -303,8 +325,14 @@ impl App {
         let hub = self.hub.clone().ok_or_else(|| anyhow!("not in hub mode"))?;
         let resp = hub.voice_join(channel).await?;
         self.leave().await;
-        let (session, rx) = VoiceSession::connect(&resp.livekit_url, &resp.livekit_token, self.voice_config()).await?;
-        println!("joined voice channel {channel} (room '{}') as '{}'", resp.room, session.identity());
+        let (session, rx) =
+            VoiceSession::connect(&resp.livekit_url, &resp.livekit_token, self.voice_config())
+                .await?;
+        println!(
+            "joined voice channel {channel} (room '{}') as '{}'",
+            resp.room,
+            session.identity()
+        );
         self.voice = Some(session);
         self.new_voice_rx = Some(rx);
         self.voice_channel = Some(channel);
@@ -321,13 +349,22 @@ impl App {
         self.camera = false;
         if self.voice_channel.take().is_some() {
             if let Some(tx) = &self.hub_tx {
-                let _ = tx.send(ClientEvent::VoiceState { channel_id: None, muted: false, deafened: false, streaming: false, camera: false, audio_only: false });
+                let _ = tx.send(ClientEvent::VoiceState {
+                    channel_id: None,
+                    muted: false,
+                    deafened: false,
+                    streaming: false,
+                    camera: false,
+                    audio_only: false,
+                });
             }
         }
     }
 
     fn push_voice_state(&self) {
-        let (Some(tx), Some(ch), Some(v)) = (&self.hub_tx, self.voice_channel, &self.voice) else { return };
+        let (Some(tx), Some(ch), Some(v)) = (&self.hub_tx, self.voice_channel, &self.voice) else {
+            return;
+        };
         let _ = tx.send(ClientEvent::VoiceState {
             channel_id: Some(ch),
             muted: v.is_muted(),
@@ -339,7 +376,9 @@ impl App {
     }
 
     fn voice(&self) -> Result<&VoiceSession> {
-        self.voice.as_ref().ok_or_else(|| anyhow!("not in a voice channel (use 'join')"))
+        self.voice
+            .as_ref()
+            .ok_or_else(|| anyhow!("not in a voice channel (use 'join')"))
     }
 
     async fn report_stats(&mut self) {
@@ -353,17 +392,26 @@ impl App {
     /// Returns Ok(false) to quit.
     async fn command(&mut self, line: &str) -> Result<bool> {
         let mut parts = line.split_whitespace();
-        let Some(cmd) = parts.next() else { return Ok(true) };
+        let Some(cmd) = parts.next() else {
+            return Ok(true);
+        };
         let rest: Vec<&str> = parts.collect();
         match cmd {
             "help" | "?" => println!("{HELP}"),
             "q" | "quit" | "exit" => return Ok(false),
             "join" => {
                 if self.hub.is_some() {
-                    let id: ChannelId = rest.first().ok_or_else(|| anyhow!("usage: join <voice-channel-id>"))?.parse().context("channel id")?;
+                    let id: ChannelId = rest
+                        .first()
+                        .ok_or_else(|| anyhow!("usage: join <voice-channel-id>"))?
+                        .parse()
+                        .context("channel id")?;
                     self.join_hub(id).await?;
                 } else {
-                    let room = rest.first().map(|s| s.to_string()).unwrap_or_else(|| self.args.room.clone());
+                    let room = rest
+                        .first()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| self.args.room.clone());
                     self.join_direct(&room).await?;
                 }
             }
@@ -388,14 +436,24 @@ impl App {
             }
             "vol" => {
                 let v = self.voice()?;
-                let pct: u32 = rest.first().ok_or_else(|| anyhow!("usage: vol <0-200>"))?.parse().context("volume")?;
+                let pct: u32 = rest
+                    .first()
+                    .ok_or_else(|| anyhow!("usage: vol <0-200>"))?
+                    .parse()
+                    .context("volume")?;
                 v.set_output_volume(pct.min(200) as f32 / 100.0);
                 println!("volume: {}%", (v.output_volume() * 100.0).round());
             }
             "uvol" | "svol" => {
                 let v = self.voice()?;
-                let who = rest.first().ok_or_else(|| anyhow!("usage: {cmd} <identity> <0-200>"))?;
-                let pct: u32 = rest.get(1).ok_or_else(|| anyhow!("usage: {cmd} <identity> <0-200>"))?.parse().context("volume")?;
+                let who = rest
+                    .first()
+                    .ok_or_else(|| anyhow!("usage: {cmd} <identity> <0-200>"))?;
+                let pct: u32 = rest
+                    .get(1)
+                    .ok_or_else(|| anyhow!("usage: {cmd} <identity> <0-200>"))?
+                    .parse()
+                    .context("volume")?;
                 let gain = pct.min(200) as f32 / 100.0;
                 if cmd == "uvol" {
                     v.set_user_volume(who, gain);
@@ -406,7 +464,9 @@ impl App {
             }
             "umute" | "smute" => {
                 let v = self.voice()?;
-                let who = rest.first().ok_or_else(|| anyhow!("usage: {cmd} <identity> on|off"))?;
+                let who = rest
+                    .first()
+                    .ok_or_else(|| anyhow!("usage: {cmd} <identity> on|off"))?;
                 let on = matches!(rest.get(1).copied(), Some("on" | "1" | "true"));
                 if cmd == "umute" {
                     v.set_user_muted(who, on);
@@ -425,7 +485,12 @@ impl App {
                     bail!("probe needs --no-playback (the speaker callback would compete for the mix)");
                 }
                 let v = self.voice()?;
-                let ms: u64 = rest.first().map(|s| s.parse()).transpose().context("ms")?.unwrap_or(1000);
+                let ms: u64 = rest
+                    .first()
+                    .map(|s| s.parse())
+                    .transpose()
+                    .context("ms")?
+                    .unwrap_or(1000);
                 let mut block = vec![0i16; vox_client_core::audio::MIX_10MS];
                 let mut tick = tokio::time::interval(Duration::from_millis(10));
                 let (mut sum, mut cnt) = (0f64, 0u64);
@@ -442,13 +507,20 @@ impl App {
                     }
                 }
                 let avg = windows.iter().sum::<f64>() / windows.len().max(1) as f64;
-                println!("probe: rms per 100 ms = {:?} avg {:.0}", windows.iter().map(|w| w.round() as i64).collect::<Vec<_>>(), avg);
+                println!(
+                    "probe: rms per 100 ms = {:?} avg {:.0}",
+                    windows.iter().map(|w| w.round() as i64).collect::<Vec<_>>(),
+                    avg
+                );
             }
             "windows" => {
                 match capture_call("list_windows", vox_capture::list_windows) {
                     Ok(ws) => {
                         for w in ws {
-                            println!("  hwnd {:>10} (0x{:x})  pid {:>6}  {:<20} {}", w.hwnd, w.hwnd, w.process_id, w.exe_name, w.title);
+                            println!(
+                                "  hwnd {:>10} (0x{:x})  pid {:>6}  {:<20} {}",
+                                w.hwnd, w.hwnd, w.process_id, w.exe_name, w.title
+                            );
                         }
                     }
                     Err(e) => println!("windows: {e:#}"),
@@ -456,7 +528,14 @@ impl App {
                 match capture_call("list_monitors", vox_capture::list_monitors) {
                     Ok(ms) => {
                         for m in ms {
-                            println!("  monitor {}  {}x{}{}  {}", m.index, m.width, m.height, if m.primary { " (primary)" } else { "" }, m.name);
+                            println!(
+                                "  monitor {}  {}x{}{}  {}",
+                                m.index,
+                                m.width,
+                                m.height,
+                                if m.primary { " (primary)" } else { "" },
+                                m.name
+                            );
                         }
                     }
                     Err(e) => println!("monitors: {e:#}"),
@@ -465,22 +544,59 @@ impl App {
             "share" => {
                 let kind = rest.first().copied().ok_or_else(|| anyhow!("usage: share window <hwnd> | monitor <n> | test [WxH@fps] | h264file <path>"))?;
                 let (source, extra) = match kind {
-                    "window" => (ShareSource::Window(parse_hwnd(rest.get(1).ok_or_else(|| anyhow!("missing hwnd"))?)?), &rest[2..]),
-                    "monitor" => (ShareSource::Monitor(rest.get(1).ok_or_else(|| anyhow!("missing monitor index"))?.parse()?), &rest[2..]),
+                    "window" => (
+                        ShareSource::Window(parse_hwnd(
+                            rest.get(1).ok_or_else(|| anyhow!("missing hwnd"))?,
+                        )?),
+                        &rest[2..],
+                    ),
+                    "monitor" => (
+                        ShareSource::Monitor(
+                            rest.get(1)
+                                .ok_or_else(|| anyhow!("missing monitor index"))?
+                                .parse()?,
+                        ),
+                        &rest[2..],
+                    ),
                     "test" => (ShareSource::TestPattern, &rest[1..]),
-                    // "Só áudio": nothing but sound (no video track, capture or encoder).
-                    "audio-app" => (ShareSource::AudioApp { pid: rest.get(1).ok_or_else(|| anyhow!("missing pid"))?.parse().context("pid")? }, &rest[2..]),
+                    // "Audio only": nothing but sound (no video track, capture or encoder).
+                    "audio-app" => (
+                        ShareSource::AudioApp {
+                            pid: rest
+                                .get(1)
+                                .ok_or_else(|| anyhow!("missing pid"))?
+                                .parse()
+                                .context("pid")?,
+                        },
+                        &rest[2..],
+                    ),
                     "audio-system" => (ShareSource::AudioSystem, &rest[1..]),
                     "audio-tone" => (ShareSource::AudioTone, &rest[1..]),
                     "h264file" => {
                         let path = rest.get(1).ok_or_else(|| anyhow!("missing .h264 path"))?;
-                        (ShareSource::H264File(H264FileSource { path: PathBuf::from(path), fps: 30, looped: false }), &rest[2..])
+                        (
+                            ShareSource::H264File(H264FileSource {
+                                path: PathBuf::from(path),
+                                fps: 30,
+                                looped: false,
+                            }),
+                            &rest[2..],
+                        )
                     }
                     other => bail!("unknown share target {other:?}"),
                 };
                 let mut source = source;
-                let default = if source == ShareSource::TestPattern { (1280, 720, 30) } else { (1920, 1080, 30) };
-                let mut opts = ShareOptions { width: default.0, height: default.1, fps: default.2, ..Default::default() };
+                let default = if source == ShareSource::TestPattern {
+                    (1280, 720, 30)
+                } else {
+                    (1920, 1080, 30)
+                };
+                let mut opts = ShareOptions {
+                    width: default.0,
+                    height: default.1,
+                    fps: default.2,
+                    ..Default::default()
+                };
                 if matches!(source, ShareSource::H264File(_)) {
                     opts.audio = false;
                 }
@@ -492,17 +608,33 @@ impl App {
                         // audio-only: "Alta" (256 kbps) instead of "Normal" (128 kbps)
                         opts.audio_bitrate = vox_client_core::golive::AUDIO_ONLY_HIGH_BPS;
                     } else if *tok == "--audio-pid" {
-                        let pid: u32 = toks.next().ok_or_else(|| anyhow!("--audio-pid needs a pid"))?.parse().context("pid")?;
+                        let pid: u32 = toks
+                            .next()
+                            .ok_or_else(|| anyhow!("--audio-pid needs a pid"))?
+                            .parse()
+                            .context("pid")?;
                         opts.audio_pid = Some(pid);
                     } else if *tok == "--kbps" {
-                        let k: u64 = toks.next().ok_or_else(|| anyhow!("--kbps needs a number"))?.parse().context("kbps")?;
+                        let k: u64 = toks
+                            .next()
+                            .ok_or_else(|| anyhow!("--kbps needs a number"))?
+                            .parse()
+                            .context("kbps")?;
                         opts.max_bitrate = Some(k * 1000);
                     } else if *tok == "--smooth" {
-                        opts.degradation = vox_client_core::golive::DegradationPreference::Smoothness;
+                        opts.degradation =
+                            vox_client_core::golive::DegradationPreference::Smoothness;
                     } else if *tok == "--encoder" {
-                        opts.encoder = toks.next().ok_or_else(|| anyhow!("--encoder needs auto|nvenc|mf|software"))?.parse()?;
+                        opts.encoder = toks
+                            .next()
+                            .ok_or_else(|| anyhow!("--encoder needs auto|nvenc|mf|software"))?
+                            .parse()?;
                     } else if *tok == "--fps" {
-                        let fps: u32 = toks.next().ok_or_else(|| anyhow!("--fps needs a number"))?.parse().context("fps")?;
+                        let fps: u32 = toks
+                            .next()
+                            .ok_or_else(|| anyhow!("--fps needs a number"))?
+                            .parse()
+                            .context("fps")?;
                         match &mut source {
                             ShareSource::H264File(f) => f.fps = fps.clamp(1, 240),
                             _ => opts.fps = fps.clamp(1, 240),
@@ -513,7 +645,8 @@ impl App {
                             _ => bail!("--loop only applies to h264file"),
                         }
                     } else {
-                        let (w, h, fps) = parse_geometry(tok, default).ok_or_else(|| anyhow!("bad geometry {tok:?}, expected WxH@fps"))?;
+                        let (w, h, fps) = parse_geometry(tok, default)
+                            .ok_or_else(|| anyhow!("bad geometry {tok:?}, expected WxH@fps"))?;
                         (opts.width, opts.height, opts.fps) = (w, h, fps);
                     }
                 }
@@ -528,8 +661,17 @@ impl App {
                     (true, Some(pid)) => format!("pid {pid} tree"),
                     (true, None) => "default".to_string(),
                 };
-                let path = self.voice()?.share_path().await.map(|p| format!("{p:?}")).unwrap_or_default();
-                let encoder = if opts.encoder == EncoderChoice::Auto { String::new() } else { format!(", encoder: {:?}", opts.encoder) };
+                let path = self
+                    .voice()?
+                    .share_path()
+                    .await
+                    .map(|p| format!("{p:?}"))
+                    .unwrap_or_default();
+                let encoder = if opts.encoder == EncoderChoice::Auto {
+                    String::new()
+                } else {
+                    format!(", encoder: {:?}", opts.encoder)
+                };
                 println!(
                     "sharing {source:?} at up to {}x{}@{} {} kbps (audio: {audio}, path: {path}{encoder}, degradation: {:?})",
                     opts.width,
@@ -543,8 +685,14 @@ impl App {
             "switch" => {
                 let kind = rest.first().copied().ok_or_else(|| anyhow!("usage: switch window <hwnd> | monitor <n> [--audio|--no-audio] [--audio-pid <pid>]"))?;
                 let source = match kind {
-                    "window" => ShareSource::Window(parse_hwnd(rest.get(1).ok_or_else(|| anyhow!("missing hwnd"))?)?),
-                    "monitor" => ShareSource::Monitor(rest.get(1).ok_or_else(|| anyhow!("missing monitor index"))?.parse()?),
+                    "window" => ShareSource::Window(parse_hwnd(
+                        rest.get(1).ok_or_else(|| anyhow!("missing hwnd"))?,
+                    )?),
+                    "monitor" => ShareSource::Monitor(
+                        rest.get(1)
+                            .ok_or_else(|| anyhow!("missing monitor index"))?
+                            .parse()?,
+                    ),
                     other => bail!("unknown switch target {other:?}"),
                 };
                 let v = self.voice()?;
@@ -556,13 +704,24 @@ impl App {
                         "--audio" => audio = true,
                         "--no-audio" | "noaudio" => audio = false,
                         "--audio-pid" => {
-                            audio_pid = Some(toks.next().ok_or_else(|| anyhow!("--audio-pid needs a pid"))?.parse().context("pid")?);
+                            audio_pid = Some(
+                                toks.next()
+                                    .ok_or_else(|| anyhow!("--audio-pid needs a pid"))?
+                                    .parse()
+                                    .context("pid")?,
+                            );
                             audio = true;
                         }
                         other => bail!("unknown option {other:?}"),
                     }
                 }
-                let r = v.switch_share(SwitchRequest { source, audio, audio_pid }).await?;
+                let r = v
+                    .switch_share(SwitchRequest {
+                        source,
+                        audio,
+                        audio_pid,
+                    })
+                    .await?;
                 println!(
                     "switched {:?} -> {:?} (path {:?}, gap {} ms, total {} ms, audio {} -> {}{})",
                     r.from,
@@ -576,12 +735,29 @@ impl App {
                 );
             }
             "vprobe" => {
-                let ms: u64 = rest.first().map(|s| s.parse()).transpose().context("ms")?.unwrap_or(5000);
+                let ms: u64 = rest
+                    .first()
+                    .map(|s| s.parse())
+                    .transpose()
+                    .context("ms")?
+                    .unwrap_or(5000);
                 let v = self.voice()?;
-                let find = |streams: Vec<vox_client_core::stats::StreamEntry>| streams.into_iter().find(|s| s.label.starts_with("watch-video"));
-                let Some(entry) = find(v.streams().await) else { bail!("not watching any video") };
+                let find = |streams: Vec<vox_client_core::stats::StreamEntry>| {
+                    streams
+                        .into_iter()
+                        .find(|s| s.label.starts_with("watch-video"))
+                };
+                let Some(entry) = find(v.streams().await) else {
+                    bail!("not watching any video")
+                };
                 let c = entry.counters;
-                let (mut last_frames, mut last_res) = (c.frames.load(Ordering::Relaxed), (c.width.load(Ordering::Relaxed), c.height.load(Ordering::Relaxed)));
+                let (mut last_frames, mut last_res) = (
+                    c.frames.load(Ordering::Relaxed),
+                    (
+                        c.width.load(Ordering::Relaxed),
+                        c.height.load(Ordering::Relaxed),
+                    ),
+                );
                 let t0 = Instant::now();
                 let mut last_change = t0;
                 let (mut max_gap, mut max_gap_at) = (Duration::ZERO, Duration::ZERO);
@@ -598,29 +774,57 @@ impl App {
                         }
                         last_change = now;
                         last_frames = f;
-                        let res = (c.width.load(Ordering::Relaxed), c.height.load(Ordering::Relaxed));
+                        let res = (
+                            c.width.load(Ordering::Relaxed),
+                            c.height.load(Ordering::Relaxed),
+                        );
                         if res != last_res {
                             println!("vprobe: t={} ms resolution {}x{} -> {}x{} (gap before first new frame {} ms)", t0.elapsed().as_millis(), last_res.0, last_res.1, res.0, res.1, gap.as_millis());
                             last_res = res;
                         }
                     }
                 }
-                println!("vprobe: {} frames in {} ms, longest gap between frames {} ms at t={} ms", last_frames, ms, max_gap.as_millis(), max_gap_at.as_millis());
+                println!(
+                    "vprobe: {} frames in {} ms, longest gap between frames {} ms at t={} ms",
+                    last_frames,
+                    ms,
+                    max_gap.as_millis(),
+                    max_gap_at.as_millis()
+                );
             }
             "bwcap" => {
-                let arg = rest.first().ok_or_else(|| anyhow!("usage: bwcap <kbps>|off"))?;
-                let cap = if *arg == "off" { None } else { Some(arg.parse::<u64>().context("kbps")? * 1000) };
+                let arg = rest
+                    .first()
+                    .ok_or_else(|| anyhow!("usage: bwcap <kbps>|off"))?;
+                let cap = if *arg == "off" {
+                    None
+                } else {
+                    Some(arg.parse::<u64>().context("kbps")? * 1000)
+                };
                 if self.voice()?.set_share_bitrate_cap(cap).await {
-                    println!("bitrate cap: {}", cap.map(|c| format!("{} kbps", c / 1000)).unwrap_or_else(|| "off".into()));
+                    println!(
+                        "bitrate cap: {}",
+                        cap.map(|c| format!("{} kbps", c / 1000))
+                            .unwrap_or_else(|| "off".into())
+                    );
                 } else {
                     println!("not sharing");
                 }
             }
             "overshoot" => {
-                let arg = rest.first().ok_or_else(|| anyhow!("usage: overshoot <percent>|off"))?;
-                let pct = if *arg == "off" { None } else { Some(arg.parse::<u64>().context("percent")?) };
+                let arg = rest
+                    .first()
+                    .ok_or_else(|| anyhow!("usage: overshoot <percent>|off"))?;
+                let pct = if *arg == "off" {
+                    None
+                } else {
+                    Some(arg.parse::<u64>().context("percent")?)
+                };
                 if self.voice()?.set_share_encoder_overshoot(pct).await {
-                    println!("encoder overshoot: {}", pct.map(|p| format!("{p}%")).unwrap_or_else(|| "off".into()));
+                    println!(
+                        "encoder overshoot: {}",
+                        pct.map(|p| format!("{p}%")).unwrap_or_else(|| "off".into())
+                    );
                 } else {
                     println!("not sharing");
                 }
@@ -628,7 +832,14 @@ impl App {
             "unshare" => {
                 let stopped = self.voice()?.stop_share().await;
                 self.streaming = false;
-                println!("{}", if stopped { "share stopped" } else { "not sharing" });
+                println!(
+                    "{}",
+                    if stopped {
+                        "share stopped"
+                    } else {
+                        "not sharing"
+                    }
+                );
                 self.push_voice_state();
             }
             "cam" => match rest.first().copied() {
@@ -645,17 +856,26 @@ impl App {
                             "1080" => q = vox_client_core::golive::camera::CameraQuality::P1080,
                             "--encoder" => {
                                 i += 1;
-                                encoder = rest.get(i).ok_or_else(|| anyhow!("--encoder needs a value"))?.parse()?;
+                                encoder = rest
+                                    .get(i)
+                                    .ok_or_else(|| anyhow!("--encoder needs a value"))?
+                                    .parse()?;
                             }
                             d => device = d.to_string(),
                         }
                         i += 1;
                     }
-                    let mut opts = vox_client_core::golive::camera::CameraOptions::with_quality(device, q);
+                    let mut opts =
+                        vox_client_core::golive::camera::CameraOptions::with_quality(device, q);
                     opts.encoder = encoder;
                     let t0 = Instant::now();
                     match self.voice()?.start_camera(opts).await {
-                        Ok(st) => println!("camera on in {} ms: {} ({:?})", t0.elapsed().as_millis(), st.backend, st.format),
+                        Ok(st) => println!(
+                            "camera on in {} ms: {} ({:?})",
+                            t0.elapsed().as_millis(),
+                            st.backend,
+                            st.format
+                        ),
                         Err(e) => println!("camera failed: {e:#}"),
                     }
                     self.camera = self.voice()?.camera_on().await;
@@ -664,7 +884,15 @@ impl App {
                 Some("off") => {
                     let t0 = Instant::now();
                     let was = self.voice()?.stop_camera().await;
-                    println!("{} ({} ms)", if was { "camera off" } else { "camera was not on" }, t0.elapsed().as_millis());
+                    println!(
+                        "{} ({} ms)",
+                        if was {
+                            "camera off"
+                        } else {
+                            "camera was not on"
+                        },
+                        t0.elapsed().as_millis()
+                    );
                     self.camera = false;
                     self.push_voice_state();
                 }
@@ -673,7 +901,11 @@ impl App {
             "cams" => {
                 let on = rest.first() != Some(&"off");
                 self.voice()?.set_cameras_visible(on).await;
-                println!("camera tiles {}; cameras on: {:?}", if on { "visible" } else { "hidden" }, self.voice()?.cameras());
+                println!(
+                    "camera tiles {}; cameras on: {:?}",
+                    if on { "visible" } else { "hidden" },
+                    self.voice()?.cameras()
+                );
             }
             "cameras" => match vox_capture::list_cameras() {
                 Ok(list) => {
@@ -684,30 +916,54 @@ impl App {
                 Err(e) => println!("cannot list cameras: {e}"),
             },
             "watch" => {
-                let who = rest.first().ok_or_else(|| anyhow!("usage: watch <identity>"))?;
+                let who = rest
+                    .first()
+                    .ok_or_else(|| anyhow!("usage: watch <identity>"))?;
                 let id = self.voice()?.watch(who)?;
                 println!("watching {id}");
             }
             "unwatch" => {
                 let v = self.voice()?;
                 let stopped = match rest.first() {
-                    Some(who) => if v.unwatch(who) { vec![who.to_string()] } else { Vec::new() },
+                    Some(who) => {
+                        if v.unwatch(who) {
+                            vec![who.to_string()]
+                        } else {
+                            Vec::new()
+                        }
+                    }
                     None => v.unwatch_all(),
                 };
                 if stopped.is_empty() {
                     println!("not watching that / anyone");
                 } else {
-                    println!("stopped watching {stopped:?}; still watching {:?}", v.watching());
+                    println!(
+                        "stopped watching {stopped:?}; still watching {:?}",
+                        v.watching()
+                    );
                 }
             }
             "say" => {
-                let tx = self.hub_tx.as_ref().ok_or_else(|| anyhow!("'say' needs hub mode"))?;
-                let id: ChannelId = rest.first().ok_or_else(|| anyhow!("usage: say <channel-id> <text>"))?.parse().context("channel id")?;
+                let tx = self
+                    .hub_tx
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("'say' needs hub mode"))?;
+                let id: ChannelId = rest
+                    .first()
+                    .ok_or_else(|| anyhow!("usage: say <channel-id> <text>"))?
+                    .parse()
+                    .context("channel id")?;
                 let text = rest[1..].join(" ");
                 if text.is_empty() {
                     bail!("empty message");
                 }
-                tx.send(ClientEvent::SendMessage { channel_id: id, content: text, mentions: vec![], reply_to: None, reply_mention: false })?;
+                tx.send(ClientEvent::SendMessage {
+                    channel_id: id,
+                    content: text,
+                    mentions: vec![],
+                    reply_to: None,
+                    reply_mention: false,
+                })?;
             }
             "channels" => {
                 let hub = self.hub.clone().ok_or_else(|| anyhow!("needs hub mode"))?;
@@ -718,7 +974,10 @@ impl App {
             "trim" => {
                 let ws = rest.first() == Some(&"ws");
                 let heaps = vox_client_core::stats::trim_memory(ws);
-                println!("compacted {heaps} heaps{}", if ws { ", trimmed working set" } else { "" });
+                println!(
+                    "compacted {heaps} heaps{}",
+                    if ws { ", trimmed working set" } else { "" }
+                );
             }
             other => println!("unknown command {other:?}; type 'help'"),
         }
@@ -726,21 +985,37 @@ impl App {
     }
 
     fn channel_name(&self, id: ChannelId) -> String {
-        self.channels.iter().find(|c| c.id == id).map(|c| c.name.clone()).unwrap_or_else(|| id.to_string())
+        self.channels
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| id.to_string())
     }
 
     fn on_hub(&mut self, ev: HubEvent) {
         match ev {
             HubEvent::Connected => println!("[hub] connected"),
-            HubEvent::Disconnected { reason } => println!("[hub] disconnected: {reason} (reconnecting)"),
+            HubEvent::Disconnected { reason } => {
+                println!("[hub] disconnected: {reason} (reconnecting)")
+            }
             HubEvent::AuthFailed => println!("[hub] session rejected; restart to log in again"),
             HubEvent::Server(ev) => match ev {
-                ServerEvent::Ready { user, channels, online, voice, .. } => {
+                ServerEvent::Ready {
+                    user,
+                    channels,
+                    online,
+                    voice,
+                    ..
+                } => {
                     println!(
                         "[hub] ready as {} - {} channels, online: [{}], in voice: {}",
                         user.username,
                         channels.len(),
-                        online.iter().map(|u| u.username.as_str()).collect::<Vec<_>>().join(", "),
+                        online
+                            .iter()
+                            .map(|u| u.username.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "),
                         voice.len()
                     );
                     self.channels = channels;
@@ -748,14 +1023,24 @@ impl App {
                     self.push_voice_state();
                 }
                 ServerEvent::MessageCreated { message } => {
-                    println!("[#{}] {}: {}", self.channel_name(message.channel_id), message.author.username, message.content);
+                    println!(
+                        "[#{}] {}: {}",
+                        self.channel_name(message.channel_id),
+                        message.author.username,
+                        message.content
+                    );
                 }
                 ServerEvent::UserOnline { user } => println!("[hub] {} is online", user.username),
-                ServerEvent::UserOffline { user_id } => println!("[hub] user {user_id} went offline"),
+                ServerEvent::UserOffline { user_id } => {
+                    println!("[hub] user {user_id} went offline")
+                }
                 ServerEvent::VoiceStateChanged { member } => println!(
                     "[voice] {} -> {} muted={} deafened={} streaming={}",
                     member.user.username,
-                    member.channel_id.map(|c| self.channel_name(c)).unwrap_or_else(|| "(left)".into()),
+                    member
+                        .channel_id
+                        .map(|c| self.channel_name(c))
+                        .unwrap_or_else(|| "(left)".into()),
                     member.muted,
                     member.deafened,
                     member.streaming
@@ -774,10 +1059,19 @@ impl App {
 
     fn on_voice(&mut self, ev: VoiceEvent) {
         match ev {
-            VoiceEvent::Connected { room, identity, participants } => {
-                println!("[voice] in room '{room}' as '{identity}', others: [{}]", participants.join(", "))
+            VoiceEvent::Connected {
+                room,
+                identity,
+                participants,
+            } => {
+                println!(
+                    "[voice] in room '{room}' as '{identity}', others: [{}]",
+                    participants.join(", ")
+                )
             }
-            VoiceEvent::ParticipantJoined { identity, name } => println!("[voice] {identity} ({name}) joined"),
+            VoiceEvent::ParticipantJoined { identity, name } => {
+                println!("[voice] {identity} ({name}) joined")
+            }
             VoiceEvent::ParticipantLeft { identity } => println!("[voice] {identity} left"),
             VoiceEvent::ActiveSpeakers { identities } => {
                 if identities.is_empty() {
@@ -786,29 +1080,63 @@ impl App {
                     println!("[voice] speaking: {}", identities.join(", "));
                 }
             }
-            VoiceEvent::ShareStarted { identity } => println!("[golive] {identity} started sharing (use 'watch {identity}')"),
-            VoiceEvent::ShareStopped { identity } => println!("[golive] {identity} stopped sharing"),
-            VoiceEvent::ShareKind { identity, audio_only } => println!("[golive] {identity}'s live is {}", if audio_only { "audio-only" } else { "a screen share" }),
+            VoiceEvent::ShareStarted { identity } => {
+                println!("[golive] {identity} started sharing (use 'watch {identity}')")
+            }
+            VoiceEvent::ShareStopped { identity } => {
+                println!("[golive] {identity} stopped sharing")
+            }
+            VoiceEvent::ShareKind {
+                identity,
+                audio_only,
+            } => println!(
+                "[golive] {identity}'s live is {}",
+                if audio_only {
+                    "audio-only"
+                } else {
+                    "a screen share"
+                }
+            ),
             VoiceEvent::LocalShareEnded { reason } => {
                 println!("[golive] your share ended: {reason}");
                 self.streaming = false;
                 self.push_voice_state();
             }
             VoiceEvent::ServerMuted { muted } => {
-                println!("[voice] {}", if muted { "server-muted by a moderator" } else { "server mute lifted" })
+                println!(
+                    "[voice] {}",
+                    if muted {
+                        "server-muted by a moderator"
+                    } else {
+                        "server mute lifted"
+                    }
+                )
             }
             VoiceEvent::WatchStarted { identity } => println!("[golive] watching {identity}"),
-            VoiceEvent::CameraStarted { identity } => println!("[camera] {identity} turned the camera on"),
-            VoiceEvent::CameraStopped { identity } => println!("[camera] {identity} turned the camera off"),
-            VoiceEvent::EncoderSwitched { camera, label, backend } => {
-                println!("[{}] unstable video: switched encoder to {label} ({backend})", if camera { "camera" } else { "golive" })
+            VoiceEvent::CameraStarted { identity } => {
+                println!("[camera] {identity} turned the camera on")
+            }
+            VoiceEvent::CameraStopped { identity } => {
+                println!("[camera] {identity} turned the camera off")
+            }
+            VoiceEvent::EncoderSwitched {
+                camera,
+                label,
+                backend,
+            } => {
+                println!(
+                    "[{}] unstable video: switched encoder to {label} ({backend})",
+                    if camera { "camera" } else { "golive" }
+                )
             }
             VoiceEvent::LocalCameraEnded { reason } => {
                 println!("[camera] your camera stopped: {reason}");
                 self.camera = false;
                 self.push_voice_state();
             }
-            VoiceEvent::WatchEnded { identity, reason } => println!("[golive] stopped watching {identity}: {reason}"),
+            VoiceEvent::WatchEnded { identity, reason } => {
+                println!("[golive] stopped watching {identity}: {reason}")
+            }
             VoiceEvent::Reconnecting => println!("[voice] reconnecting..."),
             VoiceEvent::Reconnected => println!("[voice] reconnected"),
             VoiceEvent::Disconnected { reason } => {

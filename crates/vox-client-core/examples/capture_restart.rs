@@ -18,11 +18,19 @@ fn main() {
     let copy = args.iter().any(|a| a == "--copy");
     let mut meter = ProcessMeter::new();
     let s = meter.sample();
-    println!("start: ws={:.1}MB private={:.1}MB handles={}", mb(s.working_set_bytes), mb(s.private_bytes), s.handles);
+    println!(
+        "start: ws={:.1}MB private={:.1}MB handles={}",
+        mb(s.working_set_bytes),
+        mb(s.private_bytes),
+        s.handles
+    );
     for round in 1..=rounds {
         let frames = Arc::new(AtomicU64::new(0));
         let f = frames.clone();
-        let cfg = vox_capture::VideoConfig { max_fps: 30, ..Default::default() };
+        let cfg = vox_capture::VideoConfig {
+            max_fps: 30,
+            ..Default::default()
+        };
         let cap = vox_capture::start_video(
             vox_capture::VideoTarget::Monitor(mon),
             cfg,

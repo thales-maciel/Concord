@@ -31,7 +31,10 @@ pub fn parse_response(buf: &[u8], tid: &[u8; 12]) -> Option<SocketAddr> {
         return None;
     }
     let len = u16::from_be_bytes([buf[2], buf[3]]) as usize;
-    if u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]) != MAGIC || &buf[8..20] != tid || buf.len() < 20 + len {
+    if u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]) != MAGIC
+        || &buf[8..20] != tid
+        || buf.len() < 20 + len
+    {
         return None;
     }
     let mut at = 20;
@@ -40,7 +43,9 @@ pub fn parse_response(buf: &[u8], tid: &[u8; 12]) -> Option<SocketAddr> {
     while at + 4 <= end {
         let kind = u16::from_be_bytes([buf[at], buf[at + 1]]);
         let alen = u16::from_be_bytes([buf[at + 2], buf[at + 3]]) as usize;
-        let value = buf.get(at + 4..at + 4 + alen).filter(|_| at + 4 + alen <= end)?;
+        let value = buf
+            .get(at + 4..at + 4 + alen)
+            .filter(|_| at + 4 + alen <= end)?;
         match kind {
             ATTR_XOR_MAPPED_ADDRESS => {
                 if let Some(a) = address(value, Some(tid)) {
@@ -105,15 +110,22 @@ pub async fn public_ipv4(timeout: Duration) -> Option<Ipv4Addr> {
 }
 
 async fn ask(server: &str, timeout: Duration) -> Option<SocketAddr> {
-    let addr = tokio::time::timeout(timeout, tokio::net::lookup_host(server)).await.ok()?.ok()?.find(|a| a.is_ipv4())?;
-    let sock = tokio::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await.ok()?;
+    let addr = tokio::time::timeout(timeout, tokio::net::lookup_host(server))
+        .await
+        .ok()?
+        .ok()?
+        .find(|a| a.is_ipv4())?;
+    let sock = tokio::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
+        .await
+        .ok()?;
     let tid: [u8; 12] = crate::util::random_bytes();
     let mut buf = [0u8; 512];
     // Two tries: UDP may drop the first packet.
     for _ in 0..2 {
         sock.send_to(&request(&tid), addr).await.ok()?;
         let until = tokio::time::Instant::now() + timeout / 2;
-        while let Ok(Ok((n, from))) = tokio::time::timeout_at(until, sock.recv_from(&mut buf)).await {
+        while let Ok(Ok((n, from))) = tokio::time::timeout_at(until, sock.recv_from(&mut buf)).await
+        {
             if from == addr {
                 if let Some(a) = parse_response(&buf[..n], &tid) {
                     return Some(a);
@@ -152,7 +164,16 @@ mod tests {
     fn xor_v4(ip: [u8; 4], port: u16) -> Vec<u8> {
         let c = MAGIC.to_be_bytes();
         let p = (port ^ (MAGIC >> 16) as u16).to_be_bytes();
-        vec![0, 1, p[0], p[1], ip[0] ^ c[0], ip[1] ^ c[1], ip[2] ^ c[2], ip[3] ^ c[3]]
+        vec![
+            0,
+            1,
+            p[0],
+            p[1],
+            ip[0] ^ c[0],
+            ip[1] ^ c[1],
+            ip[2] ^ c[2],
+            ip[3] ^ c[3],
+        ]
     }
 
     #[test]
@@ -165,25 +186,48 @@ mod tests {
 
     #[test]
     fn xor_mapped_addresses_are_read() {
-        let a = answer(&[(0x8022, b"test software".to_vec()), (ATTR_XOR_MAPPED_ADDRESS, xor_v4([203, 0, 113, 9], 54321))]);
-        assert_eq!(parse_response(&a, &TID), Some("203.0.113.9:54321".parse().unwrap()));
+        let a = answer(&[
+            (0x8022, b"test software".to_vec()),
+            (ATTR_XOR_MAPPED_ADDRESS, xor_v4([203, 0, 113, 9], 54321)),
+        ]);
+        assert_eq!(
+            parse_response(&a, &TID),
+            Some("203.0.113.9:54321".parse().unwrap())
+        );
         // IPv6: XOR with the cookie and the transaction id.
         let ip: Ipv6Addr = "2001:db8::42".parse().unwrap();
-        let key: Vec<u8> = MAGIC.to_be_bytes().iter().chain(TID.iter()).copied().collect();
+        let key: Vec<u8> = MAGIC
+            .to_be_bytes()
+            .iter()
+            .chain(TID.iter())
+            .copied()
+            .collect();
         let p = (7000u16 ^ (MAGIC >> 16) as u16).to_be_bytes();
         let mut v = vec![0, 2, p[0], p[1]];
         v.extend(ip.octets().iter().zip(&key).map(|(b, k)| b ^ k));
-        assert_eq!(parse_response(&answer(&[(ATTR_XOR_MAPPED_ADDRESS, v)]), &TID), Some(SocketAddr::new(ip.into(), 7000)));
+        assert_eq!(
+            parse_response(&answer(&[(ATTR_XOR_MAPPED_ADDRESS, v)]), &TID),
+            Some(SocketAddr::new(ip.into(), 7000))
+        );
     }
 
     #[test]
     fn plain_mapped_address_is_the_fallback() {
         let plain = vec![0, 1, 0x1f, 0x90, 198, 51, 100, 7];
         let a = answer(&[(ATTR_MAPPED_ADDRESS, plain.clone())]);
-        assert_eq!(parse_response(&a, &TID), Some("198.51.100.7:8080".parse().unwrap()));
+        assert_eq!(
+            parse_response(&a, &TID),
+            Some("198.51.100.7:8080".parse().unwrap())
+        );
         // XOR-MAPPED wins when both are there.
-        let a = answer(&[(ATTR_MAPPED_ADDRESS, plain), (ATTR_XOR_MAPPED_ADDRESS, xor_v4([203, 0, 113, 1], 1))]);
-        assert_eq!(parse_response(&a, &TID), Some("203.0.113.1:1".parse().unwrap()));
+        let a = answer(&[
+            (ATTR_MAPPED_ADDRESS, plain),
+            (ATTR_XOR_MAPPED_ADDRESS, xor_v4([203, 0, 113, 1], 1)),
+        ]);
+        assert_eq!(
+            parse_response(&a, &TID),
+            Some("203.0.113.1:1".parse().unwrap())
+        );
     }
 
     #[test]
@@ -193,10 +237,18 @@ mod tests {
         let mut err = good.clone();
         err[0..2].copy_from_slice(&0x0111u16.to_be_bytes());
         assert_eq!(parse_response(&err, &TID), None, "an error response");
-        assert_eq!(parse_response(&good[..good.len() - 2], &TID), None, "cut short");
+        assert_eq!(
+            parse_response(&good[..good.len() - 2], &TID),
+            None,
+            "cut short"
+        );
         let mut bad_len = answer(&[(ATTR_XOR_MAPPED_ADDRESS, xor_v4([203, 0, 113, 9], 1))]);
         bad_len[22..24].copy_from_slice(&200u16.to_be_bytes());
-        assert_eq!(parse_response(&bad_len, &TID), None, "attribute longer than the message");
+        assert_eq!(
+            parse_response(&bad_len, &TID),
+            None,
+            "attribute longer than the message"
+        );
         assert_eq!(parse_response(&[0u8; 10], &TID), None);
         assert_eq!(parse_response(&answer(&[]), &TID), None, "no address");
     }

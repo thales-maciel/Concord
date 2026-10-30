@@ -4,8 +4,8 @@
 
 mod alerts;
 mod app;
-mod avatars;
 mod autotest;
+mod avatars;
 mod backend;
 mod brand;
 mod call;
@@ -120,13 +120,21 @@ fn main() {
     }
     // v1.0.1: the first start of concord copies what voxhub kept (`migrate.rs`), before anything
     // reads it. Never in an autotest (they must not touch the real profile).
-    let migrated = if args.autotest.is_none() { migrate::run_at_startup() } else { None };
+    let migrated = if args.autotest.is_none() {
+        migrate::run_at_startup()
+    } else {
+        None
+    };
     let log = vox_log::init("app", args.log_dir.as_deref(), false);
     if let Some(line) = migrated {
         tracing::info!("{line}");
     }
-    // Configurações → Sobre → "Abrir pasta dos registros".
-    app::set_log_dir(args.log_dir.clone().unwrap_or_else(|| vox_log::default_log_dir("app")));
+    // Settings → About → "Open logs folder".
+    app::set_log_dir(
+        args.log_dir
+            .clone()
+            .unwrap_or_else(|| vox_log::default_log_dir("app")),
+    );
 
     // winit allows one event loop per process and egui owns it, so the Go Live viewer uses a
     // plain Win32 window instead.
@@ -188,7 +196,11 @@ fn main() {
             "mac-view" => Role::MacView,
             _ => Role::Idle,
         };
-        tracing::info!(role = r, own_settings_dir = args.settings_dir.is_some(), "AUTOTEST mode (the real settings are not read or written)");
+        tracing::info!(
+            role = r,
+            own_settings_dir = args.settings_dir.is_some(),
+            "AUTOTEST mode (the real settings are not read or written)"
+        );
         Auto::new(
             role,
             AutoArgs {
@@ -218,7 +230,11 @@ fn main() {
         // so a run can restart the app and find them (v0.9.1). The real ones are never touched.
         crate::settings::set_dir(dir);
     }
-    let mut settings = if persist || crate::settings::dir_overridden() { Settings::load() } else { Settings::default() };
+    let mut settings = if persist || crate::settings::dir_overridden() {
+        Settings::load()
+    } else {
+        Settings::default()
+    };
     // macOS: saved passwords live in the Keychain; drop the ones no settings file mentions.
     #[cfg(target_os = "macos")]
     if persist || crate::settings::dir_overridden() {
@@ -227,10 +243,11 @@ fn main() {
     if !persist {
         // Autotest: alert sounds only run when VOX_NO_PLAYBACK is set (then they are just logged),
         // so an unattended test can never make a noise.
-        settings.alerts.enabled = std::env::var("VOX_NO_PLAYBACK").is_ok_and(|v| !v.is_empty() && v != "0");
+        settings.alerts.enabled =
+            std::env::var("VOX_NO_PLAYBACK").is_ok_and(|v| !v.is_empty() && v != "0");
         settings.alerts.presence = true;
         if std::env::var_os("VOX_AUTOTEST_SHOT_DIR").is_some() {
-            // Design-review screenshots: never "Ausente" just because the PC happens to be idle.
+            // Design-review screenshots: never "Away" just because the PC happens to be idle.
             settings.profile.idle_away_minutes = 0;
         }
     }
@@ -253,7 +270,7 @@ fn main() {
     }
 
     if args.popout && !persist {
-        // Autotest only: the "Abrir transmissões em janela separada" setting.
+        // Autotest only: the "Open streams in a separate window" setting.
         settings.stream_popout = true;
     }
     // Watched streams show inside the call view unless the user prefers separate windows.
@@ -301,7 +318,9 @@ fn main() {
             if zoom != 1.0 {
                 cc.egui_ctx.set_zoom_factor(zoom);
             }
-            Ok(Box::new(app::App::new(backend, repaint, settings, persist, auto)))
+            Ok(Box::new(app::App::new(
+                backend, repaint, settings, persist, auto,
+            )))
         }),
     );
     if let Err(e) = result {

@@ -22,17 +22,20 @@ use windows::core::{Interface, PCSTR};
 use windows::Win32::Foundation::{DXGI_STATUS_OCCLUDED, HMODULE, HWND};
 use windows::Win32::Graphics::Direct3D::Fxc::{D3DCompile, D3DCOMPILE_OPTIMIZATION_LEVEL3};
 use windows::Win32::Graphics::Direct3D::{
-    ID3DBlob, D3D11_SRV_DIMENSION_TEXTURE2D, D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_10_1,
-    D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+    ID3DBlob, D3D11_SRV_DIMENSION_TEXTURE2D, D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL,
+    D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
+    D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
 };
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
+    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8_UNORM,
+    DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
-    IDXGIDevice, IDXGIFactory2, IDXGISwapChain1, DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET, DXGI_MWA_NO_ALT_ENTER, DXGI_MWA_NO_WINDOW_CHANGES, DXGI_PRESENT,
-    DXGI_SCALING_STRETCH,
-    DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT,
+    IDXGIDevice, IDXGIFactory2, IDXGISwapChain1, DXGI_ERROR_DEVICE_REMOVED,
+    DXGI_ERROR_DEVICE_RESET, DXGI_MWA_NO_ALT_ENTER, DXGI_MWA_NO_WINDOW_CHANGES, DXGI_PRESENT,
+    DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG,
+    DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 
 const SHADER: &str = r#"
@@ -131,12 +134,19 @@ impl VideoPlanes {
 
     /// Bytes held in the textures (for logs).
     pub fn bytes(&self) -> usize {
-        self.tex.iter().map(|(_, w, h, bpp)| (*w * *h * *bpp) as usize).sum()
+        self.tex
+            .iter()
+            .map(|(_, w, h, bpp)| (*w * *h * *bpp) as usize)
+            .sum()
     }
 
     /// Copy a decoded frame into `slot`'s textures (made or remade as needed). Returns
     /// `Ok(false)` for buffer types we cannot read (the textures keep the previous picture).
-    pub fn upload(gpu: &D3dGpu, slot: &mut Option<VideoPlanes>, buf: &dyn VideoBuffer) -> Result<bool, RenderError> {
+    pub fn upload(
+        gpu: &D3dGpu,
+        slot: &mut Option<VideoPlanes>,
+        buf: &dyn VideoBuffer,
+    ) -> Result<bool, RenderError> {
         let (w, h) = (buf.width(), buf.height());
         if w == 0 || h == 0 {
             return Ok(false);
@@ -162,8 +172,17 @@ impl VideoPlanes {
         }
     }
 
-    fn ensure<'a>(gpu: &D3dGpu, slot: &'a mut Option<VideoPlanes>, layout: Layout, width: u32, height: u32) -> windows::core::Result<&'a mut VideoPlanes> {
-        if slot.as_ref().is_some_and(|p| p.layout == layout && p.width == width && p.height == height) {
+    fn ensure<'a>(
+        gpu: &D3dGpu,
+        slot: &'a mut Option<VideoPlanes>,
+        layout: Layout,
+        width: u32,
+        height: u32,
+    ) -> windows::core::Result<&'a mut VideoPlanes> {
+        if slot
+            .as_ref()
+            .is_some_and(|p| p.layout == layout && p.width == width && p.height == height)
+        {
             return Ok(slot.as_mut().expect("checked"));
         }
         *slot = None;
@@ -174,7 +193,10 @@ impl VideoPlanes {
                 (cw, ch, DXGI_FORMAT_R8_UNORM, 1),
                 (cw, ch, DXGI_FORMAT_R8_UNORM, 1),
             ],
-            Layout::Nv12 => vec![(width, height, DXGI_FORMAT_R8_UNORM, 1), (cw, ch, DXGI_FORMAT_R8G8_UNORM, 2)],
+            Layout::Nv12 => vec![
+                (width, height, DXGI_FORMAT_R8_UNORM, 1),
+                (cw, ch, DXGI_FORMAT_R8G8_UNORM, 2),
+            ],
         };
         let mut tex = Vec::with_capacity(specs.len());
         let mut srvs = Vec::with_capacity(specs.len());
@@ -185,7 +207,10 @@ impl VideoPlanes {
                 MipLevels: 1,
                 ArraySize: 1,
                 Format: format,
-                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
                 Usage: D3D11_USAGE_DYNAMIC,
                 BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
                 CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
@@ -194,7 +219,12 @@ impl VideoPlanes {
             let srv_desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
                 Format: format,
                 ViewDimension: D3D11_SRV_DIMENSION_TEXTURE2D,
-                Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 { Texture2D: D3D11_TEX2D_SRV { MostDetailedMip: 0, MipLevels: 1 } },
+                Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 {
+                    Texture2D: D3D11_TEX2D_SRV {
+                        MostDetailedMip: 0,
+                        MipLevels: 1,
+                    },
+                },
             };
             // SAFETY: valid descriptors; out-pointers to locals.
             unsafe {
@@ -202,15 +232,30 @@ impl VideoPlanes {
                 gpu.device.CreateTexture2D(&desc, None, Some(&mut t))?;
                 let t: ID3D11Texture2D = t.ok_or_else(windows::core::Error::empty)?;
                 let mut srv = None;
-                gpu.device.CreateShaderResourceView(&t, Some(&srv_desc), Some(&mut srv))?;
+                gpu.device
+                    .CreateShaderResourceView(&t, Some(&srv_desc), Some(&mut srv))?;
                 srvs.push(srv);
                 tex.push((t, w, h, bpp));
             }
         }
-        Ok(slot.insert(VideoPlanes { layout, width, height, tex, srvs }))
+        Ok(slot.insert(VideoPlanes {
+            layout,
+            width,
+            height,
+            tex,
+            srvs,
+        }))
     }
 
-    fn write(&self, gpu: &D3dGpu, index: usize, src: &[u8], src_stride: usize, row_bytes: usize, rows: usize) -> Result<(), RenderError> {
+    fn write(
+        &self,
+        gpu: &D3dGpu,
+        index: usize,
+        src: &[u8],
+        src_stride: usize,
+        row_bytes: usize,
+        rows: usize,
+    ) -> Result<(), RenderError> {
         let (tex, _, _, _) = &self.tex[index];
         if rows == 0 || src.len() < src_stride * (rows - 1) + row_bytes {
             return Ok(());
@@ -219,14 +264,20 @@ impl VideoPlanes {
         // (the texture's width * bpp) at the driver-provided row pitch, then unmap.
         unsafe {
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-            gpu.ctx.Map(tex, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped)).map_err(classify)?;
+            gpu.ctx
+                .Map(tex, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))
+                .map_err(classify)?;
             let pitch = mapped.RowPitch as usize;
             let dst = mapped.pData as *mut u8;
             if pitch == src_stride && pitch == row_bytes {
                 std::ptr::copy_nonoverlapping(src.as_ptr(), dst, row_bytes * rows);
             } else {
                 for r in 0..rows {
-                    std::ptr::copy_nonoverlapping(src.as_ptr().add(r * src_stride), dst.add(r * pitch), row_bytes);
+                    std::ptr::copy_nonoverlapping(
+                        src.as_ptr().add(r * src_stride),
+                        dst.add(r * pitch),
+                        row_bytes,
+                    );
                 }
             }
             gpu.ctx.Unmap(tex, 0);
@@ -250,7 +301,12 @@ impl D3dGpu {
     pub fn new() -> windows::core::Result<Self> {
         // SAFETY: plain D3D11 object creation with valid descriptors and out-pointers.
         unsafe {
-            let levels: [D3D_FEATURE_LEVEL; 4] = [D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0];
+            let levels: [D3D_FEATURE_LEVEL; 4] = [
+                D3D_FEATURE_LEVEL_11_1,
+                D3D_FEATURE_LEVEL_11_0,
+                D3D_FEATURE_LEVEL_10_1,
+                D3D_FEATURE_LEVEL_10_0,
+            ];
             let mut device = None;
             let mut ctx = None;
             D3D11CreateDevice(
@@ -259,7 +315,8 @@ impl D3dGpu {
                 HMODULE::default(),
                 // Single-threaded use, and no driver worker threads: measured -3 MB private and
                 // ~60 fewer handles on NVIDIA, with no CPU cost for one small draw per frame.
-                D3D11_CREATE_DEVICE_SINGLETHREADED | D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS,
+                D3D11_CREATE_DEVICE_SINGLETHREADED
+                    | D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS,
                 Some(&levels),
                 D3D11_SDK_VERSION,
                 Some(&mut device),
@@ -273,11 +330,23 @@ impl D3dGpu {
             let mut vs = None;
             device.CreateVertexShader(blob_bytes(&vs_code), None, Some(&mut vs))?;
             let mut vs_mirror = None;
-            device.CreateVertexShader(blob_bytes(&compile("vs_mirror", "vs_4_0")?), None, Some(&mut vs_mirror))?;
+            device.CreateVertexShader(
+                blob_bytes(&compile("vs_mirror", "vs_4_0")?),
+                None,
+                Some(&mut vs_mirror),
+            )?;
             let mut ps_i420 = None;
-            device.CreatePixelShader(blob_bytes(&compile("ps_i420", "ps_4_0")?), None, Some(&mut ps_i420))?;
+            device.CreatePixelShader(
+                blob_bytes(&compile("ps_i420", "ps_4_0")?),
+                None,
+                Some(&mut ps_i420),
+            )?;
             let mut ps_nv12 = None;
-            device.CreatePixelShader(blob_bytes(&compile("ps_nv12", "ps_4_0")?), None, Some(&mut ps_nv12))?;
+            device.CreatePixelShader(
+                blob_bytes(&compile("ps_nv12", "ps_4_0")?),
+                None,
+                Some(&mut ps_nv12),
+            )?;
 
             let sdesc = D3D11_SAMPLER_DESC {
                 Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
@@ -320,13 +389,24 @@ impl D3dGpu {
 
     /// Draw `planes` letterboxed into `target`'s back buffer (black when there is no picture yet)
     /// and present. Returns `Ok(false)` while the window is occluded (nothing shown).
-    pub fn draw(&self, target: &mut D3dTarget, planes: Option<&VideoPlanes>) -> Result<bool, RenderError> {
+    pub fn draw(
+        &self,
+        target: &mut D3dTarget,
+        planes: Option<&VideoPlanes>,
+    ) -> Result<bool, RenderError> {
         self.draw_styled(target, planes, DrawStyle::default())
     }
 
     /// [`D3dGpu::draw`] with a [`DrawStyle`] (camera tiles: crop-to-fill, mirrored self-view).
-    pub fn draw_styled(&self, target: &mut D3dTarget, planes: Option<&VideoPlanes>, style: DrawStyle) -> Result<bool, RenderError> {
-        let Some(rtv) = target.rtv.clone() else { return Ok(false) };
+    pub fn draw_styled(
+        &self,
+        target: &mut D3dTarget,
+        planes: Option<&VideoPlanes>,
+        style: DrawStyle,
+    ) -> Result<bool, RenderError> {
+        let Some(rtv) = target.rtv.clone() else {
+            return Ok(false);
+        };
         let (bw, bh) = target.size;
         // SAFETY: all bound objects are owned by this renderer and outlive the draw call.
         unsafe {
@@ -334,11 +414,29 @@ impl D3dGpu {
             ctx.OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);
             ctx.ClearRenderTargetView(&rtv, &[0.0, 0.0, 0.0, 1.0]);
             if let Some(p) = planes {
-                let (x, y, w, h) = if style.fill { fill_viewport(p.width, p.height, bw, bh) } else { fit_viewport(p.width, p.height, bw, bh) };
-                ctx.RSSetViewports(Some(&[D3D11_VIEWPORT { TopLeftX: x, TopLeftY: y, Width: w, Height: h, MinDepth: 0.0, MaxDepth: 1.0 }]));
+                let (x, y, w, h) = if style.fill {
+                    fill_viewport(p.width, p.height, bw, bh)
+                } else {
+                    fit_viewport(p.width, p.height, bw, bh)
+                };
+                ctx.RSSetViewports(Some(&[D3D11_VIEWPORT {
+                    TopLeftX: x,
+                    TopLeftY: y,
+                    Width: w,
+                    Height: h,
+                    MinDepth: 0.0,
+                    MaxDepth: 1.0,
+                }]));
                 ctx.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
                 ctx.IASetInputLayout(None);
-                ctx.VSSetShader(if style.mirror { &self.vs_mirror } else { &self.vs }, None);
+                ctx.VSSetShader(
+                    if style.mirror {
+                        &self.vs_mirror
+                    } else {
+                        &self.vs
+                    },
+                    None,
+                );
                 match p.layout {
                     Layout::I420 => ctx.PSSetShader(&self.ps_i420, None),
                     Layout::Nv12 => ctx.PSSetShader(&self.ps_nv12, None),
@@ -385,7 +483,10 @@ impl D3dTarget {
                 Height: height,
                 Format: DXGI_FORMAT_B8G8R8A8_UNORM,
                 Stereo: false.into(),
-                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
                 BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
                 BufferCount: 2,
                 Scaling: DXGI_SCALING_STRETCH,
@@ -395,8 +496,14 @@ impl D3dTarget {
             };
             let hwnd = HWND(hwnd as *mut c_void);
             let swapchain = factory.CreateSwapChainForHwnd(&gpu.device, hwnd, &desc, None, None)?;
-            let _ = factory.MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
-            let mut t = D3dTarget { swapchain, rtv: None, size: (width, height), occluded: false };
+            let _ = factory
+                .MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
+            let mut t = D3dTarget {
+                swapchain,
+                rtv: None,
+                size: (width, height),
+                occluded: false,
+            };
             t.create_rtv(gpu)?;
             Ok(t)
         }
@@ -407,7 +514,8 @@ impl D3dTarget {
         unsafe {
             let back: ID3D11Texture2D = self.swapchain.GetBuffer(0)?;
             let mut rtv = None;
-            gpu.device.CreateRenderTargetView(&back, None, Some(&mut rtv))?;
+            gpu.device
+                .CreateRenderTargetView(&back, None, Some(&mut rtv))?;
             self.rtv = rtv;
         }
         Ok(())
@@ -425,7 +533,13 @@ impl D3dTarget {
             gpu.ctx.OMSetRenderTargets(None, None);
             gpu.ctx.Flush();
             self.swapchain
-                .ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG(0))
+                .ResizeBuffers(
+                    0,
+                    width,
+                    height,
+                    DXGI_FORMAT_UNKNOWN,
+                    DXGI_SWAP_CHAIN_FLAG(0),
+                )
                 .map_err(classify)?;
         }
         self.size = (width, height);
@@ -453,7 +567,11 @@ impl D3dRenderer {
     pub fn new(hwnd: isize, width: u32, height: u32) -> windows::core::Result<Self> {
         let gpu = D3dGpu::new()?;
         let target = D3dTarget::new(&gpu, hwnd, width, height)?;
-        Ok(D3dRenderer { gpu, target, planes: None })
+        Ok(D3dRenderer {
+            gpu,
+            target,
+            planes: None,
+        })
     }
 
     /// Resize the swapchain buffers to the new client size (no-op if unchanged or zero).
@@ -511,7 +629,12 @@ pub fn fill_viewport(fw: u32, fh: u32, bw: u32, bh: u32) -> (f32, f32, f32, f32)
     let s = (bw as f64 / fw as f64).max(bh as f64 / fh as f64);
     let w = (fw as f64 * s).round().max(bw as f64);
     let h = (fh as f64 * s).round().max(bh as f64);
-    (((bw as f64 - w) / 2.0).floor() as f32, ((bh as f64 - h) / 2.0).floor() as f32, w as f32, h as f32)
+    (
+        ((bw as f64 - w) / 2.0).floor() as f32,
+        ((bh as f64 - h) / 2.0).floor() as f32,
+        w as f32,
+        h as f32,
+    )
 }
 
 /// Letterboxed viewport for a `fw x fh` video inside a `bw x bh` back buffer (whole pixels,
@@ -562,7 +685,9 @@ fn compile(entry: &str, target: &str) -> windows::core::Result<ID3DBlob> {
 fn blob_bytes(blob: &ID3DBlob) -> &[u8] {
     // SAFETY: the blob owns `GetBufferSize()` bytes at `GetBufferPointer()` for its lifetime,
     // which the returned slice borrows.
-    unsafe { std::slice::from_raw_parts(blob.GetBufferPointer() as *const u8, blob.GetBufferSize()) }
+    unsafe {
+        std::slice::from_raw_parts(blob.GetBufferPointer() as *const u8, blob.GetBufferSize())
+    }
 }
 
 #[cfg(test)]
@@ -571,10 +696,19 @@ mod tests {
 
     #[test]
     fn viewport_letterbox() {
-        assert_eq!(fit_viewport(1920, 1080, 1920, 1080), (0.0, 0.0, 1920.0, 1080.0));
-        assert_eq!(fit_viewport(1920, 1080, 1600, 900), (0.0, 0.0, 1600.0, 900.0));
+        assert_eq!(
+            fit_viewport(1920, 1080, 1920, 1080),
+            (0.0, 0.0, 1920.0, 1080.0)
+        );
+        assert_eq!(
+            fit_viewport(1920, 1080, 1600, 900),
+            (0.0, 0.0, 1600.0, 900.0)
+        );
         // Pillarbox: 4:3 into 16:9.
-        assert_eq!(fit_viewport(1440, 1080, 1920, 1080), (240.0, 0.0, 1440.0, 1080.0));
+        assert_eq!(
+            fit_viewport(1440, 1080, 1920, 1080),
+            (240.0, 0.0, 1440.0, 1080.0)
+        );
         // Letterbox: 16:9 into a tall window.
         let (x, y, w, h) = fit_viewport(1920, 1080, 800, 800);
         assert_eq!((x, w), (0.0, 800.0));
@@ -584,7 +718,10 @@ mod tests {
 
     #[test]
     fn viewport_fill_covers_and_centres() {
-        assert_eq!(fill_viewport(1280, 720, 1280, 720), (0.0, 0.0, 1280.0, 720.0));
+        assert_eq!(
+            fill_viewport(1280, 720, 1280, 720),
+            (0.0, 0.0, 1280.0, 720.0)
+        );
         // 16:9 video in a 4:3 tile: full height, sides cropped.
         let (x, y, w, h) = fill_viewport(1280, 720, 400, 300);
         assert_eq!((y, h), (0.0, 300.0));
@@ -597,7 +734,12 @@ mod tests {
 
     #[test]
     fn shaders_compile() {
-        for (e, t) in [("vs_main", "vs_4_0"), ("vs_mirror", "vs_4_0"), ("ps_i420", "ps_4_0"), ("ps_nv12", "ps_4_0")] {
+        for (e, t) in [
+            ("vs_main", "vs_4_0"),
+            ("vs_mirror", "vs_4_0"),
+            ("ps_i420", "ps_4_0"),
+            ("ps_nv12", "ps_4_0"),
+        ] {
             let blob = compile(e, t).unwrap_or_else(|err| panic!("{e}: {err}"));
             assert!(!blob_bytes(&blob).is_empty());
         }

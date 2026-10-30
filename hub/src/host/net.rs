@@ -36,7 +36,12 @@ fn pick_lan(primary: Option<Ipv4Addr>, ifs: &[(IpAddr, u8)]) -> Option<(Ipv4Addr
         })
         .collect();
     if let Some(p) = primary.filter(|p| is_lan_v4(*p)) {
-        return Some(lan.iter().copied().find(|(ip, _)| *ip == p).unwrap_or((p, 24)));
+        return Some(
+            lan.iter()
+                .copied()
+                .find(|(ip, _)| *ip == p)
+                .unwrap_or((p, 24)),
+        );
     }
     lan.first().copied()
 }
@@ -44,17 +49,21 @@ fn pick_lan(primary: Option<Ipv4Addr>, ifs: &[(IpAddr, u8)]) -> Option<(Ipv4Addr
 /// A global IPv6 address of this PC, if it has one: friends with IPv6 can reach it without any
 /// port forwarding (a router's IPv6 firewall may still block it).
 pub fn public_ipv6() -> Option<Ipv6Addr> {
-    interface_addresses().into_iter().find_map(|(ip, _)| match ip {
-        IpAddr::V6(v6) if is_global_v6(v6) => Some(v6),
-        _ => None,
-    })
+    interface_addresses()
+        .into_iter()
+        .find_map(|(ip, _)| match ip {
+            IpAddr::V6(v6) if is_global_v6(v6) => Some(v6),
+            _ => None,
+        })
 }
 
 /// Global unicast (2000::/3) minus documentation (2001:db8::/32), Teredo (2001::/32) and 6to4
 /// (2002::/16).
 fn is_global_v6(v6: Ipv6Addr) -> bool {
     let s = v6.segments();
-    (s[0] & 0xe000) == 0x2000 && !(s[0] == 0x2001 && (s[1] == 0x0db8 || s[1] == 0)) && s[0] != 0x2002
+    (s[0] & 0xe000) == 0x2000
+        && !(s[0] == 0x2001 && (s[1] == 0x0db8 || s[1] == 0))
+        && s[0] != 0x2002
 }
 
 #[cfg(test)]
@@ -69,13 +78,33 @@ mod tests {
             ("192.168.0.20".parse().unwrap(), 24),
             ("fe80::1".parse().unwrap(), 64),
         ];
-        assert_eq!(pick_lan(Some(Ipv4Addr::new(192, 168, 0, 20)), &ifs), Some((Ipv4Addr::new(192, 168, 0, 20), 24)));
-        assert_eq!(pick_lan(None, &ifs), Some((Ipv4Addr::new(172, 20, 5, 2), 20)));
+        assert_eq!(
+            pick_lan(Some(Ipv4Addr::new(192, 168, 0, 20)), &ifs),
+            Some((Ipv4Addr::new(192, 168, 0, 20), 24))
+        );
+        assert_eq!(
+            pick_lan(None, &ifs),
+            Some((Ipv4Addr::new(172, 20, 5, 2), 20))
+        );
         // A PC with a public address on its interface: the default route is not a LAN one.
-        assert_eq!(pick_lan(Some(Ipv4Addr::new(198, 51, 100, 3)), &ifs), Some((Ipv4Addr::new(172, 20, 5, 2), 20)));
-        assert_eq!(pick_lan(Some(Ipv4Addr::new(10, 0, 0, 9)), &[]), Some((Ipv4Addr::new(10, 0, 0, 9), 24)));
+        assert_eq!(
+            pick_lan(Some(Ipv4Addr::new(198, 51, 100, 3)), &ifs),
+            Some((Ipv4Addr::new(172, 20, 5, 2), 20))
+        );
+        assert_eq!(
+            pick_lan(Some(Ipv4Addr::new(10, 0, 0, 9)), &[]),
+            Some((Ipv4Addr::new(10, 0, 0, 9), 24))
+        );
         assert_eq!(pick_lan(None, &[("100.64.1.1".parse().unwrap(), 10)]), None);
-        for (ip, global) in [("2001:4860::1", true), ("2001:db8:14c::5", false), ("2001:db8::1", false), ("2001::1", false), ("2002::1", false), ("fe80::1", false), ("fd00::1", false)] {
+        for (ip, global) in [
+            ("2001:4860::1", true),
+            ("2001:db8:14c::5", false),
+            ("2001:db8::1", false),
+            ("2001::1", false),
+            ("2002::1", false),
+            ("fe80::1", false),
+            ("fd00::1", false),
+        ] {
             assert_eq!(is_global_v6(ip.parse().unwrap()), global, "{ip}");
         }
     }

@@ -67,9 +67,21 @@ pub fn put(conn: &Connection, row: &Row, now_ms: i64) -> rusqlite::Result<()> {
         "INSERT OR REPLACE INTO link_previews
          (url, fetched_at_ms, title, description, site_name, image, image_w, image_h)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        params![row.url, row.fetched_at_ms, row.title, row.description, row.site_name, row.image, row.image_w, row.image_h],
+        params![
+            row.url,
+            row.fetched_at_ms,
+            row.title,
+            row.description,
+            row.site_name,
+            row.image,
+            row.image_w,
+            row.image_h
+        ],
     )?;
-    conn.execute("DELETE FROM link_previews WHERE fetched_at_ms < ?", [now_ms - KEEP_MS])?;
+    conn.execute(
+        "DELETE FROM link_previews WHERE fetched_at_ms < ?",
+        [now_ms - KEEP_MS],
+    )?;
     conn.execute(
         "DELETE FROM link_previews WHERE url NOT IN
          (SELECT url FROM link_previews ORDER BY fetched_at_ms DESC LIMIT ?)",
@@ -106,7 +118,10 @@ mod tests {
         let now = 10 * KEEP_MS;
         assert_eq!(get(&conn, "https://a/").unwrap(), None);
         put(&conn, &row("https://a/", now), now).unwrap();
-        assert_eq!(get(&conn, "https://a/").unwrap().unwrap(), row("https://a/", now));
+        assert_eq!(
+            get(&conn, "https://a/").unwrap().unwrap(),
+            row("https://a/", now)
+        );
         let mut r = row("https://a/", now + 1);
         r.title = "new".into();
         put(&conn, &r, now + 1).unwrap();
@@ -117,10 +132,17 @@ mod tests {
         assert_eq!(get(&conn, "https://old/").unwrap(), None);
         // The table is capped.
         for i in 0..(MAX_ROWS + 20) {
-            put(&conn, &row(&format!("https://x/{i}"), now + 10 + i), now + 10 + i).unwrap();
+            put(
+                &conn,
+                &row(&format!("https://x/{i}"), now + 10 + i),
+                now + 10 + i,
+            )
+            .unwrap();
         }
         assert_eq!(count(&conn).unwrap(), MAX_ROWS);
         assert!(get(&conn, "https://x/0").unwrap().is_none());
-        assert!(get(&conn, &format!("https://x/{}", MAX_ROWS + 19)).unwrap().is_some());
+        assert!(get(&conn, &format!("https://x/{}", MAX_ROWS + 19))
+            .unwrap()
+            .is_some());
     }
 }

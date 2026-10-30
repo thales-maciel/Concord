@@ -1,6 +1,6 @@
 # Go Live quality benchmark (v0.2 item 5)
 
-Host: uma RTX série 50 (driver recente), um processador de 8 núcleos. Tool: `capture_probe bench` (in
+Host: an RTX 50-series GPU (recent driver), an 8-core processor. Tool: `capture_probe bench` (in
 `crates/vox-capture/examples/common/`). It renders deterministic synthetic scenes on the CPU,
 uploads them to a D3D11 texture and pushes them through the **real** path: video processor
 (BGRA -> NV12) -> production `EncoderSink` (rate compensation, keyframe gate, degradation policy)
@@ -64,7 +64,7 @@ even recover after congestion on MF; v0.2 starts the MFT at 3x and lowers it onc
 | 1080p60 text / game | 0.989 / 0.849 | **0.995 / 0.890** | 0.996 / 0.907 |
 
 New presets: 720p30 **4 Mbps**, 1080p30 **8 Mbps** (was 4), 1080p60 **12 Mbps** (was 6), and
-"Máxima" 1080p60 **16 Mbps** (+0.017 SSIM on game; only for a good upload). Before -> after
+"Maximum" 1080p60 **16 Mbps** (+0.017 SSIM on game; only for a good upload). Before -> after
 with the default preset: 1080p30 text 0.969 -> 0.990, game 0.845 -> 0.892; 1080p60 game 0.849
 -> 0.890. Noise-like content (pointcloud) stays hard at any rate (0.70 -> 0.73): there the
 frame-rate cap is the real lever.
@@ -81,8 +81,8 @@ layer, no simulcast), so a host upload below rate x viewers shows up as loss / f
 
 | | game SSIM / p5 | text SSIM / p5 | fps |
 |---|---|---|---|
-| Priorizar fluidez (keep 60) | 0.855 / 0.775 | 0.992 / 0.981 | 60 |
-| **Priorizar nitidez** (default) | **0.884 / 0.834** | 0.993 / 0.980 | 60 > 30 > 60 |
+| Prioritize smoothness (keep 60) | 0.855 / 0.775 | 0.992 / 0.981 | 60 |
+| **Prioritize sharpness** (default) | **0.884 / 0.834** | 0.993 / 0.980 | 60 > 30 > 60 |
 
 Policy (`vox-capture/src/win/encode/policy.rs`): below 0.05 bits/pixel/frame at the current
 rate, step down 60 -> 30 -> 20 -> 15 at once; step back up one level only with >= 0.075 bpp at

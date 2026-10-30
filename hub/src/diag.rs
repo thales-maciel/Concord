@@ -1,7 +1,7 @@
-//! Startup diagnostics of the standalone server (`concord-server.exe`, v1.0.2), in plain pt-BR on
+//! Startup diagnostics of the standalone server (`concord-server.exe`, v1.0.2), in plain English on
 //! the console and in the log: where it listens (IPv4 / IPv6), this PC's public IPv6, the public
 //! IPv4 and whether the connection is behind CGNAT, whether the Windows Firewall lets the server
-//! and LiveKit in on the network in use (and whether that network is "Pública"), and what to do
+//! and LiveKit in on the network in use (and whether that network is "Public"), and what to do
 //! about it.
 //!
 //! Everything here is read-only and best effort: a STUN question, a UPnP search (nothing is
@@ -19,6 +19,7 @@ use crate::host::nat::{self, Reach};
 /// How long the router search and the STUN question may take.
 const NET_TIMEOUT: Duration = Duration::from_secs(4);
 /// How long the firewall check may take (PowerShell reading ~1000 rules: 2-3 s usually).
+#[cfg(windows)]
 const FW_TIMEOUT: Duration = Duration::from_secs(25);
 
 /// What the server knows about itself when it starts.
@@ -43,7 +44,9 @@ impl Input {
     }
 
     fn listens_on_ipv6(&self) -> bool {
-        self.addrs.iter().any(|a| a.is_ipv6() && !a.ip().is_loopback())
+        self.addrs
+            .iter()
+            .any(|a| a.is_ipv6() && !a.ip().is_loopback())
     }
 }
 
@@ -82,7 +85,10 @@ pub struct Facts {
 }
 
 async fn gather(input: &Input) -> Facts {
-    let exes: Vec<PathBuf> = [input.server_exe.clone(), input.livekit_exe.clone()].into_iter().flatten().collect();
+    let exes: Vec<PathBuf> = [input.server_exe.clone(), input.livekit_exe.clone()]
+        .into_iter()
+        .flatten()
+        .collect();
     let router = tokio::task::spawn_blocking(|| {
         use crate::host::upnp::PortMapper;
         let igd = crate::host::upnp::discover(NET_TIMEOUT).ok()?;
@@ -92,7 +98,11 @@ async fn gather(input: &Input) -> Facts {
     let fw = firewall_check(&exes);
     let (wan, seen, firewall) = tokio::join!(router, stun, fw);
     let wan = wan.ok().flatten();
-    let mine = seen.is_some_and(|ip| crate::linkpreview::ssrf::interface_addresses().iter().any(|(a, _)| *a == IpAddr::V4(ip)));
+    let mine = seen.is_some_and(|ip| {
+        crate::linkpreview::ssrf::interface_addresses()
+            .iter()
+            .any(|(a, _)| *a == IpAddr::V4(ip))
+    });
     let reach = nat::classify(wan, seen.map(IpAddr::V4), mine);
     let public_v4 = match wan {
         Some(IpAddr::V4(v4)) if matches!(reach, Reach::Open) => Some(v4),
@@ -109,7 +119,7 @@ async fn gather(input: &Input) -> Facts {
 
 // ---------------------------------------------------------------- Windows Firewall
 
-/// A firewall profile (Windows calls a network "Domínio", "Privada" or "Pública").
+/// A firewall profile (Windows calls a network "Domain", "Private" or "Public").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Profile {
     Domain,
@@ -129,11 +139,11 @@ impl Profile {
         }
     }
 
-    fn pt(self) -> &'static str {
+    fn label(self) -> &'static str {
         match self {
-            Profile::Domain => "Domínio",
-            Profile::Private => "Privada",
-            Profile::Public => "Pública",
+            Profile::Domain => "Domain",
+            Profile::Private => "Private",
+            Profile::Public => "Public",
         }
     }
 }
@@ -208,7 +218,9 @@ pub fn parse_firewall(out: &str) -> Option<Firewall> {
         let yes = |s: &str| s.trim().eq_ignore_ascii_case("true");
         match cols.as_slice() {
             ["RULE", exe, enabled, direction, action, profile] => {
-                let Ok(exe) = exe.trim().parse() else { continue };
+                let Ok(exe) = exe.trim().parse() else {
+                    continue;
+                };
                 let profiles = if profile.trim().eq_ignore_ascii_case("any") {
                     Profile::ALL.to_vec()
                 } else {
@@ -258,7 +270,10 @@ foreach ($n in (Get-NetConnectionProfile)) { "NET`t$($n.NetworkCategory)`t$($n.N
 
 /// The script for these programs: `$exes` first, as single-quoted PowerShell strings.
 pub fn firewall_script(exes: &[PathBuf]) -> String {
-    let list: Vec<String> = exes.iter().map(|p| format!("'{}'", p.display().to_string().replace('\'', "''"))).collect();
+    let list: Vec<String> = exes
+        .iter()
+        .map(|p| format!("'{}'", p.display().to_string().replace('\'', "''")))
+        .collect();
     format!("$exes = @({})\n{FW_SCRIPT}", list.join(", "))
 }
 
@@ -270,12 +285,19 @@ async fn firewall_check(exes: &[PathBuf]) -> Option<Firewall> {
     let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
     let encoded = base64::engine::general_purpose::STANDARD.encode(utf16);
     let mut cmd = tokio::process::Command::new("powershell.exe");
-    cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", &encoded])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    cmd.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        &encoded,
+    ])
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null())
+    .kill_on_drop(true)
+    .creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     let out = match tokio::time::timeout(FW_TIMEOUT, cmd.output()).await {
         Ok(Ok(o)) => o,
         Ok(Err(e)) => {
@@ -302,71 +324,104 @@ async fn firewall_check(_exes: &[PathBuf]) -> Option<Firewall> {
 // ---------------------------------------------------------------- the report
 
 fn exe_name(p: &Option<PathBuf>, fallback: &str) -> String {
-    p.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| fallback.to_string())
+    p.as_ref()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 /// The report's lines (pure: tests feed it made-up facts).
 pub fn report(input: &Input, f: &Facts) -> Vec<String> {
-    let mut out = vec!["---- Diagnóstico de conexão do servidor ----".to_string()];
+    let mut out = vec!["---- Server connection diagnostics ----".to_string()];
     let mut todo: Vec<String> = Vec::new();
-    let ports = format!("TCP {}, {} e {} e UDP {}", input.hub_port, input.signal_port, input.rtc_tcp_port, input.rtc_udp_port);
+    let ports = format!(
+        "TCP {}, {} and {} and UDP {}",
+        input.hub_port, input.signal_port, input.rtc_tcp_port, input.rtc_udp_port
+    );
 
-    out.push(format!("Escutando em: {}", crate::listen::describe(&input.addrs, input.dual_stack)));
+    out.push(format!(
+        "Listening on: {}",
+        crate::listen::describe(&input.addrs, input.dual_stack)
+    ));
 
     // IPv6.
     match (f.ipv6, input.listens_on_ipv6()) {
         (Some(v6), true) => {
-            out.push(format!("IPv6 público deste PC: {v6}"));
+            out.push(format!("This PC's public IPv6: {v6}"));
             todo.push(format!(
-                "Amigos com IPv6 entram por [{v6}]:{} sem abrir portas no roteador (os convites criados neste servidor já levam esse endereço, se o public_host do config.toml estiver vazio). Se não der, o roteador pode estar bloqueando IPv6 vindo de fora: procure \"firewall IPv6\" nas configurações dele.",
+                "Friends with IPv6 can join at [{v6}]:{} without router port forwarding (invites created on this server include this address when public_host in config.toml is empty). If it fails, your router may block incoming IPv6: check its \"IPv6 firewall\" settings.",
                 input.hub_port
             ));
         }
         (Some(v6), false) => {
-            out.push(format!("IPv6 público deste PC: {v6} (mas o servidor NÃO escuta em IPv6)"));
+            out.push(format!(
+                "This PC's public IPv6: {v6} (but the server does NOT listen on IPv6)"
+            ));
             todo.push("Para aceitar IPv6, use bind = \"[::]:7890\" no data\\config.toml e tire o ipv6 = false (se houver).".into());
         }
-        (None, _) => out.push("IPv6 público deste PC: nenhum (a operadora ou o roteador não entregam IPv6 a este PC).".into()),
+        (None, _) => out.push(
+            "This PC's public IPv6: none (the ISP or router does not provide IPv6 to this PC)."
+                .into(),
+        ),
     }
 
     // IPv4.
     let lan = f.lan.map(|ip| format!(" ({ip})")).unwrap_or_default();
     match (f.reach, f.public_v4) {
         (Some(Reach::Cgnat(_)), v4) => {
-            out.push(format!("IPv4 público: {} (esta internet está atrás de CGNAT: o IPv4 é dividido com outros clientes da operadora).", v4.map_or("?".into(), |ip| ip.to_string())));
-            todo.push("CGNAT: abrir portas no roteador não adianta pelo IPv4. Use o IPv6 (se houver) ou uma VPN (Tailscale ou ZeroTier), ou peça IP público à operadora.".into());
+            out.push(format!("Public IPv4: {} (this connection is behind CGNAT: the IPv4 is shared with other ISP customers).", v4.map_or("?".into(), |ip| ip.to_string())));
+            todo.push("CGNAT: router port forwarding will not work over IPv4. Use IPv6 (if available), a VPN (Tailscale or ZeroTier), or ask your ISP for a public IP.".into());
         }
         (Some(Reach::Open), Some(v4)) => {
-            out.push(format!("IPv4 público: {v4} (o roteador responde por UPnP)."));
-            todo.push(format!("Pelo IPv4: redirecione no roteador as portas {ports} para este PC{lan}, ou use uma VPN (Tailscale ou ZeroTier)."));
+            out.push(format!(
+                "Public IPv4: {v4} (the router responds over UPnP)."
+            ));
+            todo.push(format!("For IPv4: forward ports {ports} on your router to this PC{lan}, or use a VPN (Tailscale or ZeroTier)."));
         }
         (Some(Reach::Direct), v4) => {
-            out.push(format!("IPv4 público: {} (direto neste PC, sem roteador no caminho).", v4.map_or("?".into(), |ip| ip.to_string())));
+            out.push(format!(
+                "Public IPv4: {} (directly on this PC, no router in between).",
+                v4.map_or("?".into(), |ip| ip.to_string())
+            ));
         }
         (Some(Reach::Unknown), v4) => {
-            out.push(format!("IPv4 público: {} (o roteador não respondeu por UPnP).", v4.map_or("?".into(), |ip| ip.to_string())));
-            todo.push(format!("Pelo IPv4: confira se as portas {ports} estão redirecionadas no roteador para este PC{lan}. Se a operadora usar CGNAT, isso não basta: use o IPv6 ou uma VPN."));
+            out.push(format!(
+                "Public IPv4: {} (the router did not respond over UPnP).",
+                v4.map_or("?".into(), |ip| ip.to_string())
+            ));
+            todo.push(format!("For IPv4: check that ports {ports} are forwarded to this PC{lan}. If your ISP uses CGNAT, that is not enough: use IPv6 or a VPN."));
         }
-        (Some(Reach::Offline), _) | (None, _) => out.push("IPv4 público: desconhecido (nenhum servidor da internet respondeu).".into()),
-        (Some(Reach::Open), None) => out.push("IPv4 público: desconhecido.".into()),
+        (Some(Reach::Offline), _) | (None, _) => {
+            out.push("Public IPv4: unknown (no internet server responded).".into())
+        }
+        (Some(Reach::Open), None) => out.push("Public IPv4: unknown.".into()),
     }
 
     // Windows Firewall.
     match &f.firewall {
         None if cfg!(windows) => {
-            out.push("Firewall do Windows: não deu para conferir.".into());
-            todo.push("Se os amigos não conseguirem entrar, rode liberar-firewall.bat (na pasta do servidor).".into());
+            out.push("Windows Firewall: could not check.".into());
+            todo.push(
+                "If friends cannot join, run allow-firewall.bat (in the server folder).".into(),
+            );
         }
         None => {}
         Some(fw) => {
             let active = fw.active();
-            let nets: Vec<String> = fw.networks.iter().map(|(p, name)| format!("\"{name}\" ({})", p.pt())).collect();
+            let nets: Vec<String> = fw
+                .networks
+                .iter()
+                .map(|(p, name)| format!("\"{name}\" ({})", p.label()))
+                .collect();
             if nets.is_empty() {
-                out.push("Rede atual: nenhuma conectada.".into());
+                out.push("Current network: none connected.".into());
             } else {
-                out.push(format!("Rede atual: {}", nets.join(", ")));
+                out.push(format!("Current network: {}", nets.join(", ")));
             }
-            let names = [exe_name(&input.server_exe, "concord-server.exe"), exe_name(&input.livekit_exe, "livekit-server.exe")];
+            let names = [
+                exe_name(&input.server_exe, "concord-server.exe"),
+                exe_name(&input.livekit_exe, "livekit-server.exe"),
+            ];
             let checked = if input.livekit_exe.is_some() { 2 } else { 1 };
             let mut blocked_somewhere = false;
             let mut only_private = false;
@@ -377,40 +432,44 @@ pub fn report(input: &Input, f: &Facts) -> Vec<String> {
                         let v = fw.verdict(i, *p);
                         if !matches!(v, Verdict::Allowed | Verdict::FirewallOff) {
                             blocked_somewhere = true;
-                            if *p == Profile::Public && fw.verdict(i, Profile::Private) == Verdict::Allowed {
+                            if *p == Profile::Public
+                                && fw.verdict(i, Profile::Private) == Verdict::Allowed
+                            {
                                 only_private = true;
                             }
                         }
                         let what = match v {
-                            Verdict::Allowed => "liberado",
-                            Verdict::Blocked => "BLOQUEADO",
-                            Verdict::NoRule => "sem regra (bloqueado)",
-                            Verdict::FirewallOff => "firewall desligado",
+                            Verdict::Allowed => "allowed",
+                            Verdict::Blocked => "BLOCKED",
+                            Verdict::NoRule => "no rule (blocked)",
+                            Verdict::FirewallOff => "firewall off",
                         };
-                        format!("{what} na rede {}", p.pt())
+                        format!("{what} on {} network", p.label())
                     })
                     .collect();
                 if per.is_empty() {
-                    out.push(format!("Firewall do Windows: {name}: sem rede para conferir."));
+                    out.push(format!("Windows Firewall: {name}: no network to check."));
                 } else {
-                    out.push(format!("Firewall do Windows: {name}: {}.", per.join(", ")));
+                    out.push(format!("Windows Firewall: {name}: {}.", per.join(", ")));
                 }
             }
             if active.contains(&Profile::Public) {
-                out.push("Atenção: a rede deste PC está marcada como Pública.".into());
+                out.push("Warning: this PC's network is marked Public.".into());
             }
             if only_private {
-                todo.push("O Firewall só libera o servidor em redes Privadas, e a rede deste PC está como Pública: rode liberar-firewall.bat (libera em todas as redes) ou marque a rede como Privada nas Configurações do Windows.".into());
+                todo.push("The firewall only allows the server on Private networks, but this PC's network is Public: run allow-firewall.bat (allows all networks), or mark the network Private in Windows Settings.".into());
             } else if blocked_somewhere {
-                todo.push("Rode liberar-firewall.bat (na pasta do servidor) e aceite o pedido do Windows: ele libera o servidor e a voz no Firewall do Windows em todas as redes.".into());
+                todo.push("Run allow-firewall.bat (in the server folder) and accept the Windows prompt: it allows the server and voice through Windows Firewall on all networks.".into());
             }
         }
     }
 
     if todo.is_empty() {
-        out.push("Tudo certo daqui. Se alguém não conseguir entrar, veja o LEIA-ME-SERVIDOR.txt.".into());
+        out.push(
+            "Everything looks fine here. If someone cannot join, see README-SERVER.txt.".into(),
+        );
     } else {
-        out.push("O que fazer:".into());
+        out.push("What to do:".into());
         out.extend(todo.into_iter().map(|t| format!("  - {t}")));
     }
     out.push("--------------------------------------------".into());
@@ -448,14 +507,34 @@ mod tests {
     fn firewall_output_is_parsed() {
         let fw = parse_firewall(ONLY_PRIVATE).unwrap();
         assert_eq!(fw.rules.len(), 5);
-        assert_eq!(fw.rules[3], Rule { exe: 1, enabled: false, inbound: true, allow: true, profiles: vec![Profile::Public] });
+        assert_eq!(
+            fw.rules[3],
+            Rule {
+                exe: 1,
+                enabled: false,
+                inbound: true,
+                allow: true,
+                profiles: vec![Profile::Public]
+            }
+        );
         assert_eq!(fw.rules[4].profiles, Profile::ALL, "Any = every profile");
-        assert_eq!(fw.on, [(Profile::Domain, true), (Profile::Private, true), (Profile::Public, true)]);
+        assert_eq!(
+            fw.on,
+            [
+                (Profile::Domain, true),
+                (Profile::Private, true),
+                (Profile::Public, true)
+            ]
+        );
         assert_eq!(fw.networks, [(Profile::Public, "Rede 2".to_string())]);
         assert_eq!(fw.active(), [Profile::Public]);
         for exe in 0..2 {
             assert_eq!(fw.verdict(exe, Profile::Private), Verdict::Allowed);
-            assert_eq!(fw.verdict(exe, Profile::Public), Verdict::NoRule, "disabled and outbound rules do not count");
+            assert_eq!(
+                fw.verdict(exe, Profile::Public),
+                Verdict::NoRule,
+                "disabled and outbound rules do not count"
+            );
         }
         // Cut short: no answer at all rather than a wrong one.
         assert_eq!(parse_firewall("RULE\t0\tTrue\tInbound\tAllow\tAny\n"), None);
@@ -490,15 +569,24 @@ mod tests {
         };
         let text = report(&input(), &facts).join("\n");
         println!("{text}");
-        assert!(text.contains("Escutando em: [::]:7890 (IPv4 e IPv6)"), "{text}");
-        assert!(text.contains("IPv6 público deste PC: 3fff::10"), "{text}");
+        assert!(
+            text.contains("Listening on: [::]:7890 (IPv4 and IPv6)"),
+            "{text}"
+        );
+        assert!(text.contains("This PC's public IPv6: 3fff::10"), "{text}");
         assert!(text.contains("[3fff::10]:7890"), "{text}");
         assert!(text.contains("CGNAT"), "{text}");
         assert!(text.contains("VPN"), "{text}");
-        assert!(text.contains("concord-server.exe: sem regra (bloqueado) na rede Pública"), "{text}");
-        assert!(text.contains("livekit-server.exe: sem regra (bloqueado) na rede Pública"), "{text}");
-        assert!(text.contains("marcada como Pública"), "{text}");
-        assert!(text.contains("rode liberar-firewall.bat"), "{text}");
+        assert!(
+            text.contains("concord-server.exe: no rule (blocked) on Public network"),
+            "{text}"
+        );
+        assert!(
+            text.contains("livekit-server.exe: no rule (blocked) on Public network"),
+            "{text}"
+        );
+        assert!(text.contains("marked Public"), "{text}");
+        assert!(text.contains("run allow-firewall.bat"), "{text}");
 
         // All fine: an open router, both programs allowed everywhere, no IPv6.
         let fine = Facts {
@@ -509,31 +597,58 @@ mod tests {
             firewall: parse_firewall("RULE\t0\tTrue\tInbound\tAllow\tAny\nRULE\t1\tTrue\tInbound\tAllow\tAny\nNET\tPrivate\tCasa\nEND"),
         };
         let text = report(&input(), &fine).join("\n");
-        assert!(text.contains("concord-server.exe: liberado na rede Privada"), "{text}");
-        assert!(!text.contains("liberar-firewall.bat"), "{text}");
-        assert!(text.contains("TCP 7890, 7880 e 7881 e UDP 7882 para este PC (192.168.0.20)"), "{text}");
-        assert!(text.contains("nenhum"), "{text}");
+        assert!(
+            text.contains("concord-server.exe: allowed on Private network"),
+            "{text}"
+        );
+        assert!(!text.contains("allow-firewall.bat"), "{text}");
+        assert!(
+            text.contains(
+                "TCP 7890, 7880 and 7881 and UDP 7882 on your router to this PC (192.168.0.20)"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("none"), "{text}");
 
         // IPv4 only (ipv6 = false) on a PC that has IPv6; the firewall could not be read.
         let mut v4only = input();
         v4only.addrs = vec!["0.0.0.0:7890".parse().unwrap()];
         v4only.dual_stack = false;
-        let facts = Facts { ipv6: Some("3fff::10".parse().unwrap()), ..Facts::default() };
+        let facts = Facts {
+            ipv6: Some("3fff::10".parse().unwrap()),
+            ..Facts::default()
+        };
         let text = report(&v4only, &facts).join("\n");
         assert!(text.contains("0.0.0.0:7890 (IPv4)"), "{text}");
-        assert!(text.contains("NÃO escuta em IPv6"), "{text}");
+        assert!(text.contains("NOT listen on IPv6"), "{text}");
         if cfg!(windows) {
-            assert!(text.contains("não deu para conferir"), "{text}");
+            assert!(text.contains("could not check"), "{text}");
         }
     }
 
     #[test]
     fn the_script_quotes_paths() {
-        let s = firewall_script(&[PathBuf::from(r"C:\O'Brien\bin\concord-server.exe"), PathBuf::from(r"D:\x\livekit-server.exe")]);
-        assert!(s.starts_with(r"$exes = @('C:\O''Brien\bin\concord-server.exe', 'D:\x\livekit-server.exe')"), "{s}");
-        assert!(s.contains("Get-NetFirewallApplicationFilter") && s.trim_end().ends_with("\"END\""), "{s}");
+        let s = firewall_script(&[
+            PathBuf::from(r"C:\O'Brien\bin\concord-server.exe"),
+            PathBuf::from(r"D:\x\livekit-server.exe"),
+        ]);
+        assert!(
+            s.starts_with(
+                r"$exes = @('C:\O''Brien\bin\concord-server.exe', 'D:\x\livekit-server.exe')"
+            ),
+            "{s}"
+        );
+        assert!(
+            s.contains("Get-NetFirewallApplicationFilter") && s.trim_end().ends_with("\"END\""),
+            "{s}"
+        );
         // Read-only: nothing that changes a rule.
-        for verb in ["New-NetFirewall", "Set-NetFirewall", "Remove-NetFirewall", "netsh"] {
+        for verb in [
+            "New-NetFirewall",
+            "Set-NetFirewall",
+            "Remove-NetFirewall",
+            "netsh",
+        ] {
             assert!(!s.contains(verb), "{verb}");
         }
     }

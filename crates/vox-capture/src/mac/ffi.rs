@@ -28,7 +28,8 @@ impl CMTime {
     /// Microseconds, when the time is valid and numeric.
     pub fn micros(&self) -> Option<i64> {
         // kCMTimeFlags_Valid, and none of the infinities / indefinite.
-        (self.flags & 1 != 0 && self.flags & 0x1C == 0 && self.timescale > 0).then(|| (self.value as i128 * 1_000_000 / self.timescale as i128) as i64)
+        (self.flags & 1 != 0 && self.flags & 0x1C == 0 && self.timescale > 0)
+            .then(|| (self.value as i128 * 1_000_000 / self.timescale as i128) as i64)
     }
 }
 
@@ -130,8 +131,17 @@ extern "C" {
     pub fn CVPixelBufferGetBaseAddressOfPlane(pb: CVPixelBufferRef, plane: usize) -> *mut u8;
     pub fn CVPixelBufferGetBytesPerRowOfPlane(pb: CVPixelBufferRef, plane: usize) -> usize;
     pub fn CVPixelBufferGetHeightOfPlane(pb: CVPixelBufferRef, plane: usize) -> usize;
-    pub fn CVPixelBufferPoolCreate(allocator: CFTypeRef, pool_attrs: CFDictionaryRef, pb_attrs: CFDictionaryRef, out: *mut CVPixelBufferPoolRef) -> i32;
-    pub fn CVPixelBufferPoolCreatePixelBuffer(allocator: CFTypeRef, pool: CVPixelBufferPoolRef, out: *mut CVPixelBufferRef) -> i32;
+    pub fn CVPixelBufferPoolCreate(
+        allocator: CFTypeRef,
+        pool_attrs: CFDictionaryRef,
+        pb_attrs: CFDictionaryRef,
+        out: *mut CVPixelBufferPoolRef,
+    ) -> i32;
+    pub fn CVPixelBufferPoolCreatePixelBuffer(
+        allocator: CFTypeRef,
+        pool: CVPixelBufferPoolRef,
+        out: *mut CVPixelBufferRef,
+    ) -> i32;
     pub fn CVPixelBufferPoolRelease(pool: CVPixelBufferPoolRef);
     pub static kCVPixelBufferPixelFormatTypeKey: CFStringRef;
     pub static kCVPixelBufferWidthKey: CFStringRef;
@@ -143,7 +153,8 @@ extern "C" {
 extern "C" {
     pub fn CMSampleBufferGetImageBuffer(sb: CMSampleBufferRef) -> CVPixelBufferRef;
     pub fn CMSampleBufferGetPresentationTimeStamp(sb: CMSampleBufferRef) -> CMTime;
-    pub fn CMSampleBufferGetSampleAttachmentsArray(sb: CMSampleBufferRef, create: u8) -> CFArrayRef;
+    pub fn CMSampleBufferGetSampleAttachmentsArray(sb: CMSampleBufferRef, create: u8)
+        -> CFArrayRef;
     pub fn CMSampleBufferGetFormatDescription(sb: CMSampleBufferRef) -> CMFormatDescriptionRef;
     pub fn CMSampleBufferGetNumSamples(sb: CMSampleBufferRef) -> isize;
     pub fn CMSampleBufferIsValid(sb: CMSampleBufferRef) -> u8;
@@ -157,8 +168,11 @@ extern "C" {
         flags: u32,
         block_buffer_out: *mut CFTypeRef,
     ) -> i32;
-    pub fn CMAudioFormatDescriptionGetStreamBasicDescription(desc: CMFormatDescriptionRef) -> *const AudioStreamBasicDescription;
-    pub fn CMVideoFormatDescriptionGetDimensions(desc: CMFormatDescriptionRef) -> CMVideoDimensions;
+    pub fn CMAudioFormatDescriptionGetStreamBasicDescription(
+        desc: CMFormatDescriptionRef,
+    ) -> *const AudioStreamBasicDescription;
+    pub fn CMVideoFormatDescriptionGetDimensions(desc: CMFormatDescriptionRef)
+        -> CMVideoDimensions;
     pub fn CMFormatDescriptionGetMediaSubType(desc: CMFormatDescriptionRef) -> u32;
 }
 
@@ -174,13 +188,22 @@ extern "C" {
     pub fn CGDisplayModeRelease(mode: *mut c_void);
     pub fn CGColorSpaceCreateDeviceRGB() -> *mut c_void;
     pub fn CGColorSpaceRelease(space: *mut c_void);
-    pub fn CGBitmapContextCreate(data: *mut c_void, w: usize, h: usize, bits_per_component: usize, bytes_per_row: usize, space: *mut c_void, info: u32) -> *mut c_void;
+    pub fn CGBitmapContextCreate(
+        data: *mut c_void,
+        w: usize,
+        h: usize,
+        bits_per_component: usize,
+        bytes_per_row: usize,
+        space: *mut c_void,
+        info: u32,
+    ) -> *mut c_void;
     pub fn CGContextDrawImage(ctx: *mut c_void, rect: CGRect, image: *const c_void);
     pub fn CGContextRelease(ctx: *mut c_void);
     pub fn CGImageGetWidth(image: *const c_void) -> usize;
     pub fn CGImageGetHeight(image: *const c_void) -> usize;
     pub static kCGDisplayStreamYCbCrMatrix_ITU_R_709_2: CFStringRef;
-    pub fn CGRectMakeWithDictionaryRepresentation(dict: CFDictionaryRef, rect: *mut CGRect) -> bool;
+    pub fn CGRectMakeWithDictionaryRepresentation(dict: CFDictionaryRef, rect: *mut CGRect)
+        -> bool;
 }
 
 #[repr(C)]
@@ -193,7 +216,13 @@ struct MachTimebaseInfo {
 extern "C" {
     fn mach_absolute_time() -> u64;
     fn mach_timebase_info(info: *mut MachTimebaseInfo) -> i32;
-    fn sysctlbyname(name: *const std::ffi::c_char, oldp: *mut c_void, oldlenp: *mut usize, newp: *mut c_void, newlen: usize) -> i32;
+    fn sysctlbyname(
+        name: *const std::ffi::c_char,
+        oldp: *mut c_void,
+        oldlenp: *mut usize,
+        newp: *mut c_void,
+        newlen: usize,
+    ) -> i32;
 }
 
 /// Host time (the clock of capture timestamps: `mach_absolute_time`) in microseconds.
@@ -216,15 +245,33 @@ pub fn sysctl_string(name: &std::ffi::CStr) -> Option<String> {
     let mut len = 0usize;
     // SAFETY: size query, then a read into a buffer of that size.
     unsafe {
-        if sysctlbyname(name.as_ptr(), std::ptr::null_mut(), &mut len, std::ptr::null_mut(), 0) != 0 || len == 0 {
+        if sysctlbyname(
+            name.as_ptr(),
+            std::ptr::null_mut(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        ) != 0
+            || len == 0
+        {
             return None;
         }
         let mut buf = vec![0u8; len];
-        if sysctlbyname(name.as_ptr(), buf.as_mut_ptr().cast(), &mut len, std::ptr::null_mut(), 0) != 0 {
+        if sysctlbyname(
+            name.as_ptr(),
+            buf.as_mut_ptr().cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        ) != 0
+        {
             return None;
         }
         buf.truncate(len);
-        let s = String::from_utf8_lossy(&buf).trim_end_matches('\0').trim().to_string();
+        let s = String::from_utf8_lossy(&buf)
+            .trim_end_matches('\0')
+            .trim()
+            .to_string();
         (!s.is_empty()).then_some(s)
     }
 }

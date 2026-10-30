@@ -33,7 +33,11 @@ use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::window::{Window, WindowId};
 
 enum Cmd {
-    Open { key: String, title: String, notify: UnboundedSender<ViewerNotice> },
+    Open {
+        key: String,
+        title: String,
+        notify: UnboundedSender<ViewerNotice>,
+    },
     Close,
     Frame,
 }
@@ -194,7 +198,10 @@ impl Viewer {
 
     /// Get (starting on first use) the viewer thread.
     pub fn get() -> Result<Viewer> {
-        VIEWER.get_or_init(spawn_viewer).clone().map_err(|e| anyhow!(e))
+        VIEWER
+            .get_or_init(spawn_viewer)
+            .clone()
+            .map_err(|e| anyhow!(e))
     }
 
     pub fn is_native(&self) -> bool {
@@ -210,23 +217,50 @@ impl Viewer {
 
     /// Start showing the stream `key` (opening it again just renames it). The winit viewer has
     /// a single window: a new key replaces the previous stream there.
-    pub fn open(&self, key: &str, title: &str, notify: UnboundedSender<ViewerNotice>) -> ViewerStream {
+    pub fn open(
+        &self,
+        key: &str,
+        title: &str,
+        notify: UnboundedSender<ViewerNotice>,
+    ) -> ViewerStream {
         match &self.0 {
             Impl::Winit(v) => {
-                let _ = v.proxy.send_event(Cmd::Open { key: key.to_string(), title: title.to_string(), notify });
+                let _ = v.proxy.send_event(Cmd::Open {
+                    key: key.to_string(),
+                    title: title.to_string(),
+                    notify,
+                });
                 ViewerStream(StreamImpl::Winit(v.clone()))
             }
             #[cfg(windows)]
-            Impl::Native(v) => ViewerStream(StreamImpl::Native(v.open(key, title, OPEN_INLINE.load(Ordering::Acquire), Default::default(), notify))),
+            Impl::Native(v) => ViewerStream(StreamImpl::Native(v.open(
+                key,
+                title,
+                OPEN_INLINE.load(Ordering::Acquire),
+                Default::default(),
+                notify,
+            ))),
             #[cfg(target_os = "macos")]
-            Impl::Tex(v) => ViewerStream(StreamImpl::Tex(v.open(key, title, OPEN_INLINE.load(Ordering::Acquire), TileStyle::default(), false, notify))),
+            Impl::Tex(v) => ViewerStream(StreamImpl::Tex(v.open(
+                key,
+                title,
+                OPEN_INLINE.load(Ordering::Acquire),
+                TileStyle::default(),
+                false,
+                notify,
+            ))),
         }
     }
 
     /// A video tile that lives only inside the app (a webcam): shown once the app attaches a
     /// [`super::host::VideoHost`] for `key`, never in its own window. The winit viewer has no
     /// tiles: frames are dropped there.
-    pub fn open_tile(&self, key: &str, style: TileStyle, notify: UnboundedSender<ViewerNotice>) -> ViewerStream {
+    pub fn open_tile(
+        &self,
+        key: &str,
+        style: TileStyle,
+        notify: UnboundedSender<ViewerNotice>,
+    ) -> ViewerStream {
         match &self.0 {
             Impl::Winit(_) => {
                 let _ = (key, style, notify);
@@ -234,11 +268,16 @@ impl Viewer {
             }
             #[cfg(windows)]
             Impl::Native(v) => {
-                let style = super::d3d::DrawStyle { mirror: style.mirror, fill: style.fill };
+                let style = super::d3d::DrawStyle {
+                    mirror: style.mirror,
+                    fill: style.fill,
+                };
                 ViewerStream(StreamImpl::Native(v.open(key, key, true, style, notify)))
             }
             #[cfg(target_os = "macos")]
-            Impl::Tex(v) => ViewerStream(StreamImpl::Tex(v.open(key, key, true, style, true, notify))),
+            Impl::Tex(v) => {
+                ViewerStream(StreamImpl::Tex(v.open(key, key, true, style, true, notify)))
+            }
         }
     }
 
@@ -336,7 +375,10 @@ impl Viewer {
             Impl::Native(v) => v.shared(key).map(|s| StreamState {
                 popped_out: s.popped_out.load(Ordering::Acquire),
                 popout_hwnd: s.popout_hwnd.load(Ordering::Acquire),
-                video: (s.video_w.load(Ordering::Relaxed), s.video_h.load(Ordering::Relaxed)),
+                video: (
+                    s.video_w.load(Ordering::Relaxed),
+                    s.video_h.load(Ordering::Relaxed),
+                ),
                 presented: s.presented.load(Ordering::Relaxed),
                 fullscreen: s.fullscreen.load(Ordering::Acquire),
                 max_fps: s.max_fps.load(Ordering::Relaxed),
@@ -345,7 +387,10 @@ impl Viewer {
             Impl::Tex(v) => v.shared(key).map(|s| StreamState {
                 popped_out: s.popped_out.load(Ordering::Acquire),
                 popout_hwnd: 0,
-                video: (s.video_w.load(Ordering::Relaxed), s.video_h.load(Ordering::Relaxed)),
+                video: (
+                    s.video_w.load(Ordering::Relaxed),
+                    s.video_h.load(Ordering::Relaxed),
+                ),
                 presented: s.presented.load(Ordering::Relaxed),
                 fullscreen: s.fullscreen.load(Ordering::Acquire),
                 max_fps: s.max_fps.load(Ordering::Relaxed),
@@ -403,7 +448,11 @@ fn spawn_viewer() -> std::result::Result<Viewer, String> {
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 fn spawn_winit_viewer() -> std::result::Result<WinitViewer, String> {
     let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<EventLoopProxy<Cmd>, String>>();
-    let mailbox = Arc::new(Mailbox { frame: Mutex::new(None), pending: AtomicBool::new(false), replaced: AtomicU64::new(0) });
+    let mailbox = Arc::new(Mailbox {
+        frame: Mutex::new(None),
+        pending: AtomicBool::new(false),
+        replaced: AtomicU64::new(0),
+    });
     let mb = mailbox.clone();
     std::thread::Builder::new()
         .name("vox-viewer".into())
@@ -423,7 +472,9 @@ fn spawn_winit_viewer() -> std::result::Result<WinitViewer, String> {
             };
             event_loop.set_control_flow(ControlFlow::Wait);
             let _ = tx.send(Ok(event_loop.create_proxy()));
-            let force_soft = std::env::var("VOX_VIEWER").map(|v| v.eq_ignore_ascii_case("soft")).unwrap_or(false);
+            let force_soft = std::env::var("VOX_VIEWER")
+                .map(|v| v.eq_ignore_ascii_case("soft"))
+                .unwrap_or(false);
             let mut app = App {
                 mailbox: mb,
                 win: None,
@@ -505,7 +556,9 @@ impl App {
             w.window.set_title(title);
             return;
         }
-        let attrs = Window::default_attributes().with_title(title).with_inner_size(LogicalSize::new(1280.0, 720.0));
+        let attrs = Window::default_attributes()
+            .with_title(title)
+            .with_inner_size(LogicalSize::new(1280.0, 720.0));
         let window = match el.create_window(attrs) {
             Ok(w) => Rc::new(w),
             Err(e) => {
@@ -513,9 +566,15 @@ impl App {
                 return;
             }
         };
-        let Some(backend) = self.make_backend(&window) else { return };
+        let Some(backend) = self.make_backend(&window) else {
+            return;
+        };
         info!(title, renderer = backend.name(), "viewer window opened");
-        self.win = Some(Win { window, backend: Some(backend), sized_to_video: false });
+        self.win = Some(Win {
+            window,
+            backend: Some(backend),
+            sized_to_video: false,
+        });
     }
 
     fn make_backend(&mut self, window: &Rc<Window>) -> Option<Backend> {
@@ -615,7 +674,12 @@ impl App {
                 }
             }
             Some(Backend::Soft { surface, .. }) => {
-                if draw_soft(surface, size, self.last.as_ref().map(|f| f.buffer.as_ref()), &mut self.scaled) {
+                if draw_soft(
+                    surface,
+                    size,
+                    self.last.as_ref().map(|f| f.buffer.as_ref()),
+                    &mut self.scaled,
+                ) {
                     self.stats.presented += 1;
                     self.stats.uploads += 1;
                 }
@@ -648,7 +712,10 @@ impl App {
             window = format!("{}x{}", size.width, size.height),
             "viewer stats"
         );
-        self.stats = ViewStats { since: Some(now), ..Default::default() };
+        self.stats = ViewStats {
+            since: Some(now),
+            ..Default::default()
+        };
     }
 }
 
@@ -667,7 +734,10 @@ fn soft_backend(window: &Rc<Window>) -> Option<Backend> {
             return None;
         }
     };
-    Some(Backend::Soft { surface, _context: context })
+    Some(Backend::Soft {
+        surface,
+        _context: context,
+    })
 }
 
 #[cfg(windows)]
@@ -693,11 +763,15 @@ pub(super) fn draw_soft<D: HasDisplayHandle, W: HasWindowHandle>(
     last: Option<&dyn VideoBuffer>,
     scaled: &mut Vec<u8>,
 ) -> bool {
-    let (Some(ww), Some(wh)) = (NonZeroU32::new(size.width), NonZeroU32::new(size.height)) else { return false };
+    let (Some(ww), Some(wh)) = (NonZeroU32::new(size.width), NonZeroU32::new(size.height)) else {
+        return false;
+    };
     if surface.resize(ww, wh).is_err() {
         return false;
     }
-    let Ok(mut buf) = surface.buffer_mut() else { return false };
+    let Ok(mut buf) = surface.buffer_mut() else {
+        return false;
+    };
     let (ww, wh) = (ww.get() as usize, wh.get() as usize);
     let Some(frame) = last else {
         buf.fill(0);
@@ -734,19 +808,44 @@ pub(super) fn draw_soft<D: HasDisplayHandle, W: HasWindowHandle>(
 
 /// Convert a decoded frame into ARGB (softbuffer 0RGB byte order), optionally scaling to `to`.
 /// Returns false for buffer types we cannot read (e.g. GPU-native buffers).
-fn convert_to_argb(src: &dyn VideoBuffer, to: Option<(usize, usize)>, dst: &mut [u8], dst_stride: usize) -> bool {
+fn convert_to_argb(
+    src: &dyn VideoBuffer,
+    to: Option<(usize, usize)>,
+    dst: &mut [u8],
+    dst_stride: usize,
+) -> bool {
     let (fw, fh) = (src.width(), src.height());
     match to {
         None => {
             if let Some(i) = src.as_i420() {
                 let (sy, su, sv) = i.strides();
                 let (py, pu, pv) = i.data();
-                yuv_helper::i420_to_argb(py, sy, pu, su, pv, sv, dst, dst_stride as u32, fw as i32, fh as i32);
+                yuv_helper::i420_to_argb(
+                    py,
+                    sy,
+                    pu,
+                    su,
+                    pv,
+                    sv,
+                    dst,
+                    dst_stride as u32,
+                    fw as i32,
+                    fh as i32,
+                );
                 true
             } else if let Some(n) = src.as_nv12() {
                 let (sy, suv) = n.strides();
                 let (py, puv) = n.data();
-                yuv_helper::nv12_to_argb(py, sy, puv, suv, dst, dst_stride as u32, fw as i32, fh as i32);
+                yuv_helper::nv12_to_argb(
+                    py,
+                    sy,
+                    puv,
+                    suv,
+                    dst,
+                    dst_stride as u32,
+                    fw as i32,
+                    fh as i32,
+                );
                 true
             } else {
                 false
@@ -769,7 +868,9 @@ fn convert_to_argb(src: &dyn VideoBuffer, to: Option<(usize, usize)>, dst: &mut 
                 } else if let Some(n) = src.as_nv12() {
                     let (sy, suv) = n.strides();
                     let (py, puv) = n.data();
-                    yuv_helper::nv12_to_i420(py, sy, puv, suv, dy, dsy, du, dsu, dv, dsv, fw as i32, fh as i32);
+                    yuv_helper::nv12_to_i420(
+                        py, sy, puv, suv, dy, dsy, du, dsu, dv, dsv, fw as i32, fh as i32,
+                    );
                 } else {
                     return false;
                 }
@@ -777,7 +878,18 @@ fn convert_to_argb(src: &dyn VideoBuffer, to: Option<(usize, usize)>, dst: &mut 
             let scaled = full.scale(w as i32, h as i32);
             let (sy, su, sv) = scaled.strides();
             let (py, pu, pv) = scaled.data();
-            yuv_helper::i420_to_argb(py, sy, pu, su, pv, sv, dst, dst_stride as u32, w as i32, h as i32);
+            yuv_helper::i420_to_argb(
+                py,
+                sy,
+                pu,
+                su,
+                pv,
+                sv,
+                dst,
+                dst_stride as u32,
+                w as i32,
+                h as i32,
+            );
             true
         }
     }
@@ -796,9 +908,17 @@ fn fit_rect(fw: usize, fh: usize, ww: usize, wh: usize) -> (usize, usize, usize,
     (dw, dh, (ww - dw) / 2, (wh - dh) / 2)
 }
 
-fn copy_plane(src: &[u8], src_stride: usize, dst: &mut [u8], dst_stride: usize, width: usize, rows: usize) {
+fn copy_plane(
+    src: &[u8],
+    src_stride: usize,
+    dst: &mut [u8],
+    dst_stride: usize,
+    width: usize,
+    rows: usize,
+) {
     for r in 0..rows {
-        dst[r * dst_stride..r * dst_stride + width].copy_from_slice(&src[r * src_stride..r * src_stride + width]);
+        dst[r * dst_stride..r * dst_stride + width]
+            .copy_from_slice(&src[r * src_stride..r * src_stride + width]);
     }
 }
 
@@ -828,7 +948,9 @@ impl ApplicationHandler<Cmd> for App {
                         win.sized_to_video = true;
                         let (fw, fh) = (frame.buffer.width() as f64, frame.buffer.height() as f64);
                         let s = (1600.0 / fw).min(900.0 / fh).min(1.0);
-                        let _ = win.window.request_inner_size(PhysicalSize::new(fw * s, fh * s));
+                        let _ = win
+                            .window
+                            .request_inner_size(PhysicalSize::new(fw * s, fh * s));
                     }
                     self.last = Some(frame);
                     win.window.request_redraw();
@@ -844,7 +966,9 @@ impl ApplicationHandler<Cmd> for App {
         match event {
             WindowEvent::CloseRequested => {
                 if let Some(n) = self.notify.take() {
-                    let _ = n.send(ViewerNotice::Closed { key: self.key.clone() });
+                    let _ = n.send(ViewerNotice::Closed {
+                        key: self.key.clone(),
+                    });
                 }
                 self.close();
             }
@@ -874,7 +998,12 @@ mod tests {
         let (dw, dh, x0, y0) = fit_rect(960, 600, 1280, 720);
         assert_eq!((dw, dh), (1152, 720));
         assert_eq!((x0, y0), (64, 0));
-        for (fw, fh, ww, wh) in [(1919, 1081, 1600, 900), (3, 3, 2, 2), (1080, 1920, 1601, 899), (640, 480, 641, 481)] {
+        for (fw, fh, ww, wh) in [
+            (1919, 1081, 1600, 900),
+            (3, 3, 2, 2),
+            (1080, 1920, 1601, 899),
+            (640, 480, 641, 481),
+        ] {
             let (dw, dh, x0, y0) = fit_rect(fw, fh, ww, wh);
             assert!(x0 + dw <= ww && y0 + dh <= wh, "{fw}x{fh} in {ww}x{wh}");
             assert!((fw == ww && fh == wh) || (dw % 2 == 0 && dh % 2 == 0));

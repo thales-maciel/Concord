@@ -19,7 +19,12 @@ pub mod testmode;
 pub mod token;
 pub mod voice;
 
+pub use audio::{
+    AlertKind, GateConfig, GateMode, MicTest, MicTestConfig, NoiseControl, NoiseLevel, UiPlayer,
+    UserAudio, VoiceEffect, VoiceFxConfig, VoiceGate,
+};
 pub use golive::{ShareOptions, ShareSource};
 pub use hub::{HubClient, HubEvent, HubSender};
-pub use audio::{AlertKind, GateConfig, GateMode, MicTest, MicTestConfig, NoiseControl, NoiseLevel, UiPlayer, UserAudio, VoiceEffect, VoiceFxConfig, VoiceGate};
-pub use voice::{JoinError, JoinReport, JoinStep, VoiceConfig, VoiceEvent, VoiceSession, WatchLimit, MAX_WATCHED};
+pub use voice::{
+    JoinError, JoinReport, JoinStep, VoiceConfig, VoiceEvent, VoiceSession, WatchLimit, MAX_WATCHED,
+};

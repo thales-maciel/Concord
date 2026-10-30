@@ -1,19 +1,9 @@
-//! Calladex (v1.0.1): the owner's easter egg, a playful "Pokédex" of the server's members, signed.
-//!
-//! - In any chat input (a channel or a DM), the exact message `/calladex` is not sent: it opens the
-//!   card with one entry per member the app knows, in join order (the user ids grow as people first
-//!   log in): "#001", the avatar in its colour ring, the name, a "tipo" from the role, "Membro desde"
-//!   (when the app already has it, else "???") and a short line picked from [`LINES`] by the id.
-//!   A message that merely contains the word is sent as usual ([`is_command`]).
-//! - On the home screen, typing "calladex" with no field focused opens the credits flavour: just
-//!   the signature, since there are no members there.
-//!
-//! Purely local: it reads what the app already holds (no request to the hub, not even for a
-//! picture: only the ones already loaded are drawn), logs one debug line, and while closed it is
-//! `None` (nothing drawn, nothing kept).
-//! A child module of `app`.
+//! Local member-card easter egg. Exact `/calladex` messages open it instead of being sent;
+//! typing `calladex` on the unfocused home screen opens credits. Uses cached data only.
 
-use eframe::egui::{self, Align, Align2, Color32, Layout, Margin, Pos2, RichText, Sense, Stroke, Vec2};
+use eframe::egui::{
+    self, Align, Align2, Color32, Layout, Margin, Pos2, RichText, Sense, Stroke, Vec2,
+};
 use vox_proto::{Role, User, UserId};
 
 use super::{local_offset_min, name_color, App};
@@ -27,22 +17,22 @@ pub const COMMAND: &str = "/calladex";
 /// What opens it on the home screen (typed with no field focused).
 pub const SEQUENCE: &str = "calladex";
 /// The card's last line.
-pub const FOOTER: &str = "Calladex v1 · por Cezar Callado";
+pub const FOOTER: &str = "Calladex v1 · by Cezar Callado";
 
 /// The short lines of the entries (one per person, always the same for the same person).
 pub const LINES: [&str; 12] = [
-    "Aparece quando menos se espera.",
-    "Fala pouco, mas quando fala a sala para.",
-    "Mestre do \"já volto\".",
-    "Nunca recusa uma partida.",
-    "Ri das próprias piadas, e com razão.",
-    "Habitat natural: o canal de memes.",
-    "Visto pela última vez às 3 da manhã.",
-    "Entra na call só pra ouvir. Dizem.",
-    "Tem sempre um áudio de dois minutos.",
-    "Rara aparição em dia de semana.",
-    "Domina a arte do microfone mudo.",
-    "Chega atrasado, sai por último.",
+    "Appears when least expected.",
+    "Rarely speaks, but the room stops when they do.",
+    "Master of \"be right back\".",
+    "Never turns down a game.",
+    "Laughs at their own jokes, and rightly so.",
+    "Natural habitat: the memes channel.",
+    "Last seen at 3 AM.",
+    "Joins the call just to listen. Allegedly.",
+    "Always has a two-minute voice message.",
+    "A rare weekday sighting.",
+    "Master of the muted microphone.",
+    "Arrives late, leaves last.",
 ];
 
 /// The exact command, and nothing else, opens the card (spaces around it are forgiven, the way
@@ -72,10 +62,10 @@ pub fn push_keys(buf: &mut String, typed: &str) -> bool {
 /// The entry's "tipo", from the server role.
 pub fn tipo(role: Role) -> &'static str {
     match role {
-        Role::Owner => "Dono 👑",
+        Role::Owner => "Owner 👑",
         Role::Admin => "Admin",
-        Role::Moderator => "Moderador",
-        Role::Member => "Membro",
+        Role::Moderator => "Moderator",
+        Role::Member => "Member",
     }
 }
 
@@ -124,7 +114,11 @@ pub struct Entry {
 /// The entries, in join order (by user id), numbered from 1; each person once. Each gets their
 /// own line ([`line_index`]), unless an earlier entry has it already: then the next free line of
 /// the list (a card shows no line twice until the list runs out; the same people, the same card).
-pub fn entries(people: impl IntoIterator<Item = User>, since: impl Fn(UserId) -> Option<i64>, ring: impl Fn(UserId) -> Color32) -> Vec<Entry> {
+pub fn entries(
+    people: impl IntoIterator<Item = User>,
+    since: impl Fn(UserId) -> Option<i64>,
+    ring: impl Fn(UserId) -> Color32,
+) -> Vec<Entry> {
     let mut users: Vec<User> = people.into_iter().collect();
     users.sort_by_key(|u| u.id);
     users.dedup_by_key(|u| u.id);
@@ -141,7 +135,14 @@ pub fn entries(people: impl IntoIterator<Item = User>, since: impl Fn(UserId) ->
                 k = (k + 1) % LINES.len();
             }
             used[k] = true;
-            Entry { number: i + 1, tipo: tipo(user.role), since_ms: since(user.id), line: LINES[k], ring: ring(user.id), user }
+            Entry {
+                number: i + 1,
+                tipo: tipo(user.role),
+                since_ms: since(user.id),
+                line: LINES[k],
+                ring: ring(user.id),
+                user,
+            }
         })
         .collect()
 }
@@ -182,7 +183,12 @@ impl App {
                 let mut people: Vec<User> = self.chatx.people.values().cloned().collect();
                 people.extend(self.online.iter().cloned());
                 people.extend(self.me.iter().cloned());
-                let admin_since: std::collections::HashMap<UserId, i64> = self.roles.members.iter().map(|m| (m.user.id, m.created_at_ms)).collect();
+                let admin_since: std::collections::HashMap<UserId, i64> = self
+                    .roles
+                    .members
+                    .iter()
+                    .map(|m| (m.user.id, m.created_at_ms))
+                    .collect();
                 entries(
                     people,
                     |id| {
@@ -191,12 +197,20 @@ impl App {
                             .filter(|ms| *ms > 0)
                             .or_else(|| admin_since.get(&id).copied().filter(|ms| *ms > 0))
                     },
-                    |id| self.cached_profile(id).and_then(|p| crate::profile::accent_color(p.accent.as_deref())).unwrap_or_else(|| name_color(id)),
+                    |id| {
+                        self.cached_profile(id)
+                            .and_then(|p| crate::profile::accent_color(p.accent.as_deref()))
+                            .unwrap_or_else(|| name_color(id))
+                    },
                 )
             }
         };
         tracing::debug!(?flavour, members = entries.len(), "calladex opened");
-        self.calladex = Some(Calladex { flavour, entries, server: self.server_name.clone() });
+        self.calladex = Some(Calladex {
+            flavour,
+            entries,
+            server: self.server_name.clone(),
+        });
     }
 
     /// The home screen: "calladex" typed with no field focused opens the credits.
@@ -227,7 +241,9 @@ impl App {
 
     /// The card, in the middle of the window. Esc or ✕ closes it.
     pub(super) fn calladex_window(&mut self, ctx: &egui::Context) {
-        let Some(dex) = self.calladex.as_ref() else { return };
+        let Some(dex) = self.calladex.as_ref() else {
+            return;
+        };
         let mut close = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         let max_list = (ctx.content_rect().height() * 0.55).clamp(160.0, 440.0);
         let store = &self.avatars.store;
@@ -246,23 +262,37 @@ impl App {
                 match dex.flavour {
                     Flavour::Credits => credits(ui),
                     Flavour::Members if dex.entries.is_empty() => {
-                        ui_kit::body_text(ui, "Nenhum membro registrado ainda. Volte quando a turma chegar!");
+                        ui_kit::body_text(
+                            ui,
+                            "No registered members yet. Come back when everyone arrives!",
+                        );
                     }
                     Flavour::Members => {
-                        egui::ScrollArea::vertical().max_height(max_list).auto_shrink([false, true]).show(ui, |ui| {
-                            for e in &dex.entries {
-                                entry(ui, e, store.loaded(&e.user));
-                            }
-                        });
+                        egui::ScrollArea::vertical()
+                            .max_height(max_list)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                for e in &dex.entries {
+                                    entry(ui, e, store.loaded(&e.user));
+                                }
+                            });
                     }
                 }
                 ui.add_space(space::M);
                 let w = ui.available_width();
                 let (r, _) = ui.allocate_exact_size(Vec2::new(w, 1.0), Sense::hover());
-                ui.painter().hline(r.x_range(), r.center().y, Stroke::new(stroke::HAIRLINE, theme::RISCO));
+                ui.painter().hline(
+                    r.x_range(),
+                    r.center().y,
+                    Stroke::new(stroke::HAIRLINE, theme::RISCO),
+                );
                 ui.add_space(space::XS);
                 ui.vertical_centered(|ui| {
-                    ui.label(RichText::new(FOOTER).font(theme::body(12.0)).color(theme::NEVOA));
+                    ui.label(
+                        RichText::new(FOOTER)
+                            .font(theme::body(12.0))
+                            .color(theme::NEVOA),
+                    );
                 });
             });
         if close {
@@ -280,35 +310,58 @@ fn header(ui: &mut egui::Ui, dex: &Calladex) -> bool {
         let lens = Pos2::new(rect.left() + 15.0, rect.center().y);
         p.circle_filled(lens, 14.0, theme::GIZ);
         p.circle_filled(lens, 11.5, theme::LINK);
-        p.circle_filled(lens + Vec2::new(-4.0, -4.0), 3.0, Color32::from_white_alpha(150));
-        for (i, c) in [theme::AO_VIVO, theme::ABAJUR, theme::ONLINE].into_iter().enumerate() {
-            p.circle_filled(Pos2::new(rect.left() + 38.0 + i as f32 * 9.0, rect.top() + 6.0), 3.0, c);
+        p.circle_filled(
+            lens + Vec2::new(-4.0, -4.0),
+            3.0,
+            Color32::from_white_alpha(150),
+        );
+        for (i, c) in [theme::AO_VIVO, theme::ABAJUR, theme::ONLINE]
+            .into_iter()
+            .enumerate()
+        {
+            p.circle_filled(
+                Pos2::new(rect.left() + 38.0 + i as f32 * 9.0, rect.top() + 6.0),
+                3.0,
+                c,
+            );
         }
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            ui.label(RichText::new("Calladex").font(theme::display(20.0)).color(theme::GIZ));
+            ui.label(
+                RichText::new("Calladex")
+                    .font(theme::display(20.0))
+                    .color(theme::GIZ),
+            );
             let sub = match dex.flavour {
-                Flavour::Credits => "Edição especial: os créditos".to_string(),
+                Flavour::Credits => "Special edition: the credits".to_string(),
                 Flavour::Members => {
                     let n = dex.entries.len();
-                    let who = if n == 1 { "1 membro registrado".to_string() } else { format!("{n} membros registrados") };
+                    let who = if n == 1 {
+                        "1 registered member".to_string()
+                    } else {
+                        format!("{n} registered members")
+                    };
                     if dex.server.is_empty() {
                         who
                     } else {
-                        format!("{who} em {}", dex.server)
+                        format!("{who} in {}", dex.server)
                     }
                 }
             };
-            ui.label(RichText::new(sub).font(theme::body(12.5)).color(theme::NEVOA));
+            ui.label(
+                RichText::new(sub)
+                    .font(theme::body(12.5))
+                    .color(theme::NEVOA),
+            );
         });
         ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-            close = ui_kit::icon_button(ui, ph::X, "Fechar (Esc)", IconState::Normal).clicked();
+            close = ui_kit::icon_button(ui, ph::X, "Close (Esc)", IconState::Normal).clicked();
         });
     });
     close
 }
 
-/// One member: number, avatar in its ring, name and tipo, "Membro desde" and their line.
+/// One member: number, avatar in its ring, name and tipo, "Member since" and their line.
 fn entry(ui: &mut egui::Ui, e: &Entry, picture: Option<egui::TextureId>) {
     egui::Frame::new().fill(theme::NOITE).corner_radius(theme::radius::BUTTON).inner_margin(Margin::symmetric(12, 10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -333,11 +386,11 @@ fn entry(ui: &mut egui::Ui, e: &Entry, picture: Option<egui::TextureId>) {
                 });
                 match e.since_ms {
                     Some(ms) => {
-                        ui.label(RichText::new(format!("Membro desde {}", crate::profile::format_date_pt(ms, local_offset_min()))).font(theme::body(12.5)).color(theme::NEVOA));
+                        ui.label(RichText::new(format!("Member since {}", crate::profile::format_date_pt(ms, local_offset_min()))).font(theme::body(12.5)).color(theme::NEVOA));
                     }
                     None => {
-                        ui.label(RichText::new("Membro desde ???").font(theme::body(12.5)).color(theme::NEVOA))
-                            .on_hover_text("Dado ainda não registrado: abra o perfil da pessoa uma vez e o Calladex fica sabendo.");
+                        ui.label(RichText::new("Member since ???").font(theme::body(12.5)).color(theme::NEVOA))
+                            .on_hover_text("Not recorded yet: open this person's profile once to let Calladex know.");
                     }
                 }
                 ui.label(RichText::new(e.line).font(theme::body(13.0)).italics().color(theme::TEXTO));
@@ -353,14 +406,33 @@ fn credits(ui: &mut egui::Ui) {
         ui.add_space(space::M);
         brand::logo(ui, 64.0);
         ui.add_space(space::S);
-        ui.label(RichText::new(brand::APP_NAME).font(theme::display(26.0)).color(theme::GIZ));
+        ui.label(
+            RichText::new(brand::APP_NAME)
+                .font(theme::display(26.0))
+                .color(theme::GIZ),
+        );
         ui.add_space(space::S);
-        ui.label(RichText::new("Nº 000 · tipo: Criador").font(theme::semibold(13.0)).color(theme::GIZ));
+        ui.label(
+            RichText::new("No. 000 · type: Creator")
+                .font(theme::semibold(13.0))
+                .color(theme::GIZ),
+        );
         ui.add_space(space::S);
-        ui.label(RichText::new(format!("Feito por {}", brand::OWNER_NAME)).font(theme::body(14.0)).color(theme::TEXTO));
+        ui.label(
+            RichText::new(format!("Made by {}", brand::OWNER_NAME))
+                .font(theme::body(14.0))
+                .color(theme::TEXTO),
+        );
         brand::email_link(ui, 14.0);
         ui.add_space(space::M);
-        ui.add(egui::Label::new(RichText::new("Ainda não há membros por aqui. Entre num servidor e digite /calladex no chat.").font(theme::body(12.5)).color(theme::NEVOA)).wrap());
+        ui.add(
+            egui::Label::new(
+                RichText::new("No members here yet. Join a server and type /calladex in chat.")
+                    .font(theme::body(12.5))
+                    .color(theme::NEVOA),
+            )
+            .wrap(),
+        );
     });
 }
 
@@ -376,7 +448,7 @@ mod tests {
             "calladex",
             "/calladex agora",
             "olha o /calladex",
-            "o calladex é legal",
+            "calladex is cool",
             "/Calladex",
             "/CALLADEX",
             "/calladexx",
@@ -385,7 +457,10 @@ mod tests {
             "",
             "/",
         ] {
-            assert!(!is_command(sent), "{sent:?} is an ordinary message and is sent");
+            assert!(
+                !is_command(sent),
+                "{sent:?} is an ordinary message and is sent"
+            );
         }
     }
 
@@ -395,11 +470,17 @@ mod tests {
         assert!(!push_keys(&mut buf, "callade"));
         assert!(push_keys(&mut buf, "x"), "typed one key at a time");
         assert!(buf.is_empty(), "starts over after a hit");
-        assert!(push_keys(&mut buf, "xyzCALLADEX"), "Caps Lock is fine, earlier letters too");
+        assert!(
+            push_keys(&mut buf, "xyzCALLADEX"),
+            "Caps Lock is fine, earlier letters too"
+        );
         assert!(!push_keys(&mut buf, "calla dex"));
         assert!(!push_keys(&mut buf, "callad"));
         assert!(!push_keys(&mut buf, "e"));
-        assert!(buf.chars().count() <= SEQUENCE.len(), "the buffer never grows");
+        assert!(
+            buf.chars().count() <= SEQUENCE.len(),
+            "the buffer never grows"
+        );
         let mut long = String::new();
         assert!(!push_keys(&mut long, &"a".repeat(10_000)));
         assert_eq!(long.chars().count(), SEQUENCE.len());
@@ -407,13 +488,37 @@ mod tests {
 
     #[test]
     fn entries_are_numbered_in_join_order_with_their_tipo() {
-        let u = |id, name: &str, role| User { id, username: name.into(), role, avatar: None, display_name: None };
-        let people = vec![u(9, "lua", Role::Member), u(2, "dono", Role::Owner), u(5, "sol", Role::Moderator), u(2, "dono", Role::Owner), u(7, "rio", Role::Admin)];
-        let list = entries(people, |id| (id == 5).then_some(1_700_000_000_000), |_| Color32::WHITE);
-        let shown: Vec<(String, &str, &str)> = list.iter().map(|e| (number(e.number), e.user.username.as_str(), e.tipo)).collect();
+        let u = |id, name: &str, role| User {
+            id,
+            username: name.into(),
+            role,
+            avatar: None,
+            display_name: None,
+        };
+        let people = vec![
+            u(9, "lua", Role::Member),
+            u(2, "dono", Role::Owner),
+            u(5, "sol", Role::Moderator),
+            u(2, "dono", Role::Owner),
+            u(7, "rio", Role::Admin),
+        ];
+        let list = entries(
+            people,
+            |id| (id == 5).then_some(1_700_000_000_000),
+            |_| Color32::WHITE,
+        );
+        let shown: Vec<(String, &str, &str)> = list
+            .iter()
+            .map(|e| (number(e.number), e.user.username.as_str(), e.tipo))
+            .collect();
         assert_eq!(
             shown,
-            [("#001".into(), "dono", "Dono 👑"), ("#002".into(), "sol", "Moderador"), ("#003".into(), "rio", "Admin"), ("#004".into(), "lua", "Membro")]
+            [
+                ("#001".into(), "dono", "Owner 👑"),
+                ("#002".into(), "sol", "Moderator"),
+                ("#003".into(), "rio", "Admin"),
+                ("#004".into(), "lua", "Member")
+            ]
         );
         assert_eq!(list[1].since_ms, Some(1_700_000_000_000));
         assert_eq!(list[0].since_ms, None);
@@ -428,20 +533,36 @@ mod tests {
             assert!(LINES.contains(&fun_line(id)));
         }
         let distinct: std::collections::HashSet<_> = (1..=40).map(fun_line).collect();
-        assert!(distinct.len() >= 8, "only {} different lines for 40 people", distinct.len());
+        assert!(
+            distinct.len() >= 8,
+            "only {} different lines for 40 people",
+            distinct.len()
+        );
         // On one card no line repeats while the list lasts, and the card is the same every time.
-        let people = |n: i64| (1..=n).map(|id| User::new(id, format!("u{id}"))).collect::<Vec<_>>();
+        let people = |n: i64| {
+            (1..=n)
+                .map(|id| User::new(id, format!("u{id}")))
+                .collect::<Vec<_>>()
+        };
         let card = entries(people(12), |_| None, |_| Color32::WHITE);
         let lines: std::collections::HashSet<_> = card.iter().map(|e| e.line).collect();
         assert_eq!(lines.len(), 12);
         assert_eq!(card, entries(people(12), |_| None, |_| Color32::WHITE));
-        assert_eq!(card[0].line, fun_line(1), "the first one always gets their own line");
-        assert_eq!(entries(people(30), |_| None, |_| Color32::WHITE).len(), 30, "more people than lines");
+        assert_eq!(
+            card[0].line,
+            fun_line(1),
+            "the first one always gets their own line"
+        );
+        assert_eq!(
+            entries(people(30), |_| None, |_| Color32::WHITE).len(),
+            30,
+            "more people than lines"
+        );
     }
 
     #[test]
     fn the_footer_and_the_signature() {
-        assert_eq!(FOOTER, "Calladex v1 · por Cezar Callado");
+        assert_eq!(FOOTER, "Calladex v1 · by Cezar Callado");
         assert_eq!(brand::OWNER_NAME, "Cezar Callado");
     }
 }

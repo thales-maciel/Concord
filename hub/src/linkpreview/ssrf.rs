@@ -137,12 +137,17 @@ pub fn own_network(addr: IpAddr, on_link_prefix: u8) -> Net {
 #[cfg(windows)]
 pub fn interface_addresses() -> Vec<(IpAddr, u8)> {
     use windows::Win32::NetworkManagement::IpHelper::{
-        GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_FRIENDLY_NAME, GAA_FLAG_SKIP_MULTICAST,
-        IP_ADAPTER_ADDRESSES_LH,
+        GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
+        GAA_FLAG_SKIP_FRIENDLY_NAME, GAA_FLAG_SKIP_MULTICAST, IP_ADAPTER_ADDRESSES_LH,
     };
-    use windows::Win32::Networking::WinSock::{AF_INET, AF_INET6, AF_UNSPEC, SOCKADDR_IN, SOCKADDR_IN6};
+    use windows::Win32::Networking::WinSock::{
+        AF_INET, AF_INET6, AF_UNSPEC, SOCKADDR_IN, SOCKADDR_IN6,
+    };
     const ERROR_BUFFER_OVERFLOW: u32 = 111;
-    let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER | GAA_FLAG_SKIP_FRIENDLY_NAME;
+    let flags = GAA_FLAG_SKIP_ANYCAST
+        | GAA_FLAG_SKIP_MULTICAST
+        | GAA_FLAG_SKIP_DNS_SERVER
+        | GAA_FLAG_SKIP_FRIENDLY_NAME;
     let mut out = Vec::new();
     let mut size: u32 = 32 * 1024;
     for _ in 0..4 {
@@ -151,7 +156,9 @@ pub fn interface_addresses() -> Vec<(IpAddr, u8)> {
         let first = buf.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
         // SAFETY: `buf` is writable for `size` bytes and suitably aligned; the API fills it with
         // a linked list of adapters that only points inside it.
-        let r = unsafe { GetAdaptersAddresses(u32::from(AF_UNSPEC.0), flags, None, Some(first), &mut size) };
+        let r = unsafe {
+            GetAdaptersAddresses(u32::from(AF_UNSPEC.0), flags, None, Some(first), &mut size)
+        };
         if r == ERROR_BUFFER_OVERFLOW {
             continue;
         }
@@ -169,7 +176,9 @@ pub fn interface_addresses() -> Vec<(IpAddr, u8)> {
                         let ip = match (*sa).sa_family {
                             f if f == AF_INET => {
                                 let v4 = &*(sa as *const SOCKADDR_IN);
-                                Some(IpAddr::V4(Ipv4Addr::from(u32::from_be(v4.sin_addr.S_un.S_addr))))
+                                Some(IpAddr::V4(Ipv4Addr::from(u32::from_be(
+                                    v4.sin_addr.S_un.S_addr,
+                                ))))
                             }
                             f if f == AF_INET6 => {
                                 let v6 = &*(sa as *const SOCKADDR_IN6);
@@ -215,13 +224,30 @@ pub fn interface_addresses() -> Vec<(IpAddr, u8)> {
                 libc::AF_INET => {
                     let a = &*(ifa.ifa_addr as *const libc::sockaddr_in);
                     let ip = Ipv4Addr::from(u32::from_be(a.sin_addr.s_addr));
-                    let prefix = if ifa.ifa_netmask.is_null() { 32 } else { ones(&(*(ifa.ifa_netmask as *const libc::sockaddr_in)).sin_addr.s_addr.to_ne_bytes()) };
+                    let prefix = if ifa.ifa_netmask.is_null() {
+                        32
+                    } else {
+                        ones(
+                            &(*(ifa.ifa_netmask as *const libc::sockaddr_in))
+                                .sin_addr
+                                .s_addr
+                                .to_ne_bytes(),
+                        )
+                    };
                     out.push((IpAddr::V4(ip), prefix));
                 }
                 libc::AF_INET6 => {
                     let a = &*(ifa.ifa_addr as *const libc::sockaddr_in6);
                     let ip = Ipv6Addr::from(a.sin6_addr.s6_addr);
-                    let prefix = if ifa.ifa_netmask.is_null() { 128 } else { ones(&(*(ifa.ifa_netmask as *const libc::sockaddr_in6)).sin6_addr.s6_addr) };
+                    let prefix = if ifa.ifa_netmask.is_null() {
+                        128
+                    } else {
+                        ones(
+                            &(*(ifa.ifa_netmask as *const libc::sockaddr_in6))
+                                .sin6_addr
+                                .s6_addr,
+                        )
+                    };
                     out.push((IpAddr::V6(ip), prefix));
                 }
                 _ => {}
@@ -241,7 +267,11 @@ pub fn interface_addresses() -> Vec<(IpAddr, u8)> {
 /// The networks to refuse because they are this machine or its LAN: each *public* interface
 /// address with its on-link network ([`own_network`]). Private ones are refused anyway.
 pub fn local_networks() -> Vec<Net> {
-    let mut nets: Vec<Net> = interface_addresses().into_iter().filter(|(ip, _)| is_public_ip(*ip)).map(|(ip, p)| own_network(ip, p)).collect();
+    let mut nets: Vec<Net> = interface_addresses()
+        .into_iter()
+        .filter(|(ip, _)| is_public_ip(*ip))
+        .map(|(ip, p)| own_network(ip, p))
+        .collect();
     nets.dedup();
     nets
 }
@@ -262,7 +292,11 @@ pub struct Policy {
 
 impl Policy {
     pub fn new(allow: Vec<IpAddr>) -> Self {
-        Policy { allow, deny: RwLock::default(), deny_nets: RwLock::default() }
+        Policy {
+            allow,
+            deny: RwLock::default(),
+            deny_nets: RwLock::default(),
+        }
     }
 
     pub fn set_own_addresses(&self, ips: Vec<IpAddr>) {
@@ -279,10 +313,21 @@ impl Policy {
             IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
             v4 => v4,
         };
-        if self.deny.read().unwrap_or_else(|e| e.into_inner()).contains(&ip) {
+        if self
+            .deny
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&ip)
+        {
             return false;
         }
-        if self.deny_nets.read().unwrap_or_else(|e| e.into_inner()).iter().any(|n| n.contains(ip)) {
+        if self
+            .deny_nets
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .any(|n| n.contains(ip))
+        {
             return false;
         }
         self.allow.contains(&ip) || is_public_ip(ip)
@@ -290,7 +335,9 @@ impl Policy {
 
     /// The port is a web port, or the host is an explicitly allowed address (tests).
     fn port_ok(&self, url: &Url) -> bool {
-        let Some(port) = url.port_or_known_default() else { return false };
+        let Some(port) = url.port_or_known_default() else {
+            return false;
+        };
         if WEB_PORTS.contains(&port) {
             return true;
         }
@@ -311,8 +358,14 @@ impl Policy {
         }
         match url.host() {
             None => return Err(Blocked::Host),
-            Some(url::Host::Ipv4(ip)) => self.ip_ok(IpAddr::V4(ip)).then_some(()).ok_or(Blocked::Address)?,
-            Some(url::Host::Ipv6(ip)) => self.ip_ok(IpAddr::V6(ip)).then_some(()).ok_or(Blocked::Address)?,
+            Some(url::Host::Ipv4(ip)) => self
+                .ip_ok(IpAddr::V4(ip))
+                .then_some(())
+                .ok_or(Blocked::Address)?,
+            Some(url::Host::Ipv6(ip)) => self
+                .ip_ok(IpAddr::V6(ip))
+                .then_some(())
+                .ok_or(Blocked::Address)?,
             Some(url::Host::Domain(d)) => {
                 if !domain_ok(d) {
                     return Err(Blocked::Host);
@@ -327,7 +380,11 @@ impl Policy {
 
     /// Keep the resolved addresses we may connect to.
     pub fn filter_resolved(&self, addrs: impl IntoIterator<Item = SocketAddr>) -> Vec<SocketAddr> {
-        addrs.into_iter().filter(|a| self.ip_ok(a.ip())).take(8).collect()
+        addrs
+            .into_iter()
+            .filter(|a| self.ip_ok(a.ip()))
+            .take(8)
+            .collect()
     }
 }
 
@@ -338,8 +395,16 @@ fn domain_ok(d: &str) -> bool {
     if d.is_empty() || !d.contains('.') {
         return false; // single-label names ("router", "localhost") are LAN / hosts-file names
     }
-    const BAD_SUFFIXES: [&str; 8] =
-        [".localhost", ".local", ".internal", ".lan", ".home", ".home.arpa", ".localdomain", ".intranet"];
+    const BAD_SUFFIXES: [&str; 8] = [
+        ".localhost",
+        ".local",
+        ".internal",
+        ".lan",
+        ".home",
+        ".home.arpa",
+        ".localdomain",
+        ".intranet",
+    ];
     !BAD_SUFFIXES.iter().any(|s| d.ends_with(s))
 }
 
@@ -373,13 +438,51 @@ mod tests {
     #[test]
     fn private_ranges_are_blocked() {
         for s in [
-            "127.0.0.1", "127.255.255.254", "10.0.0.1", "10.255.255.255", "172.16.0.1", "172.31.255.255", "192.168.0.1",
-            "192.168.1.50", "169.254.169.254", "169.254.0.1", "0.0.0.0", "0.1.2.3", "100.64.0.1", "100.127.255.255",
-            "224.0.0.1", "239.255.255.250", "255.255.255.255", "240.0.0.1", "192.0.0.1", "192.0.2.1", "198.18.0.1",
-            "198.51.100.1", "203.0.113.1", "::", "::1", "fc00::1", "fd12:3456::1", "fe80::1", "fec0::1", "ff02::1",
-            "::ffff:127.0.0.1", "::ffff:10.1.2.3", "::ffff:192.168.1.1", "::127.0.0.1", "64:ff9b::7f00:1",
-            "2002:7f00:1::1", "2002:c0a8:0101::1", "2001:db8::1", "2001:0:4136:e378:8000:63bf:3fff:fdd2",
-            "192.88.99.1", "2001:2::1", "2001:10::1", "2001:20::1", "2001:1ff::1", "5f00::1",
+            "127.0.0.1",
+            "127.255.255.254",
+            "10.0.0.1",
+            "10.255.255.255",
+            "172.16.0.1",
+            "172.31.255.255",
+            "192.168.0.1",
+            "192.168.1.50",
+            "169.254.169.254",
+            "169.254.0.1",
+            "0.0.0.0",
+            "0.1.2.3",
+            "100.64.0.1",
+            "100.127.255.255",
+            "224.0.0.1",
+            "239.255.255.250",
+            "255.255.255.255",
+            "240.0.0.1",
+            "192.0.0.1",
+            "192.0.2.1",
+            "198.18.0.1",
+            "198.51.100.1",
+            "203.0.113.1",
+            "::",
+            "::1",
+            "fc00::1",
+            "fd12:3456::1",
+            "fe80::1",
+            "fec0::1",
+            "ff02::1",
+            "::ffff:127.0.0.1",
+            "::ffff:10.1.2.3",
+            "::ffff:192.168.1.1",
+            "::127.0.0.1",
+            "64:ff9b::7f00:1",
+            "2002:7f00:1::1",
+            "2002:c0a8:0101::1",
+            "2001:db8::1",
+            "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+            "192.88.99.1",
+            "2001:2::1",
+            "2001:10::1",
+            "2001:20::1",
+            "2001:1ff::1",
+            "5f00::1",
         ] {
             assert!(!is_public_ip(ip(s)), "{s} must be blocked");
         }
@@ -388,8 +491,18 @@ mod tests {
     #[test]
     fn public_addresses_pass() {
         for s in [
-            "8.8.8.8", "1.1.1.1", "142.250.80.46", "172.15.0.1", "172.32.0.1", "100.63.255.255", "100.128.0.1",
-            "223.255.255.255", "2606:4700:4700::1111", "2a00:1450:4001:81b::200e", "::ffff:8.8.8.8", "2002:0808:0808::1",
+            "8.8.8.8",
+            "1.1.1.1",
+            "142.250.80.46",
+            "172.15.0.1",
+            "172.32.0.1",
+            "100.63.255.255",
+            "100.128.0.1",
+            "223.255.255.255",
+            "2606:4700:4700::1111",
+            "2a00:1450:4001:81b::200e",
+            "::ffff:8.8.8.8",
+            "2002:0808:0808::1",
         ] {
             assert!(is_public_ip(ip(s)), "{s} must be allowed");
         }
@@ -407,12 +520,21 @@ mod tests {
         assert_eq!(check("https://example.com:7880/"), Err(Blocked::Port));
         assert_eq!(check("ftp://example.com/"), Err(Blocked::Scheme));
         assert_eq!(check("file:///C:/Windows/win.ini"), Err(Blocked::Scheme));
-        assert_eq!(check("http://user:pw@example.com/"), Err(Blocked::Credentials));
-        assert_eq!(check("http://127.0.0.1:7890/api/health"), Err(Blocked::Address));
+        assert_eq!(
+            check("http://user:pw@example.com/"),
+            Err(Blocked::Credentials)
+        );
+        assert_eq!(
+            check("http://127.0.0.1:7890/api/health"),
+            Err(Blocked::Address)
+        );
         assert_eq!(check("http://[::1]:7890/"), Err(Blocked::Address));
         assert_eq!(check("http://10.0.0.5/"), Err(Blocked::Address));
         assert_eq!(check("http://192.168.1.1/"), Err(Blocked::Address));
-        assert_eq!(check("http://169.254.169.254/latest/meta-data/"), Err(Blocked::Address));
+        assert_eq!(
+            check("http://169.254.169.254/latest/meta-data/"),
+            Err(Blocked::Address)
+        );
         assert_eq!(check("http://[fc00::1]/"), Err(Blocked::Address));
         assert_eq!(check("http://[::ffff:127.0.0.1]/"), Err(Blocked::Address));
         // The URL parser turns these tricks into plain IPv4.
@@ -447,12 +569,24 @@ mod tests {
         assert!(p.ip_ok(ip("2a01:4f8:1:2::10")));
         // The host's interface 2a01:4f8:1:2::5 (on-link /64): itself and its LAN are refused;
         // another network is not.
-        p.set_local_networks(vec![own_network(ip("2a01:4f8:1:2::5"), 64), own_network(ip("81.2.69.160"), 28)]);
+        p.set_local_networks(vec![
+            own_network(ip("2a01:4f8:1:2::5"), 64),
+            own_network(ip("81.2.69.160"), 28),
+        ]);
         assert!(!p.ip_ok(ip("2a01:4f8:1:2::5")));
-        assert!(!p.ip_ok(ip("2a01:4f8:1:2::10")), "a LAN device on the same /64");
+        assert!(
+            !p.ip_ok(ip("2a01:4f8:1:2::10")),
+            "a LAN device on the same /64"
+        );
         assert!(!p.ip_ok(ip("2a01:4f8:1:2:aaaa:bbbb:cccc:dddd")));
-        assert!(p.ip_ok(ip("2a01:4f8:1:3::10")), "the next /64 is somebody else");
-        assert!(!p.ip_ok(ip("81.2.69.161")), "public IPv4 on an interface: its /24");
+        assert!(
+            p.ip_ok(ip("2a01:4f8:1:3::10")),
+            "the next /64 is somebody else"
+        );
+        assert!(
+            !p.ip_ok(ip("81.2.69.161")),
+            "public IPv4 on an interface: its /24"
+        );
         assert!(!p.ip_ok(ip("::ffff:81.2.69.170")));
         assert!(p.ip_ok(ip("81.2.70.1")));
         // On-link prefixes are clamped: a /128 still covers the /64, a /32 only the /48.
@@ -472,7 +606,11 @@ mod tests {
     #[test]
     fn this_machines_addresses_are_found_and_refused() {
         let all = interface_addresses();
-        assert!(all.iter().any(|(a, p)| a.is_loopback() && (*p == 8 || *p == 128)), "{all:?}");
+        assert!(
+            all.iter()
+                .any(|(a, p)| a.is_loopback() && (*p == 8 || *p == 128)),
+            "{all:?}"
+        );
         let p = Policy::new(vec![]);
         p.set_local_networks(local_networks());
         for (a, _) in all.iter().filter(|(a, _)| is_public_ip(*a)) {
@@ -489,7 +627,9 @@ mod tests {
         assert_eq!(kept, vec![sa("93.184.216.34")]);
         // A name that only points inside (DNS rebinding to 127.0.0.1): nothing left.
         assert!(p.filter_resolved([sa("127.0.0.1")]).is_empty());
-        assert!(p.filter_resolved([sa("fd00::5"), sa("10.0.0.1")]).is_empty());
+        assert!(p
+            .filter_resolved([sa("fd00::5"), sa("10.0.0.1")])
+            .is_empty());
     }
 
     /// The real resolver, against the system's own answer for "localhost" (127.0.0.1 and/or ::1):
@@ -502,6 +642,9 @@ mod tests {
         // With the loopback exception the 127.0.0.1 answer stays and ::1 is dropped.
         let lax = SafeResolver(Arc::new(Policy::new(vec![ip("127.0.0.1")])));
         let got: Vec<SocketAddr> = lax.resolve(name()).await.unwrap().collect();
-        assert!(!got.is_empty() && got.iter().all(|a| a.ip() == ip("127.0.0.1")), "{got:?}");
+        assert!(
+            !got.is_empty() && got.iter().all(|a| a.ip() == ip("127.0.0.1")),
+            "{got:?}"
+        );
     }
 }

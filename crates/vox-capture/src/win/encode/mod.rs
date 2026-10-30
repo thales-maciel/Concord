@@ -16,13 +16,15 @@ pub use selftest::self_test_encoders;
 pub(crate) mod tuning;
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{
+    AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering,
+};
 
 use policy::{bitrate_change_significant, FpsPolicy, KeyframeGate, RateAdapter};
-pub(crate) use tuning::Tuning;
 use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 use std::time::Instant;
+pub(crate) use tuning::Tuning;
 
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Direct3D11::{ID3D11DeviceContext, ID3D11Texture2D};
@@ -235,7 +237,11 @@ impl Sink for EncoderSink {
     /// The capture loop re-sends the last frame instead: every [`REFRESH_IDLE`] (which carries
     /// the request over), and soon after a request arrived (which `submit` turns into the IDR).
     fn refresh_after(&self) -> Option<std::time::Duration> {
-        Some(if self.control.keyframe_requested() || self.kf.pending() { REFRESH_ON_KEYFRAME_REQUEST } else { REFRESH_IDLE })
+        Some(if self.control.keyframe_requested() || self.kf.pending() {
+            REFRESH_ON_KEYFRAME_REQUEST
+        } else {
+            REFRESH_IDLE
+        })
     }
 
     fn submit(
@@ -298,7 +304,12 @@ impl Sink for EncoderSink {
         if want != self.bitrate && bitrate_change_significant(self.bitrate, want) {
             match self.enc.set_bitrate(want) {
                 Ok(()) => {
-                    tracing::debug!(from = self.bitrate, to = want, target = self.target, "encoder bitrate changed");
+                    tracing::debug!(
+                        from = self.bitrate,
+                        to = want,
+                        target = self.target,
+                        "encoder bitrate changed"
+                    );
                     self.bitrate = want;
                     self.es.encoder_bps.store(want, Ordering::Relaxed);
                 }
@@ -309,7 +320,9 @@ impl Sink for EncoderSink {
             self.kf.request();
         }
         let force = self.kf.take(ts_us, force);
-        self.es.coalesced.store(self.kf.coalesced, Ordering::Relaxed);
+        self.es
+            .coalesced
+            .store(self.kf.coalesced, Ordering::Relaxed);
         self.pending.push_back(Pending {
             ts_us,
             width: w,
@@ -445,7 +458,8 @@ impl EncoderSink {
         p: EncParams,
         degradation: DegradationPreference,
     ) -> Self {
-        es.backend.store(backend_to_u8(enc.backend()), Ordering::Relaxed);
+        es.backend
+            .store(backend_to_u8(enc.backend()), Ordering::Relaxed);
         es.target_bps.store(p.bitrate, Ordering::Relaxed);
         es.encoder_bps.store(p.bitrate, Ordering::Relaxed);
         es.fps_cap.store(p.fps, Ordering::Relaxed);
@@ -563,7 +577,9 @@ pub(crate) fn create_encoder(
             if nv && auto_prefers_nvenc() {
                 match nvenc::NvEncoder::new(sc.device, p, ev.clone()) {
                     Ok(e) => return Ok(Box::new(e)),
-                    Err(e) => tracing::warn!(error = %e, "NVENC unavailable; trying Media Foundation"),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "NVENC unavailable; trying Media Foundation")
+                    }
                 }
             }
             if nv && auto_prefers_nvenc() {
@@ -631,8 +647,8 @@ pub(crate) fn encoded_stats(s: &Shared, es: &EncShared) -> EncodedStats {
     let n = s.convert_n.load(Ordering::Relaxed);
     let sum = s.convert_us_sum.load(Ordering::Relaxed);
     // A static screen produces no frames: report 0 rather than a stale value.
-    let fresh = monotonic_now_us() - es.bitrate_at_us.load(Ordering::Relaxed)
-        < 3 * BITRATE_WINDOW_US;
+    let fresh =
+        monotonic_now_us() - es.bitrate_at_us.load(Ordering::Relaxed) < 3 * BITRATE_WINDOW_US;
     EncodedStats {
         frames_encoded: s.delivered.load(Ordering::Relaxed),
         frames_dropped: s.dropped.load(Ordering::Relaxed),
@@ -676,40 +692,56 @@ pub fn start_video_encoded(
     let (stop, thread) = {
         let es = es.clone();
         let control = control.clone();
-        video::spawn_capture(target, vcfg, cfg.adapter_luid, shared.clone(), "vox-video-enc", preview, move |sc| {
-            let ev = Arc::new(Event::new(true)?);
-            // A minimized window reports its caption size (~160x28): start at a placeholder size;
-            // the first real frame resizes the encoder (with an IDR) anyway.
-            let (w0, h0) = if sc.out_size.0 < MIN_ENCODE_W || sc.out_size.1 < MIN_ENCODE_H {
-                video::fit(1280, 720, sc.cfg.max_width, sc.cfg.max_height)
-            } else {
-                sc.out_size
-            };
-            let p = EncParams {
-                width: w0,
-                height: h0,
-                fps: sc.cfg.max_fps,
-                bitrate,
-                max_width: sc.cfg.max_width & !1,
-                max_height: sc.cfg.max_height & !1,
-                tuning: Tuning::default(),
-            };
-            let t0 = Instant::now();
-            let enc = create_encoder(backend, sc, p, &ev)?;
-            tracing::info!(
-                requested = ?backend,
-                chosen = ?enc.backend(),
-                encoder = %enc.name(),
-                adapter = %sc.adapter_name,
-                size = format!("{}x{}", p.width, p.height),
-                fps = p.fps,
-                kbps = bitrate / 1000,
-                init_ms = t0.elapsed().as_millis() as u64,
-                degradation = ?degradation,
-                "hardware encoder ready"
-            );
-            Ok(EncoderSink::new(enc, ev, control, on_frame, es, p, degradation))
-        })?
+        video::spawn_capture(
+            target,
+            vcfg,
+            cfg.adapter_luid,
+            shared.clone(),
+            "vox-video-enc",
+            preview,
+            move |sc| {
+                let ev = Arc::new(Event::new(true)?);
+                // A minimized window reports its caption size (~160x28): start at a placeholder size;
+                // the first real frame resizes the encoder (with an IDR) anyway.
+                let (w0, h0) = if sc.out_size.0 < MIN_ENCODE_W || sc.out_size.1 < MIN_ENCODE_H {
+                    video::fit(1280, 720, sc.cfg.max_width, sc.cfg.max_height)
+                } else {
+                    sc.out_size
+                };
+                let p = EncParams {
+                    width: w0,
+                    height: h0,
+                    fps: sc.cfg.max_fps,
+                    bitrate,
+                    max_width: sc.cfg.max_width & !1,
+                    max_height: sc.cfg.max_height & !1,
+                    tuning: Tuning::default(),
+                };
+                let t0 = Instant::now();
+                let enc = create_encoder(backend, sc, p, &ev)?;
+                tracing::info!(
+                    requested = ?backend,
+                    chosen = ?enc.backend(),
+                    encoder = %enc.name(),
+                    adapter = %sc.adapter_name,
+                    size = format!("{}x{}", p.width, p.height),
+                    fps = p.fps,
+                    kbps = bitrate / 1000,
+                    init_ms = t0.elapsed().as_millis() as u64,
+                    degradation = ?degradation,
+                    "hardware encoder ready"
+                );
+                Ok(EncoderSink::new(
+                    enc,
+                    ev,
+                    control,
+                    on_frame,
+                    es,
+                    p,
+                    degradation,
+                ))
+            },
+        )?
     };
     Ok(EncodedInner {
         stop,

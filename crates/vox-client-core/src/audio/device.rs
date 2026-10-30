@@ -9,8 +9,8 @@
 //! device is missing: nobody has to leave and rejoin the room for the microphone to come back.
 //!
 //! Mic: device -> mono f32 -> (resample to 48 kHz) -> 10 ms i16 chunks -> WebRTC APM
-//! (AEC3 + AGC + HPF, plus its noise suppressor at the "Padrão" level) -> AI denoiser (RNNoise at
-//! "IA leve", see `audio::denoise`) -> voice changer ("Modificador de voz", `audio::voicefx`; a
+//! (AEC3 + AGC + HPF, plus its noise suppressor at the "Default" level) -> AI denoiser (RNNoise at
+//! "Light AI", see `audio::denoise`) -> voice changer ("Voice changer", `audio::voicefx`; a
 //! bit-exact bypass when off) -> level meter + voice-activity gate -> `NativeAudioSource` (or, for
 //! the mic test, a local loopback mixer). When muted the callback returns at once: the device
 //! stays open (instant unmute) but nothing is processed or sent.
@@ -62,7 +62,9 @@ pub struct VoiceApm {
 
 impl std::fmt::Debug for VoiceApm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("VoiceApm").field("ns", &*self.ns.lock()).finish()
+        f.debug_struct("VoiceApm")
+            .field("ns", &*self.ns.lock())
+            .finish()
     }
 }
 
@@ -72,7 +74,10 @@ fn build_apm(ns: bool) -> AudioProcessingModule {
 
 impl VoiceApm {
     pub fn new(noise_suppression: bool) -> Self {
-        Self { apm: Mutex::new(build_apm(noise_suppression)), ns: Mutex::new(noise_suppression) }
+        Self {
+            apm: Mutex::new(build_apm(noise_suppression)),
+            ns: Mutex::new(noise_suppression),
+        }
     }
 
     pub fn noise_suppression(&self) -> bool {
@@ -102,7 +107,10 @@ impl VoiceApm {
 
     /// Feed one 10 ms playback block (the far-end reference).
     fn process_render(&self, block: &mut [i16]) {
-        let _ = self.apm.lock().process_reverse_stream(block, MIX_RATE as i32, MIX_CHANNELS as i32);
+        let _ = self
+            .apm
+            .lock()
+            .process_reverse_stream(block, MIX_RATE as i32, MIX_CHANNELS as i32);
     }
 }
 
@@ -175,7 +183,9 @@ enum Opened {
 enum Ctl {
     Stop,
     /// The system invalidated a stream (`mic`: the microphone, else the speakers): reopen it.
-    Reopen { mic: bool },
+    Reopen {
+        mic: bool,
+    },
 }
 
 /// Delays between attempts to reopen a lost stream: quick at first (a sample-rate change is over
@@ -187,7 +197,10 @@ fn reopen_delay(attempt: u32) -> Duration {
 
 /// Errors after which a cpal stream is dead and must be built again.
 fn stream_lost(kind: cpal::ErrorKind) -> bool {
-    matches!(kind, cpal::ErrorKind::StreamInvalidated | cpal::ErrorKind::DeviceNotAvailable)
+    matches!(
+        kind,
+        cpal::ErrorKind::StreamInvalidated | cpal::ErrorKind::DeviceNotAvailable
+    )
 }
 
 impl AudioIo {
@@ -334,15 +347,26 @@ impl AudioIo {
                 Err(_) => break,
             }
         }
-        let hung = format!("the audio device did not answer within {} s", DEVICE_OPEN_TIMEOUT.as_secs());
+        let hung = format!(
+            "the audio device did not answer within {} s",
+            DEVICE_OPEN_TIMEOUT.as_secs()
+        );
         if mic_res.is_none() || out_res.is_none() {
             abandoned.store(true, Ordering::Relaxed);
-            warn!(mic_pending = mic_res.is_none(), playback_pending = out_res.is_none(), "audio device open timed out");
+            warn!(
+                mic_pending = mic_res.is_none(),
+                playback_pending = out_res.is_none(),
+                "audio device open timed out"
+            );
         }
         let mic_res = mic_res.unwrap_or_else(|| Err(hung.clone()));
         let out_res = out_res.unwrap_or_else(|| Err(hung.clone()));
         if want_mic || want_out {
-            info!(mic_ok = want_mic && mic_res.is_ok(), playback_ok = want_out && out_res.is_ok(), "audio devices opened");
+            info!(
+                mic_ok = want_mic && mic_res.is_ok(),
+                playback_ok = want_out && out_res.is_ok(),
+                "audio devices opened"
+            );
         }
         AudioIo {
             stop: Some(stop_tx),
@@ -364,7 +388,12 @@ impl Drop for AudioIo {
         }
         let Some(t) = self.thread.take() else { return };
         // A wedged audio driver must not wedge leaving the room: wait a little, then let go.
-        let deadline = std::time::Instant::now() + if self.abandoned.load(Ordering::Relaxed) { Duration::ZERO } else { DEVICE_CLOSE_TIMEOUT };
+        let deadline = std::time::Instant::now()
+            + if self.abandoned.load(Ordering::Relaxed) {
+                Duration::ZERO
+            } else {
+                DEVICE_CLOSE_TIMEOUT
+            };
         while !t.is_finished() && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -381,8 +410,17 @@ impl Drop for AudioIo {
 /// `output_device`.
 pub fn list_devices(input: bool) -> Vec<String> {
     let host = cpal::default_host();
-    let devices = if input { host.input_devices() } else { host.output_devices() };
-    let mut names: Vec<String> = devices.map(|it| it.filter_map(|d| d.description().ok().map(|d| d.name().to_string())).collect()).unwrap_or_default();
+    let devices = if input {
+        host.input_devices()
+    } else {
+        host.output_devices()
+    };
+    let mut names: Vec<String> = devices
+        .map(|it| {
+            it.filter_map(|d| d.description().ok().map(|d| d.name().to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
     names.dedup();
     names
 }
@@ -390,7 +428,11 @@ pub fn list_devices(input: bool) -> Vec<String> {
 /// Name of the system default capture / playback device.
 pub fn default_device_name(input: bool) -> Option<String> {
     let host = cpal::default_host();
-    let d = if input { host.default_input_device() } else { host.default_output_device() };
+    let d = if input {
+        host.default_input_device()
+    } else {
+        host.default_output_device()
+    };
     d.map(|d| device_name(&d))
 }
 
@@ -398,9 +440,13 @@ fn find_device(host: &cpal::Host, name: Option<&str>, input: bool) -> Result<cpa
     if let Some(want) = name {
         let want = want.to_lowercase();
         let devices: Vec<cpal::Device> = if input {
-            host.input_devices().context("enumerate input devices")?.collect()
+            host.input_devices()
+                .context("enumerate input devices")?
+                .collect()
         } else {
-            host.output_devices().context("enumerate output devices")?.collect()
+            host.output_devices()
+                .context("enumerate output devices")?
+                .collect()
         };
         for d in devices {
             if let Ok(desc) = d.description() {
@@ -409,21 +455,39 @@ fn find_device(host: &cpal::Host, name: Option<&str>, input: bool) -> Result<cpa
                 }
             }
         }
-        return Err(anyhow!("no {} device matching {want:?}", if input { "input" } else { "output" }));
+        return Err(anyhow!(
+            "no {} device matching {want:?}",
+            if input { "input" } else { "output" }
+        ));
     }
-    let d = if input { host.default_input_device() } else { host.default_output_device() };
-    d.ok_or_else(|| anyhow!("no default {} device", if input { "input" } else { "output" }))
+    let d = if input {
+        host.default_input_device()
+    } else {
+        host.default_output_device()
+    };
+    d.ok_or_else(|| {
+        anyhow!(
+            "no default {} device",
+            if input { "input" } else { "output" }
+        )
+    })
 }
 
 fn device_name(d: &cpal::Device) -> String {
-    d.description().map(|d| d.name().to_string()).unwrap_or_else(|_| "?".into())
+    d.description()
+        .map(|d| d.name().to_string())
+        .unwrap_or_else(|_| "?".into())
 }
 
 // ---------------------------------------------------------------- mic
 
 enum SinkState {
     Source(NativeAudioSource),
-    Loopback { mixer: Arc<Mixer>, id: SourceId, stereo: Vec<i16> },
+    Loopback {
+        mixer: Arc<Mixer>,
+        id: SourceId,
+        stereo: Vec<i16>,
+    },
     Discard,
 }
 
@@ -433,7 +497,11 @@ impl SinkState {
             MicSink::Source(s) => SinkState::Source(s),
             MicSink::Loopback(mixer) => {
                 let id = mixer.add_source();
-                SinkState::Loopback { mixer, id, stereo: Vec::with_capacity(MIX_10MS) }
+                SinkState::Loopback {
+                    mixer,
+                    id,
+                    stereo: Vec::with_capacity(MIX_10MS),
+                }
             }
             MicSink::Discard => SinkState::Discard,
         }
@@ -525,7 +593,8 @@ impl MicState {
             None => &mono,
         };
         for &s in samples {
-            self.chunk.push((s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16);
+            self.chunk
+                .push((s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16);
             if self.chunk.len() == MIC_CHUNK {
                 self.flush_chunk();
             }
@@ -540,7 +609,7 @@ impl MicState {
                 self.counters.errors.fetch_add(1, Ordering::Relaxed);
             }
         }
-        // AI denoiser (a bit-exact bypass at the "Padrão" level), before the meter and the gate
+        // AI denoiser (a bit-exact bypass at the "Default" level), before the meter and the gate
         // so both see what is actually sent.
         self.denoiser.process(&mut self.chunk);
         // Voice changer on the denoised voice (a bit-exact bypass when off), before the meter and
@@ -558,9 +627,15 @@ impl MicState {
     }
 }
 
-fn open_mic(host: &cpal::Host, cfg: MicConfig, on_lost: impl Fn() + Send + 'static) -> Result<cpal::Stream> {
+fn open_mic(
+    host: &cpal::Host,
+    cfg: MicConfig,
+    on_lost: impl Fn() + Send + 'static,
+) -> Result<cpal::Stream> {
     let device = find_device(host, cfg.device.as_deref(), true)?;
-    let supported = device.default_input_config().context("default input config")?;
+    let supported = device
+        .default_input_config()
+        .context("default input config")?;
     let config: StreamConfig = supported.config();
     let channels = config.channels as usize;
     let rate = config.sample_rate;
@@ -591,7 +666,12 @@ fn open_mic(host: &cpal::Host, cfg: MicConfig, on_lost: impl Fn() + Send + 'stat
     Ok(stream)
 }
 
-fn build_mic<T: SizedSample>(device: &cpal::Device, config: &StreamConfig, mut state: MicState, on_lost: impl Fn() + Send + 'static) -> Result<cpal::Stream>
+fn build_mic<T: SizedSample>(
+    device: &cpal::Device,
+    config: &StreamConfig,
+    mut state: MicState,
+    on_lost: impl Fn() + Send + 'static,
+) -> Result<cpal::Stream>
 where
     f32: FromSample<T>,
 {
@@ -649,7 +729,8 @@ impl PlaybackState {
         }
         let gain = f32::from_bits(self.volume.load(Ordering::Relaxed)) / 32768.0;
         self.block_f32.clear();
-        self.block_f32.extend(self.block.iter().map(|&s| s as f32 * gain));
+        self.block_f32
+            .extend(self.block.iter().map(|&s| s as f32 * gain));
         match self.resampler.as_mut() {
             Some(r) => {
                 self.resampled.clear();
@@ -683,9 +764,15 @@ impl PlaybackState {
     }
 }
 
-fn open_playback(host: &cpal::Host, cfg: PlaybackConfig, on_lost: impl Fn() + Send + 'static) -> Result<cpal::Stream> {
+fn open_playback(
+    host: &cpal::Host,
+    cfg: PlaybackConfig,
+    on_lost: impl Fn() + Send + 'static,
+) -> Result<cpal::Stream> {
     let device = find_device(host, cfg.device.as_deref(), false)?;
-    let supported = device.default_output_config().context("default output config")?;
+    let supported = device
+        .default_output_config()
+        .context("default output config")?;
     let config: StreamConfig = supported.config();
     let channels = config.channels as usize;
     let rate = config.sample_rate;
@@ -777,7 +864,10 @@ mod tests {
         let block = pulled(&mut st);
         assert_eq!(block.len(), MIX_10MS);
         let want = 1000.0 / 32768.0;
-        assert!(block.iter().all(|&s| (s - want).abs() < 1e-6), "only the alert is heard while deafened");
+        assert!(
+            block.iter().all(|&s| (s - want).abs() < 1e-6),
+            "only the alert is heard while deafened"
+        );
         // Same without deafen: voice and alert add up.
         let (mut st, mixer) = state(false);
         let voice = mixer.add_source();
@@ -795,15 +885,26 @@ mod tests {
         mixer.play_ui(Arc::from(vec![1000i16; 4 * MIX_10MS]), 1.0);
         let block = pulled(&mut st);
         let want = 1000.0 / 32768.0;
-        assert!(block.iter().all(|&s| (s - want).abs() < 1e-6), "deafened: the alert only, not the clip");
-        assert_eq!(mixer.sounds_active(), 1, "the silenced clip is still consumed, not queued up");
+        assert!(
+            block.iter().all(|&s| (s - want).abs() < 1e-6),
+            "deafened: the alert only, not the clip"
+        );
+        assert_eq!(
+            mixer.sounds_active(),
+            1,
+            "the silenced clip is still consumed, not queued up"
+        );
         // Without deafen the clip is heard on top of the alert (its default gain is 100 %).
         let (mut st, mixer) = state(false);
         mixer.play_sound(Arc::from(vec![4000i16; 6 * 480]), 1);
         mixer.play_ui(Arc::from(vec![1000i16; 4 * MIX_10MS]), 1.0);
         let block = pulled(&mut st);
         let want = 5000.0 / 32768.0;
-        assert!(block.iter().all(|&s| (s - want).abs() < 1e-6), "{:?}", &block[..2]);
+        assert!(
+            block.iter().all(|&s| (s - want).abs() < 1e-6),
+            "{:?}",
+            &block[..2]
+        );
         // The block that is played is the one that feeds the echo canceller's reference, and the
         // clip is part of it (it is mixed in `Mixer::mix`, before the deafen silencing).
     }
@@ -816,7 +917,10 @@ mod tests {
         let first = pulled(&mut st);
         assert!(first.iter().all(|&s| (s - 1000.0 / 32768.0).abs() < 1e-6));
         let second = pulled(&mut st);
-        assert!(second.iter().all(|&s| s == 0.0), "nothing left after the alert ended");
+        assert!(
+            second.iter().all(|&s| s == 0.0),
+            "nothing left after the alert ended"
+        );
         assert_eq!(mixer.ui_active(), 0);
     }
 
@@ -831,8 +935,12 @@ mod tests {
             apm: None,
             counters: Arc::new(StreamCounters::default()),
             gate: GateProcessor::new(gate.clone()),
-            denoiser: Denoiser::new(Arc::new(NoiseControl::new(crate::audio::NoiseLevel::Standard))),
-            fx: VoiceChanger::new(Arc::new(NoiseControl::new(crate::audio::NoiseLevel::Standard))),
+            denoiser: Denoiser::new(Arc::new(NoiseControl::new(
+                crate::audio::NoiseLevel::Standard,
+            ))),
+            fx: VoiceChanger::new(Arc::new(NoiseControl::new(
+                crate::audio::NoiseLevel::Standard,
+            ))),
             resampler: None,
             mono: Vec::new(),
             resampled: Vec::new(),
@@ -843,14 +951,20 @@ mod tests {
     }
 
     fn loud_chunk() -> Vec<f32> {
-        (0..MIC_CHUNK).map(|i| (i as f32 * 0.13).sin() * 0.3).collect()
+        (0..MIC_CHUNK)
+            .map(|i| (i as f32 * 0.13).sin() * 0.3)
+            .collect()
     }
 
     #[test]
     fn mute_wins_over_push_to_talk_and_the_gate() {
         use crate::audio::gate::{GateConfig, GateMode};
         // A gate that would never open, with push-to-talk on (which bypasses it).
-        let gate = Arc::new(VoiceGate::new(GateConfig { mode: GateMode::Manual, threshold_db: -10.0, hold_ms: 350 }));
+        let gate = Arc::new(VoiceGate::new(GateConfig {
+            mode: GateMode::Manual,
+            threshold_db: -10.0,
+            hold_ms: 350,
+        }));
         gate.set_ptt(true);
         let (mut st, muted, _mixer) = mic_state(&gate, true);
         let frames = |st: &MicState| st.counters.frames.load(Ordering::Relaxed);
@@ -859,7 +973,11 @@ mod tests {
         }
         assert_eq!(frames(&st), 0, "muted: nothing is sent");
         assert!(!gate.is_open());
-        assert_eq!(gate.level_db(), crate::audio::gate::MIN_DB, "muted: the meter is blank");
+        assert_eq!(
+            gate.level_db(),
+            crate::audio::gate::MIN_DB,
+            "muted: the meter is blank"
+        );
         // Unmuted with push-to-talk: sent, open, not faded.
         muted.store(false, Ordering::Relaxed);
         st.on_data(&loud_chunk());
@@ -879,8 +997,15 @@ mod tests {
         use crate::audio::NoiseLevel;
         let noise = Arc::new(NoiseControl::new(NoiseLevel::AiLight));
         let apm = new_voice_apm(&noise);
-        assert!(!apm.noise_suppression(), "IA leve: the APM's own suppressor is off");
-        let gate = Arc::new(VoiceGate::new(GateConfig { mode: GateMode::Manual, threshold_db: -70.0, hold_ms: 100 }));
+        assert!(
+            !apm.noise_suppression(),
+            "Light AI: the APM's own suppressor is off"
+        );
+        let gate = Arc::new(VoiceGate::new(GateConfig {
+            mode: GateMode::Manual,
+            threshold_db: -70.0,
+            hold_ms: 100,
+        }));
         let (mut st, _muted, _mixer) = mic_state(&gate, false);
         st.apm = Some(apm.clone());
         st.denoiser = Denoiser::new(noise.clone());
@@ -894,7 +1019,11 @@ mod tests {
             assert_eq!(apm.noise_suppression(), noise.level().apm_ns());
             assert_eq!(st.denoiser.active(), noise.level().is_ai());
         }
-        assert_eq!(st.counters.frames.load(Ordering::Relaxed), 60, "every chunk was sent");
+        assert_eq!(
+            st.counters.frames.load(Ordering::Relaxed),
+            60,
+            "every chunk was sent"
+        );
         assert_eq!(st.counters.errors.load(Ordering::Relaxed), 0);
         // RNNoise ran for chunks 0-20 (fade-out included) and 40-59.
         assert_eq!(st.denoiser.frames, 41);
@@ -905,7 +1034,7 @@ mod tests {
         drop(other);
         noise.set_level(NoiseLevel::AiLight);
         assert!(!apm.noise_suppression());
-        // "IA máxima" keeps the APM's suppressor off too (no rebuild from IA leve).
+        // "Maximum AI" keeps the APM's suppressor off too (no rebuild from Light AI).
         noise.set_level(NoiseLevel::AiMax);
         assert!(!apm.noise_suppression());
         noise.set_level(NoiseLevel::Standard);
@@ -919,10 +1048,17 @@ mod tests {
         // Half a 10 ms chunk of voice, then silence; what is sent in the chunks where the echo
         // comes back (280 ms later) tells whether the gate saw the processed voice.
         let run = |effect: VoiceEffect, mute_between: bool| {
-            let gate = Arc::new(VoiceGate::new(GateConfig { mode: GateMode::Manual, threshold_db: -60.0, hold_ms: 100 }));
+            let gate = Arc::new(VoiceGate::new(GateConfig {
+                mode: GateMode::Manual,
+                threshold_db: -60.0,
+                hold_ms: 100,
+            }));
             let (mut st, muted, _mixer) = mic_state(&gate, false);
             let noise = Arc::new(NoiseControl::new(NoiseLevel::Standard));
-            noise.voice_fx().set(VoiceFxConfig { effect, intensity_pct: 100 });
+            noise.voice_fx().set(VoiceFxConfig {
+                effect,
+                intensity_pct: 100,
+            });
             st.denoiser = Denoiser::new(noise.clone());
             st.fx = VoiceChanger::new(noise);
             let mut echo_energy = 0;
@@ -931,16 +1067,31 @@ mod tests {
                     muted.store((10..12).contains(&k), Ordering::Relaxed);
                 }
                 let before = st.counters.sum_sq.load(Ordering::Relaxed);
-                st.on_data(&if k < 3 { loud_chunk() } else { vec![0.0; MIC_CHUNK] });
+                st.on_data(&if k < 3 {
+                    loud_chunk()
+                } else {
+                    vec![0.0; MIC_CHUNK]
+                });
                 if (27..34).contains(&k) {
                     echo_energy += st.counters.sum_sq.load(Ordering::Relaxed) - before;
                 }
             }
             echo_energy
         };
-        assert_eq!(run(VoiceEffect::Off, false), 0, "no effect: silence after the voice");
-        assert!(run(VoiceEffect::Echo, false) > 0, "the echo opened the gate and was sent");
-        assert_eq!(run(VoiceEffect::Echo, true), 0, "muting dropped the echo tail");
+        assert_eq!(
+            run(VoiceEffect::Off, false),
+            0,
+            "no effect: silence after the voice"
+        );
+        assert!(
+            run(VoiceEffect::Echo, false) > 0,
+            "the echo opened the gate and was sent"
+        );
+        assert_eq!(
+            run(VoiceEffect::Echo, true),
+            0,
+            "muting dropped the echo tail"
+        );
     }
 
     /// CPU of the whole mic chain per level (APM + denoiser + gate, no device). Run by hand:
@@ -956,7 +1107,8 @@ mod tests {
                 x ^= x << 13;
                 x ^= x >> 17;
                 x ^= x << 5;
-                (i as f32 * 0.021).sin() * 0.2 * (1.0 + (i as f32 * 0.00002).sin()) + (x as f32 / u32::MAX as f32 - 0.5) * 0.05
+                (i as f32 * 0.021).sin() * 0.2 * (1.0 + (i as f32 * 0.00002).sin())
+                    + (x as f32 / u32::MAX as f32 - 0.5) * 0.05
             })
             .collect();
         for level in NoiseLevel::ALL {
@@ -966,7 +1118,7 @@ mod tests {
             st.sink = SinkState::Discard;
             st.apm = Some(new_voice_apm(&noise));
             st.denoiser = Denoiser::new(noise);
-            // IA máxima: wait for each frame of its worker (the time below then includes the
+            // Maximum AI: wait for each frame of its worker (the time below then includes the
             // worker's inference, as wall time), instead of replacing frames that are "late".
             st.denoiser.set_offline(true);
             let t = std::time::Instant::now();
@@ -974,18 +1126,36 @@ mod tests {
                 st.on_data(c);
             }
             let per = t.elapsed() / CHUNKS as u32;
-            println!("{:9}: {per:?} per 10 ms chunk = {:.2}% of one core", level.label(), per.as_secs_f64() / 0.010 * 100.0);
+            println!(
+                "{:9}: {per:?} per 10 ms chunk = {:.2}% of one core",
+                level.label(),
+                per.as_secs_f64() / 0.010 * 100.0
+            );
             if level == NoiseLevel::AiMax {
-                println!("           (DeepFilterNet worker alone: {:?} per frame)", st.denoiser.dfn().frame_time());
+                println!(
+                    "           (DeepFilterNet worker alone: {:?} per frame)",
+                    st.denoiser.dfn().frame_time()
+                );
             }
         }
     }
 
     #[test]
     fn lost_streams_are_reopened_with_a_growing_delay() {
-        assert!(stream_lost(cpal::ErrorKind::StreamInvalidated), "macOS: the device's sample rate changed");
-        assert!(stream_lost(cpal::ErrorKind::DeviceNotAvailable), "unplugged");
-        for k in [cpal::ErrorKind::Xrun, cpal::ErrorKind::DeviceChanged, cpal::ErrorKind::BackendError, cpal::ErrorKind::RealtimeDenied] {
+        assert!(
+            stream_lost(cpal::ErrorKind::StreamInvalidated),
+            "macOS: the device's sample rate changed"
+        );
+        assert!(
+            stream_lost(cpal::ErrorKind::DeviceNotAvailable),
+            "unplugged"
+        );
+        for k in [
+            cpal::ErrorKind::Xrun,
+            cpal::ErrorKind::DeviceChanged,
+            cpal::ErrorKind::BackendError,
+            cpal::ErrorKind::RealtimeDenied,
+        ] {
             assert!(!stream_lost(k), "{k:?} keeps the stream");
         }
         let d: Vec<Duration> = (0..8).map(reopen_delay).collect();
@@ -1007,17 +1177,31 @@ mod tests {
     #[test]
     fn closed_gate_sends_silence_without_stopping_the_stream() {
         use crate::audio::gate::{GateConfig, GateMode};
-        let gate = Arc::new(VoiceGate::new(GateConfig { mode: GateMode::Manual, threshold_db: -30.0, hold_ms: 100 }));
+        let gate = Arc::new(VoiceGate::new(GateConfig {
+            mode: GateMode::Manual,
+            threshold_db: -30.0,
+            hold_ms: 100,
+        }));
         let (mut st, _muted, _mixer) = mic_state(&gate, false);
         // Quiet room (-60 dBFS): frames keep flowing, as zeros.
-        let quiet: Vec<f32> = (0..MIC_CHUNK).map(|i| (i as f32 * 0.13).sin() * 0.0014).collect();
+        let quiet: Vec<f32> = (0..MIC_CHUNK)
+            .map(|i| (i as f32 * 0.13).sin() * 0.0014)
+            .collect();
         for _ in 0..10 {
             st.on_data(&quiet);
         }
         assert_eq!(st.counters.frames.load(Ordering::Relaxed), 10);
-        assert_eq!(st.counters.sum_sq.load(Ordering::Relaxed), 0, "everything sent was digital silence");
+        assert_eq!(
+            st.counters.sum_sq.load(Ordering::Relaxed),
+            0,
+            "everything sent was digital silence"
+        );
         assert!(!gate.is_open());
-        assert!(gate.level_db() < -55.0 && gate.level_db() > -65.0, "{}", gate.level_db());
+        assert!(
+            gate.level_db() < -55.0 && gate.level_db() > -65.0,
+            "{}",
+            gate.level_db()
+        );
         // Speech opens it and real signal is sent.
         for _ in 0..3 {
             st.on_data(&loud_chunk());

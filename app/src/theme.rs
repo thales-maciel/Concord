@@ -26,7 +26,10 @@
 
 use std::sync::LazyLock;
 
-use eframe::egui::{self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Margin, Shadow, Stroke, TextStyle};
+use eframe::egui::{
+    self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Margin, Shadow,
+    Stroke, TextStyle,
+};
 
 // ---------------------------------------------------------------- colours
 
@@ -132,8 +135,10 @@ pub mod stroke {
 
 // ---------------------------------------------------------------- fonts
 
-const ATKINSON_REGULAR: &[u8] = include_bytes!("../assets/fonts/AtkinsonHyperlegibleNext-Regular.ttf");
-const ATKINSON_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/AtkinsonHyperlegibleNext-SemiBold.ttf");
+const ATKINSON_REGULAR: &[u8] =
+    include_bytes!("../assets/fonts/AtkinsonHyperlegibleNext-Regular.ttf");
+const ATKINSON_SEMIBOLD: &[u8] =
+    include_bytes!("../assets/fonts/AtkinsonHyperlegibleNext-SemiBold.ttf");
 const BRICOLAGE_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/BricolageGrotesque-SemiBold.ttf");
 
 /// Names of the font families (and font data keys) we add.
@@ -210,9 +215,18 @@ pub use phosphor::regular as ph;
 /// a-z to blank ligature parts, so it must never come before a text font).
 pub fn fonts() -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
-    fonts.font_data.insert(F_BODY.into(), FontData::from_static(ATKINSON_REGULAR).into());
-    fonts.font_data.insert(F_SEMIBOLD.into(), FontData::from_static(ATKINSON_SEMIBOLD).into());
-    fonts.font_data.insert(F_DISPLAY.into(), FontData::from_static(BRICOLAGE_SEMIBOLD).into());
+    fonts.font_data.insert(
+        F_BODY.into(),
+        FontData::from_static(ATKINSON_REGULAR).into(),
+    );
+    fonts.font_data.insert(
+        F_SEMIBOLD.into(),
+        FontData::from_static(ATKINSON_SEMIBOLD).into(),
+    );
+    fonts.font_data.insert(
+        F_DISPLAY.into(),
+        FontData::from_static(BRICOLAGE_SEMIBOLD).into(),
+    );
     // Adds Phosphor second in `Proportional` (after Ubuntu-Light, which we put behind ours below)
     // and its own family.
     ph::add_to_fonts(&mut fonts);
@@ -229,10 +243,18 @@ pub fn fonts() -> FontDefinitions {
         v.extend(fallbacks.iter().cloned());
         v
     };
-    fonts.families.insert(FontFamily::Proportional, family(&[F_BODY]));
-    fonts.families.insert(FontFamily::Name(FAMILY_SEMIBOLD.into()), family(&[F_SEMIBOLD]));
+    fonts
+        .families
+        .insert(FontFamily::Proportional, family(&[F_BODY]));
+    fonts.families.insert(
+        FontFamily::Name(FAMILY_SEMIBOLD.into()),
+        family(&[F_SEMIBOLD]),
+    );
     // (Bricolage has no ✓ or arrows; Atkinson SemiBold fills in before the generic fallbacks.)
-    fonts.families.insert(FontFamily::Name(FAMILY_DISPLAY.into()), family(&[F_DISPLAY, F_SEMIBOLD]));
+    fonts.families.insert(
+        FontFamily::Name(FAMILY_DISPLAY.into()),
+        family(&[F_DISPLAY, F_SEMIBOLD]),
+    );
     if let Some(mono) = fonts.families.get_mut(&FontFamily::Monospace) {
         mono.insert(mono.len().min(1), icons);
     }
@@ -259,7 +281,12 @@ pub fn visuals() -> egui::Visuals {
     v.widgets.noninteractive = widget(PAREDE, hair, TEXTO, radius::ROW);
     // (egui's own buttons, checkboxes and combo boxes: 6, so a 16-point checkbox stays a square.)
     v.widgets.inactive = widget(MOVEL, Stroke::NONE, GIZ, radius::ROW);
-    v.widgets.hovered = widget(MOVEL_HOVER, Stroke::new(stroke::HAIRLINE, Color32::from_rgb(0x3B, 0x50, 0x66)), GIZ, radius::ROW);
+    v.widgets.hovered = widget(
+        MOVEL_HOVER,
+        Stroke::new(stroke::HAIRLINE, Color32::from_rgb(0x3B, 0x50, 0x66)),
+        GIZ,
+        radius::ROW,
+    );
     v.widgets.active = widget(MOVEL_PRESSED, hair, GIZ, radius::ROW);
     v.widgets.open = widget(PAREDE, hair, GIZ, radius::ROW);
     v.widgets.open.weak_bg_fill = MOVEL;
@@ -272,7 +299,10 @@ pub fn visuals() -> egui::Visuals {
     // Mist at half strength behind selected text, selected buttons and a slider's filled part; their
     // text (and a focused field's outline) in chalk, so the lamp stays for speakers, the main action
     // and mentions.
-    v.selection = egui::style::Selection { bg_fill: SELECAO, stroke: Stroke::new(stroke::HAIRLINE, GIZ) };
+    v.selection = egui::style::Selection {
+        bg_fill: SELECAO,
+        stroke: Stroke::new(stroke::HAIRLINE, GIZ),
+    };
     v.hyperlink_color = LINK;
     v.faint_bg_color = Color32::from_rgb(0x18, 0x23, 0x2E);
     v.extreme_bg_color = FUNDO;
@@ -284,7 +314,12 @@ pub fn visuals() -> egui::Visuals {
     v.menu_corner_radius = CornerRadius::same(radius::POPUP);
     // Shadows only on menus and popups.
     v.window_shadow = Shadow::NONE;
-    v.popup_shadow = Shadow { offset: [0, 8], blur: 22, spread: 0, color: Color32::from_black_alpha(120) };
+    v.popup_shadow = Shadow {
+        offset: [0, 8],
+        blur: 22,
+        spread: 0,
+        color: Color32::from_black_alpha(120),
+    };
     v.window_fill = PAREDE;
     v.window_stroke = hair;
     v.panel_fill = NOITE;
@@ -300,7 +335,10 @@ pub fn visuals() -> egui::Visuals {
 
 /// The whole egui style: visuals, text styles and spacing.
 pub fn style() -> egui::Style {
-    let mut s = egui::Style { visuals: visuals(), ..Default::default() };
+    let mut s = egui::Style {
+        visuals: visuals(),
+        ..Default::default()
+    };
     s.text_styles = [
         (TextStyle::Small, body(size::SMALL)),
         (TextStyle::Body, body(size::BODY)),
@@ -308,7 +346,10 @@ pub fn style() -> egui::Style {
         (TextStyle::Heading, display(size::HEADING)),
         (TextStyle::Monospace, FontId::monospace(size::MONO)),
         (TextStyle::Name(STYLE_TITLE.into()), display(size::TITLE)),
-        (TextStyle::Name(STYLE_SECTION.into()), display(size::SECTION)),
+        (
+            TextStyle::Name(STYLE_SECTION.into()),
+            display(size::SECTION),
+        ),
     ]
     .into();
     let sp = &mut s.spacing;
@@ -324,7 +365,13 @@ pub fn style() -> egui::Style {
     sp.slider_rail_height = 4.0;
     sp.combo_height = 260.0;
     // Thin, quiet scroll bars: invisible until the pointer is over the area, never taking space.
-    sp.scroll = egui::style::ScrollStyle { bar_width: 8.0, floating_width: 3.0, handle_min_length: 24.0, foreground_color: false, ..egui::style::ScrollStyle::floating() };
+    sp.scroll = egui::style::ScrollStyle {
+        bar_width: 8.0,
+        floating_width: 3.0,
+        handle_min_length: 24.0,
+        foreground_color: false,
+        ..egui::style::ScrollStyle::floating()
+    };
     s
 }
 
@@ -352,8 +399,16 @@ mod tests {
             assert_eq!(keys[0], first, "{family:?}");
             assert!(keys.contains(&icons), "{family:?}");
             // egui's emoji fonts stay as fallbacks (reactions, messages, the soundboard).
-            assert!(keys.iter().any(|k| k == "NotoEmoji-Regular") && keys.iter().any(|k| k == "emoji-icon-font"), "{family:?}");
-            assert_eq!(keys.iter().filter(|k| **k == icons).count(), 1, "{family:?}");
+            assert!(
+                keys.iter().any(|k| k == "NotoEmoji-Regular")
+                    && keys.iter().any(|k| k == "emoji-icon-font"),
+                "{family:?}"
+            );
+            assert_eq!(
+                keys.iter().filter(|k| **k == icons).count(),
+                1,
+                "{family:?}"
+            );
         }
         assert_eq!(f.families[&FontFamily::Monospace][0], "Hack");
     }
@@ -361,10 +416,22 @@ mod tests {
     #[test]
     fn at_most_four_font_files_of_our_own() {
         // Three text fonts and the (subset) icon font; egui's defaults are not ours.
-        let ours = [ATKINSON_REGULAR.len(), ATKINSON_SEMIBOLD.len(), BRICOLAGE_SEMIBOLD.len(), ph::FONT.len()];
+        let ours = [
+            ATKINSON_REGULAR.len(),
+            ATKINSON_SEMIBOLD.len(),
+            BRICOLAGE_SEMIBOLD.len(),
+            ph::FONT.len(),
+        ];
         assert_eq!(ours.len(), 4);
-        println!("font bytes: atkinson {} + {}, bricolage {}, phosphor subset {}", ours[0], ours[1], ours[2], ours[3]);
-        assert!(ph::FONT.len() < 64 * 1024, "the icon subset grew to {} bytes", ph::FONT.len());
+        println!(
+            "font bytes: atkinson {} + {}, bricolage {}, phosphor subset {}",
+            ours[0], ours[1], ours[2], ours[3]
+        );
+        assert!(
+            ph::FONT.len() < 64 * 1024,
+            "the icon subset grew to {} bytes",
+            ph::FONT.len()
+        );
     }
 
     #[test]

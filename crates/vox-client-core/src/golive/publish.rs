@@ -19,19 +19,26 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::{FutureExt, StreamExt};
-use parking_lot::Mutex;
-use livekit::options::{AudioEncoding, TrackPublishOptions, VideoCodec, VideoEncoderBackend, VideoEncoding};
+use livekit::options::{
+    AudioEncoding, TrackPublishOptions, VideoCodec, VideoEncoderBackend, VideoEncoding,
+};
 use livekit::prelude::*;
 use livekit::prelude::{PublishTimingEventStream, PublishTimingStage};
 use livekit::webrtc::audio_frame::AudioFrame;
 use livekit::webrtc::audio_source::native::NativeAudioSource;
 use livekit::webrtc::audio_source::{AudioSourceOptions, RtcAudioSource};
-use livekit::webrtc::video_frame::{EncodedFrameType, EncodedVideoCodec, EncodedVideoFrame, FrameMetadata, NV12Buffer, VideoFrame, VideoRotation};
+use livekit::webrtc::video_frame::{
+    EncodedFrameType, EncodedVideoCodec, EncodedVideoFrame, FrameMetadata, NV12Buffer, VideoFrame,
+    VideoRotation,
+};
 use livekit::webrtc::video_source::native::NativeVideoSource;
 use livekit::webrtc::video_source::{RtcVideoSource, VideoResolution};
+use parking_lot::Mutex;
 use tracing::{debug, info, warn};
-use vox_capture::{AudioTarget, EncoderBackend, EncoderControl, IdrGate, Nv12Frame, VideoConfig, VideoTarget};
 pub use vox_capture::DegradationPreference;
+use vox_capture::{
+    AudioTarget, EncoderBackend, EncoderControl, IdrGate, Nv12Frame, VideoConfig, VideoTarget,
+};
 
 use super::encoders;
 use super::h264;
@@ -60,7 +67,7 @@ pub enum ShareSource {
     TestPattern,
     /// Pre-encoded H.264 from a file (encoded path only); no audio.
     H264File(H264FileSource),
-    /// Audio-only Go Live ("Só áudio"): only this app's sound (its process tree). No video track,
+    /// Audio-only Go Live ("Audio only"): only this app's sound (its process tree). No video track,
     /// no capture, no encoder.
     AudioApp { pid: u32 },
     /// Audio-only Go Live of the whole PC's sound except our own process.
@@ -72,7 +79,10 @@ pub enum ShareSource {
 impl ShareSource {
     /// The share publishes no video (see [`AUDIO_ONLY_TRACK_NAME`]).
     pub fn is_audio_only(&self) -> bool {
-        matches!(self, Self::AudioApp { .. } | Self::AudioSystem | Self::AudioTone)
+        matches!(
+            self,
+            Self::AudioApp { .. } | Self::AudioSystem | Self::AudioTone
+        )
     }
 }
 
@@ -152,7 +162,8 @@ impl Default for ShareOptions {
 impl ShareOptions {
     /// The video bitrate cap this share publishes with.
     pub fn bitrate(&self) -> u64 {
-        self.max_bitrate.unwrap_or_else(|| screenshare_bitrate(self.width, self.height, self.fps))
+        self.max_bitrate
+            .unwrap_or_else(|| screenshare_bitrate(self.width, self.height, self.fps))
     }
 }
 
@@ -172,7 +183,11 @@ pub enum VideoPath {
 pub fn screenshare_bitrate(width: u32, height: u32, fps: u32) -> u64 {
     let px = (width as f64 * height as f64) / (1920.0 * 1080.0);
     let fps = fps as f64;
-    let fps_factor = if fps <= 30.0 { fps / 30.0 } else { 1.0 + 0.5 * ((fps - 30.0) / 30.0) };
+    let fps_factor = if fps <= 30.0 {
+        fps / 30.0
+    } else {
+        1.0 + 0.5 * ((fps - 30.0) / 30.0)
+    };
     ((SCREENSHARE_1080P30_BPS * px.powf(0.75) * fps_factor) as u64).clamp(500_000, 20_000_000)
 }
 
@@ -192,7 +207,7 @@ pub(crate) struct TestHooks {
 }
 
 /// A vox-capture failure with the operation that hit it. Displays as the English log/CLI text;
-/// [`capture_failure_pt`] turns it into the Portuguese text the app shows.
+/// [`capture_failure_pt`] turns it into the English text the app shows.
 #[derive(Debug)]
 pub struct CaptureFailure {
     pub error: vox_capture::CaptureError,
@@ -214,14 +229,21 @@ pub fn capture_error(what: &str, e: vox_capture::CaptureError) -> anyhow::Error 
         E::NotFound(m) => format!("{what}: target not found ({m})"),
         E::Unsupported(m) => format!("{what}: not supported on this system ({m})"),
         E::Stopped(m) => format!("{what}: capture stopped ({m})"),
-        E::Os(m) => format!("{what}: {} ({m})", if cfg!(windows) { "Windows API error" } else { "system error" }),
+        E::Os(m) => format!(
+            "{what}: {} ({m})",
+            if cfg!(windows) {
+                "Windows API error"
+            } else {
+                "system error"
+            }
+        ),
     };
     warn!(op = what, error = %e, "capture error");
     anyhow::Error::new(CaptureFailure { error: e, msg })
 }
 
 /// macOS: what to do when Screen Recording (which also covers an app's sound) is off for us.
-pub const SCREEN_PERMISSION_PT: &str = "O macOS não deixou o concord gravar a tela. Ligue o concord em Ajustes do Sistema > Privacidade e Segurança > Gravação de Tela e Áudio do Sistema e abra o concord de novo.";
+pub const SCREEN_PERMISSION_PT: &str = "macOS did not allow concord to record the screen. Enable concord in System Settings > Privacy & Security > Screen & System Audio Recording, then reopen concord.";
 
 /// The capture failed because Screen Recording is off (macOS only; never on Windows).
 fn screen_permission_refused(e: &anyhow::Error) -> bool {
@@ -229,36 +251,44 @@ fn screen_permission_refused(e: &anyhow::Error) -> bool {
         && matches!(e.downcast_ref::<CaptureFailure>().map(|f| &f.error), Some(vox_capture::CaptureError::Os(m)) if m.contains("Screen Recording permission"))
 }
 
-/// "Windows" in the Portuguese error texts, "macOS" on the Mac.
-const OS_NAME: &str = if cfg!(target_os = "macos") { "macOS" } else { "Windows" };
+/// "Windows" in the English error texts, "macOS" on the Mac.
+const OS_NAME: &str = if cfg!(target_os = "macos") {
+    "macOS"
+} else {
+    "Windows"
+};
 
-/// Portuguese explanation of a failed audio capture start (audio-only shares).
+/// English explanation of a failed audio capture start (audio-only shares).
 pub fn audio_failure_pt(e: &anyhow::Error) -> String {
     use vox_capture::CaptureError as E;
     if screen_permission_refused(e) {
         return SCREEN_PERMISSION_PT.into();
     }
     match e.downcast_ref::<CaptureFailure>().map(|f| &f.error) {
-        Some(E::NotFound(_)) => "Não foi possível capturar o som: o app não existe mais (foi fechado?).".into(),
-        Some(E::Unsupported(_)) if cfg!(target_os = "macos") => "Este macOS não deixa capturar o som de um app só (precisa do macOS 13 ou mais novo).".into(),
-        Some(E::Unsupported(_)) => "Este Windows não deixa capturar o som de um app só (precisa do Windows 10 versão 2004 ou mais novo).".into(),
-        Some(E::Stopped(_)) => "A captura de som parou assim que começou.".into(),
-        Some(E::Os(m)) => format!("Erro do {OS_NAME} ao capturar o som: {m}"),
-        None => format!("Não foi possível iniciar a transmissão de áudio: {e:#}"),
+        Some(E::NotFound(_)) => "Could not capture audio: the app no longer exists (was it closed?).".into(),
+        Some(E::Unsupported(_)) if cfg!(target_os = "macos") => "This macOS version cannot capture a single app's audio (requires macOS 13 or newer).".into(),
+        Some(E::Unsupported(_)) => "This Windows version cannot capture a single app's audio (requires Windows 10 version 2004 or newer).".into(),
+        Some(E::Stopped(_)) => "Audio capture stopped immediately after starting.".into(),
+        Some(E::Os(m)) => format!("{OS_NAME} error capturing audio: {m}"),
+        None => format!("Could not start audio streaming: {e:#}"),
     }
 }
 
-/// Portuguese explanation of a failed capture start (for [`ActiveShare::switch_source`]).
+/// English explanation of a failed capture start (for [`ActiveShare::switch_source`]).
 pub fn capture_failure_pt(e: &anyhow::Error) -> String {
     use vox_capture::CaptureError as E;
     if screen_permission_refused(e) {
         return SCREEN_PERMISSION_PT.into();
     }
     match e.downcast_ref::<CaptureFailure>().map(|f| &f.error) {
-        Some(E::NotFound(_)) => "A janela ou tela escolhida não existe mais (foi fechada?).".into(),
-        Some(E::Unsupported(_)) => "Esta janela ou tela não pode ser capturada neste computador.".into(),
-        Some(E::Stopped(_)) => "A captura parou assim que começou.".into(),
-        Some(E::Os(m)) => format!("Erro do {OS_NAME} ao iniciar a captura: {m}"),
+        Some(E::NotFound(_)) => {
+            "The selected window or screen no longer exists (was it closed?).".into()
+        }
+        Some(E::Unsupported(_)) => {
+            "This window or screen cannot be captured on this computer.".into()
+        }
+        Some(E::Stopped(_)) => "Capture stopped immediately after starting.".into(),
+        Some(E::Os(m)) => format!("{OS_NAME} error starting capture: {m}"),
         None => format!("{e:#}"),
     }
 }
@@ -293,9 +323,13 @@ pub fn window_pid(hwnd: isize) -> Option<u32> {
 pub fn default_audio_target(source: &ShareSource) -> Option<AudioTarget> {
     match source {
         ShareSource::Window(hwnd) => window_pid(*hwnd).map(|pid| AudioTarget::ProcessTree { pid }),
-        ShareSource::Monitor(_) => Some(AudioTarget::SystemExcludingProcessTree { pid: std::process::id() }),
+        ShareSource::Monitor(_) => Some(AudioTarget::SystemExcludingProcessTree {
+            pid: std::process::id(),
+        }),
         ShareSource::AudioApp { pid } => Some(AudioTarget::ProcessTree { pid: *pid }),
-        ShareSource::AudioSystem => Some(AudioTarget::SystemExcludingProcessTree { pid: std::process::id() }),
+        ShareSource::AudioSystem => Some(AudioTarget::SystemExcludingProcessTree {
+            pid: std::process::id(),
+        }),
         ShareSource::TestPattern | ShareSource::H264File(_) | ShareSource::AudioTone => None,
     }
 }
@@ -310,8 +344,14 @@ impl ProducerThread {
     pub(crate) fn spawn(name: &str, f: impl FnOnce(Arc<AtomicBool>) + Send + 'static) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let s = stop.clone();
-        let handle = std::thread::Builder::new().name(name.into()).spawn(move || f(s)).expect("spawn producer");
-        Self { stop, handle: Some(handle) }
+        let handle = std::thread::Builder::new()
+            .name(name.into())
+            .spawn(move || f(s))
+            .expect("spawn producer");
+        Self {
+            stop,
+            handle: Some(handle),
+        }
     }
 
     fn is_finished(&self) -> bool {
@@ -357,11 +397,19 @@ pub(crate) struct FrameGate<F> {
 
 impl<F> FrameGate<F> {
     pub(crate) fn live() -> Self {
-        Self { mode: FrameMode::Live, cached: None, seen_frame: true }
+        Self {
+            mode: FrameMode::Live,
+            cached: None,
+            seen_frame: true,
+        }
     }
 
     pub(crate) fn standby() -> Self {
-        Self { mode: FrameMode::Standby, cached: None, seen_frame: false }
+        Self {
+            mode: FrameMode::Standby,
+            cached: None,
+            seen_frame: false,
+        }
     }
 
     pub(crate) fn mode(&self) -> FrameMode {
@@ -429,7 +477,15 @@ pub(crate) struct Stage<F> {
 
 impl<F> Stage<F> {
     pub(crate) fn new(standby: bool) -> Self {
-        Self { gate: if standby { FrameGate::standby() } else { FrameGate::live() }, first_pass: None, last_pass: None }
+        Self {
+            gate: if standby {
+                FrameGate::standby()
+            } else {
+                FrameGate::live()
+            },
+            first_pass: None,
+            last_pass: None,
+        }
     }
 
     fn note_pass(&mut self) {
@@ -460,7 +516,8 @@ pub(crate) type EncHandle = Arc<Mutex<EncStage>>;
 impl EncStage {
     pub(crate) fn on_frame(&mut self, f: &vox_capture::EncodedFrame<'_>) {
         if self.stage.gate.mode() == FrameMode::Live {
-            self.sink.push(f.data, f.keyframe, f.width, f.height, f.timestamp_us);
+            self.sink
+                .push(f.data, f.keyframe, f.width, f.height, f.timestamp_us);
             self.stage.note_pass();
         } else if let Some(o) = self.stage.gate.offer(f.keyframe, || EncFrame {
             data: f.data.to_vec(),
@@ -474,7 +531,8 @@ impl EncStage {
     }
 
     fn push_owned(&mut self, o: EncFrame) {
-        self.sink.push(&o.data, o.keyframe, o.width, o.height, o.timestamp_us);
+        self.sink
+            .push(&o.data, o.keyframe, o.width, o.height, o.timestamp_us);
         self.stage.note_pass();
     }
 
@@ -516,7 +574,12 @@ impl RawStage {
     pub(crate) fn on_frame(&mut self, f: &Nv12Frame<'_>) {
         // Every raw frame is a full picture, so each one can start a stream.
         let counters = self.counters.clone();
-        if let Some(o) = self.stage.gate.offer(true, || build_nv12_frame(&counters, f)).flatten() {
+        if let Some(o) = self
+            .stage
+            .gate
+            .offer(true, || build_nv12_frame(&counters, f))
+            .flatten()
+        {
             self.submit(o);
         }
     }
@@ -544,7 +607,11 @@ impl RawStage {
 enum VideoProducer {
     Capture(vox_capture::VideoCapture, RawHandle, Option<CaptureTap>),
     Test(ProducerThread),
-    Encoded(vox_capture::EncodedVideoCapture, EncHandle, Option<CaptureTap>),
+    Encoded(
+        vox_capture::EncodedVideoCapture,
+        EncHandle,
+        Option<CaptureTap>,
+    ),
     File(ProducerThread),
 }
 
@@ -635,13 +702,28 @@ struct VideoPublication {
 
 impl VideoPublication {
     #[allow(clippy::too_many_arguments)]
-    async fn publish(room: &Room, path: VideoPath, source: NativeVideoSource, width: u32, height: u32, fps: u32, max_bitrate: u64, encoder: VideoEncoderBackend) -> Result<Self> {
-        let track = LocalVideoTrack::create_video_track("screenshare", RtcVideoSource::Native(source.clone()));
+    async fn publish(
+        room: &Room,
+        path: VideoPath,
+        source: NativeVideoSource,
+        width: u32,
+        height: u32,
+        fps: u32,
+        max_bitrate: u64,
+        encoder: VideoEncoderBackend,
+    ) -> Result<Self> {
+        let track = LocalVideoTrack::create_video_track(
+            "screenshare",
+            RtcVideoSource::Native(source.clone()),
+        );
         let publish = TrackPublishOptions {
             source: TrackSource::Screenshare,
             video_codec: VideoCodec::H264,
             simulcast: false,
-            video_encoding: Some(VideoEncoding { max_bitrate, max_framerate: fps as f64 }),
+            video_encoding: Some(VideoEncoding {
+                max_bitrate,
+                max_framerate: fps as f64,
+            }),
             video_encoder: encoder,
             ..Default::default()
         };
@@ -660,7 +742,15 @@ impl VideoPublication {
             "screenshare video published (host upload: ~{:.1} Mbps per viewer at full quality)",
             max_bitrate as f64 / 1e6
         );
-        Ok(Self { path, source, track, publication, fps, max_bitrate, encoder })
+        Ok(Self {
+            path,
+            source,
+            track,
+            publication,
+            fps,
+            max_bitrate,
+            encoder,
+        })
     }
 
     fn compatible(&self, fps: u32, max_bitrate: u64, encoder: VideoEncoderBackend) -> bool {
@@ -668,7 +758,11 @@ impl VideoPublication {
     }
 
     async fn unpublish(self, room: &Room) {
-        if let Err(e) = room.local_participant().unpublish_track(&self.publication.sid()).await {
+        if let Err(e) = room
+            .local_participant()
+            .unpublish_track(&self.publication.sid())
+            .await
+        {
             warn!(error = %e, path = ?self.path, "unpublish screenshare video");
         }
     }
@@ -728,16 +822,28 @@ impl SharePublication {
         };
         if !found {
             // App/music audio: no echo cancellation / noise suppression / AGC.
-            let opts = AudioSourceOptions { echo_cancellation: false, noise_suppression: false, auto_gain_control: false };
-            let source = NativeAudioSource::new(opts, vox_capture::AUDIO_SAMPLE_RATE, vox_capture::AUDIO_CHANNELS as u32, 0);
+            let opts = AudioSourceOptions {
+                echo_cancellation: false,
+                noise_suppression: false,
+                auto_gain_control: false,
+            };
+            let source = NativeAudioSource::new(
+                opts,
+                vox_capture::AUDIO_SAMPLE_RATE,
+                vox_capture::AUDIO_CHANNELS as u32,
+                0,
+            );
             let (name, bitrate) = match kind {
                 AudioKind::Companion => ("screenshare_audio", 128_000),
                 AudioKind::Only { bitrate } => (AUDIO_ONLY_TRACK_NAME, bitrate),
             };
-            let track = LocalAudioTrack::create_audio_track(name, RtcAudioSource::Native(source.clone()));
+            let track =
+                LocalAudioTrack::create_audio_track(name, RtcAudioSource::Native(source.clone()));
             let publish = TrackPublishOptions {
                 source: TrackSource::ScreenshareAudio,
-                audio_encoding: Some(AudioEncoding { max_bitrate: bitrate }),
+                audio_encoding: Some(AudioEncoding {
+                    max_bitrate: bitrate,
+                }),
                 dtx: false,
                 red: false,
                 // Without this the server answers without `stereo=1` and libwebrtc sends mono (a
@@ -750,8 +856,17 @@ impl SharePublication {
                 .publish_track(LocalTrack::Audio(track.clone()), publish)
                 .await
                 .context("publish screenshare audio")?;
-            info!(name, max_kbps = bitrate / 1000, "screenshare audio published (48 kHz stereo Opus, no DTX, APM off)");
-            let a = AudioPublication { source, track, publication, bitrate };
+            info!(
+                name,
+                max_kbps = bitrate / 1000,
+                "screenshare audio published (48 kHz stereo Opus, no DTX, APM off)"
+            );
+            let a = AudioPublication {
+                source,
+                track,
+                publication,
+                bitrate,
+            };
             match kind {
                 AudioKind::Companion => self.audio = Some(a),
                 AudioKind::Only { .. } => self.audio_only.push(a),
@@ -759,7 +874,11 @@ impl SharePublication {
         }
         Ok(match kind {
             AudioKind::Companion => self.audio.as_ref().expect("published above"),
-            AudioKind::Only { bitrate } => self.audio_only.iter().find(|a| a.bitrate == bitrate).expect("published above"),
+            AudioKind::Only { bitrate } => self
+                .audio_only
+                .iter()
+                .find(|a| a.bitrate == bitrate)
+                .expect("published above"),
         })
     }
 
@@ -783,10 +902,25 @@ impl SharePublication {
 
     /// Drop the path's publication if its encoding settings don't match (the old sender stays
     /// allocated until leave: SDK limitation, see the type docs).
-    async fn drop_incompatible(&mut self, room: &Room, path: VideoPath, fps: u32, max_bitrate: u64, encoder: VideoEncoderBackend) {
+    async fn drop_incompatible(
+        &mut self,
+        room: &Room,
+        path: VideoPath,
+        fps: u32,
+        max_bitrate: u64,
+        encoder: VideoEncoderBackend,
+    ) {
         let slot = self.slot(path);
-        if slot.as_ref().is_some_and(|v| !v.compatible(fps, max_bitrate, encoder)) {
-            info!(?path, fps, max_kbps = max_bitrate / 1000, "share settings changed; republishing screenshare track");
+        if slot
+            .as_ref()
+            .is_some_and(|v| !v.compatible(fps, max_bitrate, encoder))
+        {
+            info!(
+                ?path,
+                fps,
+                max_kbps = max_bitrate / 1000,
+                "share settings changed; republishing screenshare track"
+            );
             if let Some(old) = slot.take() {
                 old.unpublish(room).await;
             }
@@ -808,7 +942,11 @@ impl SharePublication {
             v.unpublish(room).await;
         }
         for a in self.audio.into_iter().chain(self.audio_only) {
-            if let Err(e) = room.local_participant().unpublish_track(&a.publication.sid()).await {
+            if let Err(e) = room
+                .local_participant()
+                .unpublish_track(&a.publication.sid())
+                .await
+            {
                 warn!(error = %e, "unpublish screenshare audio");
             }
         }
@@ -816,7 +954,13 @@ impl SharePublication {
 }
 
 /// What `start_video_path` started: path, producer, counters, pre-encoded feedback, encoder.
-type StartedVideo = (VideoPath, VideoProducer, Arc<StreamCounters>, Option<(String, Arc<EncodedFeedback>)>, Option<encoders::Attempt>);
+type StartedVideo = (
+    VideoPath,
+    VideoProducer,
+    Arc<StreamCounters>,
+    Option<(String, Arc<EncodedFeedback>)>,
+    Option<encoders::Attempt>,
+);
 
 /// A running Go Live (tracks published and unmuted, producer running).
 pub struct ActiveShare {
@@ -832,7 +976,7 @@ pub struct ActiveShare {
     max_bitrate: u64,
     /// Pre-encoded path: feedback counters and backend name for the stats line.
     encoder: Option<(String, Arc<EncodedFeedback>)>,
-    /// The encoder in use ([`encoders::Attempt`]): hardware backend + adapter, kept for "Trocar
+    /// The encoder in use ([`encoders::Attempt`]): hardware backend + adapter, kept for "Switch
     /// tela" (the new capture uses the same one).
     attempt: Option<encoders::Attempt>,
     /// Test hooks (bitrate cap, encoder overshoot); see [`ActiveShare::set_bitrate_cap`].
@@ -860,7 +1004,10 @@ pub(crate) fn plan_audio(had_capture: bool, want: bool, publication_exists: bool
     match (had_capture, want) {
         (false, false) => AudioPlan::Nothing,
         (true, false) => AudioPlan::Stop,
-        (had, true) => AudioPlan::Start { replace: had, publish: !publication_exists },
+        (had, true) => AudioPlan::Start {
+            replace: had,
+            publish: !publication_exists,
+        },
     }
 }
 
@@ -877,7 +1024,11 @@ pub(crate) enum SwitchDecision {
     Fail,
 }
 
-pub(crate) fn switch_decision(new_running: bool, new_delivered: bool, old_alive: bool) -> SwitchDecision {
+pub(crate) fn switch_decision(
+    new_running: bool,
+    new_delivered: bool,
+    old_alive: bool,
+) -> SwitchDecision {
     if new_running && new_delivered {
         SwitchDecision::Commit
     } else if old_alive {
@@ -917,7 +1068,7 @@ pub struct SwitchReport {
     pub total: Duration,
     pub audio_before: bool,
     pub audio_after: bool,
-    /// Why the new source's audio is missing although it was requested (Portuguese).
+    /// Why the new source's audio is missing although it was requested (English).
     pub audio_error: Option<String>,
 }
 
@@ -952,15 +1103,28 @@ impl ActiveShare {
         }
         let mut pubs = reuse.unwrap_or_default();
         let bitrate_cap = Arc::new(TestHooks::default());
-        let res = Self::start_video_path(room, &source, &opts, &mut pubs, bitrate_cap.clone(), preview.as_ref()).await;
+        let res = Self::start_video_path(
+            room,
+            &source,
+            &opts,
+            &mut pubs,
+            bitrate_cap.clone(),
+            preview.as_ref(),
+        )
+        .await;
         let (path, video, video_counters, encoder, attempt) = match res {
             Ok(v) => v,
             Err(error) => {
                 pubs.mute();
-                return Err(StartError { error, publication: Some(Box::new(pubs)) });
+                return Err(StartError {
+                    error,
+                    publication: Some(Box::new(pubs)),
+                });
             }
         };
-        let vp = pubs.video(path).expect("video publication present after start");
+        let vp = pubs
+            .video(path)
+            .expect("video publication present after start");
         let video_track = vp.track.clone();
         let vp_max_bitrate = vp.max_bitrate;
         // Unmute right away: frames pushed into a disabled track become black raw frames, which
@@ -999,7 +1163,7 @@ impl ActiveShare {
     /// Audio-only Go Live: publish just the audio track (the `audio-only` one of the chosen
     /// bitrate) and capture the sound. No video track, capture or encoder exists; the idle cost is
     /// the audio capture plus Opus. Unlike the companion audio of a screen share this is not
-    /// best effort: without sound there is no share, so a failure is an error (in Portuguese).
+    /// best effort: without sound there is no share, so a failure is an error (in English).
     async fn start_audio_only(
         room: &Room,
         source: ShareSource,
@@ -1035,7 +1199,10 @@ impl ActiveShare {
                     p.mute();
                     Box::new(p)
                 });
-                Err(StartError { error: anyhow!(audio_failure_pt(&e)), publication })
+                Err(StartError {
+                    error: anyhow!(audio_failure_pt(&e)),
+                    publication,
+                })
             }
         }
     }
@@ -1057,7 +1224,9 @@ impl ActiveShare {
             ShareSource::H264File(f) => f.fps,
             _ => opts.fps,
         };
-        let max_bitrate = opts.max_bitrate.unwrap_or_else(|| screenshare_bitrate(width, height, fps));
+        let max_bitrate = opts
+            .max_bitrate
+            .unwrap_or_else(|| screenshare_bitrate(width, height, fps));
         let counters = Arc::new(StreamCounters::default());
 
         let mut software = None;
@@ -1069,11 +1238,21 @@ impl ActiveShare {
                     let plan = encoders::plan(opts.encoder);
                     info!(plan = %encoders::describe(&plan), "share encoder plan");
                     software = plan.iter().find(|a| a.is_software()).cloned();
-                    plan.into_iter().filter(|a| !a.is_software() && !encoders::in_libwebrtc(a)).map(Some).collect()
+                    plan.into_iter()
+                        .filter(|a| !a.is_software() && !encoders::in_libwebrtc(a))
+                        .map(Some)
+                        .collect()
                 }
             };
             for attempt in attempts {
-                pubs.drop_incompatible(room, VideoPath::Encoded, fps, max_bitrate, VideoEncoderBackend::PreEncoded).await;
+                pubs.drop_incompatible(
+                    room,
+                    VideoPath::Encoded,
+                    fps,
+                    max_bitrate,
+                    VideoEncoderBackend::PreEncoded,
+                )
+                .await;
                 // Reuse the session's encoded source, or make a new one (published below, after
                 // the encoder started, so a failed start never shows viewers a dead track).
                 let video_source = match &pubs.encoded {
@@ -1082,15 +1261,42 @@ impl ActiveShare {
                 };
                 let feedback = Arc::new(EncodedFeedback::default());
                 let timing: TimingSlot = Arc::new(Mutex::new(None));
-                let hw = attempt.as_ref().and_then(|a| a.backend.map(|b| (b, a.luid)));
-                let started = start_encoded(source, opts, hw, max_bitrate, video_source.clone(), counters.clone(), feedback.clone(), bitrate_cap.clone(), false, timing.clone(), preview);
-                let label = attempt.as_ref().map(|a| a.label.clone()).unwrap_or_else(|| "-".into());
+                let hw = attempt
+                    .as_ref()
+                    .and_then(|a| a.backend.map(|b| (b, a.luid)));
+                let started = start_encoded(
+                    source,
+                    opts,
+                    hw,
+                    max_bitrate,
+                    video_source.clone(),
+                    counters.clone(),
+                    feedback.clone(),
+                    bitrate_cap.clone(),
+                    false,
+                    timing.clone(),
+                    preview,
+                );
+                let label = attempt
+                    .as_ref()
+                    .map(|a| a.label.clone())
+                    .unwrap_or_else(|| "-".into());
                 match started {
                     Ok((producer, backend_name)) => {
                         if pubs.encoded.is_none() {
                             // The encoder may already be producing; frames pushed before the track
                             // is published are dropped and the first subscriber's PLI gets an IDR.
-                            let v = VideoPublication::publish(room, VideoPath::Encoded, video_source, width, height, fps, max_bitrate, VideoEncoderBackend::PreEncoded).await?;
+                            let v = VideoPublication::publish(
+                                room,
+                                VideoPath::Encoded,
+                                video_source,
+                                width,
+                                height,
+                                fps,
+                                max_bitrate,
+                                VideoEncoderBackend::PreEncoded,
+                            )
+                            .await?;
                             pubs.encoded = Some(v);
                         }
                         // Per-frame "WebRTC encoded it" events (see `DropTracker`). This installs a
@@ -1099,7 +1305,13 @@ impl ActiveShare {
                         let track = &pubs.encoded.as_ref().expect("published above").track;
                         *timing.lock() = Some(track.publish_timing_events());
                         info!(backend = %backend_name, encoder = %label, max_kbps = max_bitrate / 1000, "share path: pre-encoded H.264 (no software encoder)");
-                        return Ok((VideoPath::Encoded, producer, counters, Some((backend_name, feedback)), attempt));
+                        return Ok((
+                            VideoPath::Encoded,
+                            producer,
+                            counters,
+                            Some((backend_name, feedback)),
+                            attempt,
+                        ));
                     }
                     Err(e) if matches!(source, ShareSource::H264File(_)) => return Err(e),
                     Err(e) => {
@@ -1111,19 +1323,48 @@ impl ActiveShare {
 
         // macOS: the plan's hardware encoder (VideoToolbox) runs inside libwebrtc, on this path.
         let (encoder, hw_attempt) = encoders::raw_encoder(opts.encoder);
-        pubs.drop_incompatible(room, VideoPath::Raw, fps, max_bitrate, encoder).await;
+        pubs.drop_incompatible(room, VideoPath::Raw, fps, max_bitrate, encoder)
+            .await;
         if pubs.raw.is_none() {
             let video_source = NativeVideoSource::new(VideoResolution { width, height }, true);
-            pubs.raw = Some(VideoPublication::publish(room, VideoPath::Raw, video_source, width, height, fps, max_bitrate, encoder).await?);
+            pubs.raw = Some(
+                VideoPublication::publish(
+                    room,
+                    VideoPath::Raw,
+                    video_source,
+                    width,
+                    height,
+                    fps,
+                    max_bitrate,
+                    encoder,
+                )
+                .await?,
+            );
         }
         let video_source = pubs.raw.as_ref().expect("published above").source.clone();
-        let producer = start_raw(source, opts, width, height, video_source, counters.clone(), false, preview)?;
+        let producer = start_raw(
+            source,
+            opts,
+            width,
+            height,
+            video_source,
+            counters.clone(),
+            false,
+            preview,
+        )?;
         match &hw_attempt {
-            Some(a) => info!(encoder = %a.label, "share path: raw frames + libwebrtc's hardware H.264 (VideoToolbox, frames passed without a copy)"),
-            None => info!(reason = raw_reason(source, opts.encoder), "share path: raw frames + software H.264 (OpenH264)"),
+            Some(a) => {
+                info!(encoder = %a.label, "share path: raw frames + libwebrtc's hardware H.264 (VideoToolbox, frames passed without a copy)")
+            }
+            None => info!(
+                reason = raw_reason(source, opts.encoder),
+                "share path: raw frames + software H.264 (OpenH264)"
+            ),
         }
         let capture = matches!(source, ShareSource::Window(_) | ShareSource::Monitor(_));
-        let attempt = hw_attempt.or(software).or_else(|| capture.then(|| encoders::plan(EncoderChoice::Software).remove(0)));
+        let attempt = hw_attempt
+            .or(software)
+            .or_else(|| capture.then(|| encoders::plan(EncoderChoice::Software).remove(0)));
         Ok((VideoPath::Raw, producer, counters, None, attempt))
     }
 
@@ -1142,24 +1383,43 @@ impl ActiveShare {
     /// Start capturing the sound of `source` into the share's audio publication (published
     /// first if the session never had it) and unmute that publication. Nothing in `self` is
     /// replaced, so the caller decides what happens to the previous capture.
-    async fn make_audio_producer(&mut self, room: &Room, source: &ShareSource) -> Result<(AudioProducer, Arc<StreamCounters>, LocalAudioTrack)> {
+    async fn make_audio_producer(
+        &mut self,
+        room: &Room,
+        source: &ShareSource,
+    ) -> Result<(AudioProducer, Arc<StreamCounters>, LocalAudioTrack)> {
         let audio_only = source.is_audio_only();
         let target = match self.opts.audio_pid {
             Some(pid) if !audio_only => Some(AudioTarget::ProcessTree { pid }),
             _ => default_audio_target(source),
         };
-        let kind = if audio_only { AudioKind::Only { bitrate: self.opts.audio_bitrate } } else { AudioKind::Companion };
-        let publication = self.publication.as_mut().expect("publication present while sharing");
+        let kind = if audio_only {
+            AudioKind::Only {
+                bitrate: self.opts.audio_bitrate,
+            }
+        } else {
+            AudioKind::Companion
+        };
+        let publication = self
+            .publication
+            .as_mut()
+            .expect("publication present while sharing");
         let audio = publication.ensure_audio(room, kind).await?;
         let counters = Arc::new(StreamCounters::default());
         let producer = match (source, target) {
-            (ShareSource::TestPattern | ShareSource::AudioTone, None) => AudioProducer::Sine(spawn_sine(audio.source.clone(), counters.clone())),
+            (ShareSource::TestPattern | ShareSource::AudioTone, None) => {
+                AudioProducer::Sine(spawn_sine(audio.source.clone(), counters.clone()))
+            }
             (other, target) => {
-                let target = target.ok_or_else(|| anyhow!("cannot resolve audio target for {other:?}"))?;
+                let target =
+                    target.ok_or_else(|| anyhow!("cannot resolve audio target for {other:?}"))?;
                 let src = audio.source.clone();
                 let c = counters.clone();
                 let cap = capture_call("start_audio", move || {
-                    vox_capture::start_audio(target, Box::new(move |chunk| push_audio_chunk(&src, &c, chunk)))
+                    vox_capture::start_audio(
+                        target,
+                        Box::new(move |chunk| push_audio_chunk(&src, &c, chunk)),
+                    )
                 })?;
                 info!(?target, "screenshare audio capture started");
                 AudioProducer::Capture(cap)
@@ -1216,14 +1476,18 @@ impl ActiveShare {
     /// Test hook (vox-cli `bwcap`): cap the encoder target as if the congestion controller asked
     /// for at most `bps` (`None` lifts it). Exercises the degradation policy end to end.
     pub fn set_bitrate_cap(&self, bps: Option<u64>) {
-        self.bitrate_cap.cap_bps.store(bps.unwrap_or(0), Ordering::Relaxed);
+        self.bitrate_cap
+            .cap_bps
+            .store(bps.unwrap_or(0), Ordering::Relaxed);
     }
 
     /// Test hook (vox-cli `overshoot`): make the hardware encoder produce `pct`% of the target it
     /// should (`None` = 100%), like an encoder that ignores WebRTC's rate requests. Exercises the
     /// WebRTC drop guard and recovery end to end.
     pub fn set_encoder_overshoot(&self, pct: Option<u64>) {
-        self.bitrate_cap.overshoot_pct.store(pct.unwrap_or(0), Ordering::Relaxed);
+        self.bitrate_cap
+            .overshoot_pct
+            .store(pct.unwrap_or(0), Ordering::Relaxed);
     }
 
     /// Stats extras for the pre-encoded path.
@@ -1233,7 +1497,11 @@ impl ActiveShare {
             Some(VideoProducer::Encoded(c, ..)) => Some(c.stats()),
             _ => None,
         };
-        Some(EncoderReport { backend: backend.clone(), feedback: feedback.clone(), hw })
+        Some(EncoderReport {
+            backend: backend.clone(),
+            feedback: feedback.clone(),
+            hw,
+        })
     }
 
     /// The encoder in use (`None` for audio-only shares and the test sources).
@@ -1271,40 +1539,80 @@ impl ActiveShare {
     /// The new capture starts in standby next to the running one, so a failure (window closed,
     /// unsupported) leaves the old share untouched. Once it delivered a frame, the old capture is
     /// retired and the new one takes over at a keyframe; only then is the old one torn down.
-    /// Errors are Portuguese, ready to show.
+    /// Errors are English, ready to show.
     pub async fn switch_source(&mut self, room: &Room, req: SwitchRequest) -> Result<SwitchReport> {
         let t0 = Instant::now();
         let from = self.source.clone();
         if from.is_audio_only() || req.source.is_audio_only() {
             return self.switch_audio_source(room, req, t0).await;
         }
-        let capturable = |s: &ShareSource| matches!(s, ShareSource::Window(_) | ShareSource::Monitor(_));
+        let capturable =
+            |s: &ShareSource| matches!(s, ShareSource::Window(_) | ShareSource::Monitor(_));
         if !capturable(&req.source) || !capturable(&from) {
-            bail!("Só dá para trocar entre janelas e telas.");
+            bail!("You can only switch between windows and screens.");
         }
-        let path = self.path.ok_or_else(|| anyhow!("A transmissão não está ativa."))?;
+        let path = self
+            .path
+            .ok_or_else(|| anyhow!("The stream is not active."))?;
         let video_source = self
             .publication
             .as_ref()
             .and_then(|p| p.video(path))
             .map(|v| v.source.clone())
-            .ok_or_else(|| anyhow!("A transmissão não está ativa."))?;
+            .ok_or_else(|| anyhow!("The stream is not active."))?;
         let audio_before = self.audio.is_some();
 
         // 1. New capture in standby; the old one keeps streaming meanwhile.
         let started = match path {
             // The same encoder (backend and GPU) as the running capture.
-            VideoPath::Encoded => match self.attempt.as_ref().and_then(|a| a.backend.map(|b| (b, a.luid))) {
+            VideoPath::Encoded => match self
+                .attempt
+                .as_ref()
+                .and_then(|a| a.backend.map(|b| (b, a.luid)))
+            {
                 Some(hw) => {
-                    let feedback = self.encoder.as_ref().map(|(_, f)| f.clone()).unwrap_or_default();
+                    let feedback = self
+                        .encoder
+                        .as_ref()
+                        .map(|(_, f)| f.clone())
+                        .unwrap_or_default();
                     // Same track, so the new sink watches the same publish-timing events.
-                    let timing: TimingSlot = Arc::new(Mutex::new(self.publication.as_ref().and_then(|p| p.video(path)).map(|v| v.track.publish_timing_events())));
-                    start_encoded(&req.source, &self.opts, Some(hw), self.max_bitrate, video_source, self.video_counters.clone(), feedback, self.bitrate_cap.clone(), true, timing, self.preview.as_ref())
-                        .map(|(p, name)| (p, Some(name)))
+                    let timing: TimingSlot = Arc::new(Mutex::new(
+                        self.publication
+                            .as_ref()
+                            .and_then(|p| p.video(path))
+                            .map(|v| v.track.publish_timing_events()),
+                    ));
+                    start_encoded(
+                        &req.source,
+                        &self.opts,
+                        Some(hw),
+                        self.max_bitrate,
+                        video_source,
+                        self.video_counters.clone(),
+                        feedback,
+                        self.bitrate_cap.clone(),
+                        true,
+                        timing,
+                        self.preview.as_ref(),
+                    )
+                    .map(|(p, name)| (p, Some(name)))
                 }
-                None => bail!("Esta janela ou tela não pode usar o codificador da transmissão atual."),
+                None => {
+                    bail!("This window or screen cannot use the current stream's encoder.")
+                }
             },
-            VideoPath::Raw => start_raw(&req.source, &self.opts, self.opts.width, self.opts.height, video_source, self.video_counters.clone(), true, self.preview.as_ref()).map(|p| (p, None)),
+            VideoPath::Raw => start_raw(
+                &req.source,
+                &self.opts,
+                self.opts.width,
+                self.opts.height,
+                video_source,
+                self.video_counters.clone(),
+                true,
+                self.preview.as_ref(),
+            )
+            .map(|p| (p, None)),
         };
         let (new_video, new_name) = started.map_err(|e| anyhow!(capture_failure_pt(&e)))?;
 
@@ -1319,17 +1627,22 @@ impl ActiveShare {
             SwitchDecision::KeepOld => {
                 warn!(from = ?from, to = ?req.source, "source switch given up: new capture silent or stopped; keeping the old one");
                 drop(new_video);
-                bail!("A janela ou tela escolhida não enviou imagem (está minimizada ou protegida?). A transmissão continua como estava.");
+                bail!("The selected window or screen did not send an image (minimized or protected?). The stream is unchanged.");
             }
             SwitchDecision::Fail => {
                 drop(new_video);
-                bail!("Não foi possível capturar a janela ou tela escolhida.");
+                bail!("Could not capture the selected window or screen.");
             }
         }
 
         // 3. Hand over: retire the old gate, activate the new one (forces a keyframe).
-        let old = self.video.take().expect("video producer present while sharing");
-        if let (VideoProducer::Encoded(_, o, _), VideoProducer::Encoded(_, n, _)) = (&old, &new_video) {
+        let old = self
+            .video
+            .take()
+            .expect("video producer present while sharing");
+        if let (VideoProducer::Encoded(_, o, _), VideoProducer::Encoded(_, n, _)) =
+            (&old, &new_video)
+        {
             // The new encoder starts at the configured bitrate; give it WebRTC's current target.
             let bps = o.lock().sink.webrtc_bps;
             n.lock().sink.webrtc_bps = bps;
@@ -1353,7 +1666,11 @@ impl ActiveShare {
         let live_deadline = Instant::now() + SWITCH_LIVE_TIMEOUT;
         while mode != FrameMode::Live && Instant::now() < live_deadline {
             tokio::time::sleep(Duration::from_millis(5)).await;
-            mode = self.video.as_ref().and_then(|v| v.gate_mode()).unwrap_or(FrameMode::Live);
+            mode = self
+                .video
+                .as_ref()
+                .and_then(|v| v.gate_mode())
+                .unwrap_or(FrameMode::Live);
         }
         if mode != FrameMode::Live {
             warn!("source switch: no keyframe from the new capture yet");
@@ -1369,7 +1686,11 @@ impl ActiveShare {
         // 4. Audio follows the new source (mute/unmute of the one audio publication). The old
         // app's sound is cut first so viewers never hear it over the new picture.
         self.opts.audio_pid = req.audio_pid;
-        let plan = plan_audio(audio_before, req.audio, self.publication.as_ref().is_some_and(|p| p.audio.is_some()));
+        let plan = plan_audio(
+            audio_before,
+            req.audio,
+            self.publication.as_ref().is_some_and(|p| p.audio.is_some()),
+        );
         let mut audio_error = None;
         match plan {
             AudioPlan::Nothing => {}
@@ -1380,8 +1701,10 @@ impl ActiveShare {
                     warn!(error = %format!("{e:#}"), "screenshare audio unavailable after the switch");
                     self.stop_audio();
                     audio_error = Some(match e.downcast_ref::<CaptureFailure>() {
-                        Some(_) => format!("Áudio indisponível: {}", capture_failure_pt(&e)),
-                        None => "Áudio indisponível: não foi possível capturar o som do novo app.".to_string(),
+                        Some(_) => format!("Audio unavailable: {}", capture_failure_pt(&e)),
+                        None => {
+                            "Audio unavailable: could not capture the new app's audio.".to_string()
+                        }
                     });
                 }
             }
@@ -1417,19 +1740,27 @@ impl ActiveShare {
         Ok(report)
     }
 
-    /// "Trocar" on an audio-only share: capture another app's (or the whole PC's) sound without
+    /// "Switch" on an audio-only share: capture another app's (or the whole PC's) sound without
     /// ending the live. The new capture starts next to the old one and only replaces it once it
     /// is running, so a closed app leaves the old sound going. Going between audio-only and a
     /// screen share is not a switch: the app restarts the Go Live for that.
-    async fn switch_audio_source(&mut self, room: &Room, req: SwitchRequest, t0: Instant) -> Result<SwitchReport> {
+    async fn switch_audio_source(
+        &mut self,
+        room: &Room,
+        req: SwitchRequest,
+        t0: Instant,
+    ) -> Result<SwitchReport> {
         let from = self.source.clone();
         if !from.is_audio_only() || !req.source.is_audio_only() {
-            bail!("Para trocar entre só áudio e tela, pare e comece a transmissão de novo.");
+            bail!("To switch between audio only and screen, stop and restart the stream.");
         }
         if self.publication.is_none() {
-            bail!("A transmissão não está ativa.");
+            bail!("The stream is not active.");
         }
-        let (producer, counters, track) = self.make_audio_producer(room, &req.source).await.map_err(|e| anyhow!(audio_failure_pt(&e)))?;
+        let (producer, counters, track) = self
+            .make_audio_producer(room, &req.source)
+            .await
+            .map_err(|e| anyhow!(audio_failure_pt(&e)))?;
         // Replaced: the old capture stops here (its callback is gone before the call returns).
         self.audio = Some(producer);
         self.audio_counters = Some(counters);
@@ -1466,7 +1797,10 @@ impl ActiveShare {
         // Dropping stops capture threads / joins producer threads.
         self.video.take();
         self.audio.take();
-        let publication = self.publication.take().expect("publication present while sharing");
+        let publication = self
+            .publication
+            .take()
+            .expect("publication present while sharing");
         publication.mute();
         info!(source = ?self.source, path = ?self.path, "screenshare stopped (tracks muted for reuse)");
         publication
@@ -1478,14 +1812,17 @@ fn process_alive(pid: u32) -> bool {
     #[cfg(windows)]
     {
         use windows_sys::Win32::Foundation::CloseHandle;
-        use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
         const STILL_ACTIVE: u32 = 259;
         // SAFETY: plain Win32 queries on a handle we open and close here.
         unsafe {
             let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
             if h.is_null() {
                 // Gone (no such process), or not ours to ask about: only "gone" ends the share.
-                return std::io::Error::last_os_error().raw_os_error() != Some(87); // ERROR_INVALID_PARAMETER
+                return std::io::Error::last_os_error().raw_os_error() != Some(87);
+                // ERROR_INVALID_PARAMETER
             }
             let mut code = 0u32;
             let ok = GetExitCodeProcess(h, &mut code);
@@ -1512,15 +1849,23 @@ fn initial_resolution(source: &ShareSource, opts: &ShareOptions) -> (u32, u32) {
         ShareSource::Window(_) => (opts.width, opts.height),
         ShareSource::H264File(f) => std::fs::read(&f.path)
             .ok()
-            .and_then(|d| h264::access_units(&d).first().map(|au| (au.width, au.height)))
+            .and_then(|d| {
+                h264::access_units(&d)
+                    .first()
+                    .map(|au| (au.width, au.height))
+            })
             .unwrap_or((opts.width, opts.height)),
         // No video at all (never asked: audio-only shares skip the video path).
-        ShareSource::AudioApp { .. } | ShareSource::AudioSystem | ShareSource::AudioTone => (opts.width, opts.height),
+        ShareSource::AudioApp { .. } | ShareSource::AudioSystem | ShareSource::AudioTone => {
+            (opts.width, opts.height)
+        }
     }
 }
 
 fn fit(w: u32, h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
-    let s = (max_w as f64 / w as f64).min(max_h as f64 / h as f64).min(1.0);
+    let s = (max_w as f64 / w as f64)
+        .min(max_h as f64 / h as f64)
+        .min(1.0);
     (((w as f64 * s) as u32) & !1, ((h as f64 * s) as u32) & !1)
 }
 
@@ -1530,7 +1875,10 @@ fn encoded_backend(source: &ShareSource, choice: EncoderChoice) -> Option<Option
     match source {
         // The file is the encoder.
         ShareSource::H264File(_) => Some(None),
-        ShareSource::TestPattern | ShareSource::AudioApp { .. } | ShareSource::AudioSystem | ShareSource::AudioTone => None,
+        ShareSource::TestPattern
+        | ShareSource::AudioApp { .. }
+        | ShareSource::AudioSystem
+        | ShareSource::AudioTone => None,
         ShareSource::Window(_) | ShareSource::Monitor(_) => {
             // Which hardware encoders (if any) is up to the plan (`encoders::plan`).
             match choice {
@@ -1568,7 +1916,13 @@ fn start_encoded(
     preview: Option<&SharePreview>,
 ) -> Result<(VideoProducer, String)> {
     let control = Arc::new(OnceLock::new());
-    let mut sink = EncodedSink::new(video_source, counters, feedback, control.clone(), max_bitrate);
+    let mut sink = EncodedSink::new(
+        video_source,
+        counters,
+        feedback,
+        control.clone(),
+        max_bitrate,
+    );
     sink.test = bitrate_cap;
     sink.timing = timing;
     match source {
@@ -1583,13 +1937,21 @@ fn start_encoded(
                 _ => unreachable!(),
             };
             let cfg = vox_capture::EncodeConfig {
-                video: VideoConfig { max_fps: opts.fps, max_width: opts.width, max_height: opts.height, capture_cursor: opts.capture_cursor },
+                video: VideoConfig {
+                    max_fps: opts.fps,
+                    max_width: opts.width,
+                    max_height: opts.height,
+                    capture_cursor: opts.capture_cursor,
+                },
                 bitrate_bps: max_bitrate.min(u32::MAX as u64) as u32,
                 backend: hw.map_or(EncoderBackend::Auto, |(b, _)| b),
                 degradation: opts.degradation,
                 adapter_luid: hw.and_then(|(_, l)| l),
             };
-            let stage: EncHandle = Arc::new(Mutex::new(EncStage { stage: Stage::new(standby), sink }));
+            let stage: EncHandle = Arc::new(Mutex::new(EncStage {
+                stage: Stage::new(standby),
+                sink,
+            }));
             let cb = stage.clone();
             let tap = preview.and_then(|p| p.attach());
             let pv = tap.as_ref().map(|t| (t.sp.clone(), t.callback()));
@@ -1598,7 +1960,12 @@ fn start_encoded(
                     Some((sp, cb)) => (Some(sp), Some(cb)),
                     None => (None, None),
                 };
-                vox_capture::start_video_encoded_with_preview(target, cfg, Box::new(move |f| cb.lock().on_frame(f)), sp.as_ref().zip(pcb))
+                vox_capture::start_video_encoded_with_preview(
+                    target,
+                    cfg,
+                    Box::new(move |f| cb.lock().on_frame(f)),
+                    sp.as_ref().zip(pcb),
+                )
             })?;
             let _ = control.set(cap.control());
             let name = match cap.backend() {
@@ -1612,7 +1979,9 @@ fn start_encoded(
             Ok((VideoProducer::Encoded(cap, stage, tap), name.to_string()))
         }
         ShareSource::TestPattern => bail!("the test pattern has no encoded path"),
-        ShareSource::AudioApp { .. } | ShareSource::AudioSystem | ShareSource::AudioTone => bail!("an audio-only share has no video"),
+        ShareSource::AudioApp { .. } | ShareSource::AudioSystem | ShareSource::AudioTone => {
+            bail!("an audio-only share has no video")
+        }
     }
 }
 
@@ -1696,7 +2065,11 @@ impl DropTracker {
         }
         self.started = true;
         // `id` itself (if it is ours: another sink on the same track reports its own ids).
-        let ours = self.pending.front().filter(|&&(p, _)| p == id).map(|&(_, k)| k);
+        let ours = self
+            .pending
+            .front()
+            .filter(|&&(p, _)| p == id)
+            .map(|&(_, k)| k);
         if ours.is_some() {
             self.pending.pop_front();
         }
@@ -1752,7 +2125,11 @@ struct BudgetGuard {
 
 impl Default for BudgetGuard {
     fn default() -> Self {
-        Self { debt_bits: 0.0, last: None, factor: 1.0 }
+        Self {
+            debt_bits: 0.0,
+            last: None,
+            factor: 1.0,
+        }
     }
 }
 
@@ -1768,7 +2145,10 @@ const GUARD_MIN_FACTOR: f64 = 0.1;
 impl BudgetGuard {
     /// Account one frame pushed at `now` against WebRTC's target (`0` = unknown: no guard).
     fn on_frame(&mut self, bytes: usize, now: Instant, target_bps: u64) {
-        let dt = self.last.map(|l| now.duration_since(l).as_secs_f64()).unwrap_or(0.0);
+        let dt = self
+            .last
+            .map(|l| now.duration_since(l).as_secs_f64())
+            .unwrap_or(0.0);
         self.last = Some(now);
         if target_bps == 0 {
             self.debt_bits = 0.0;
@@ -1802,14 +2182,22 @@ impl BudgetGuard {
 /// and the recovery IDR (reproduces v0.2.1 for before/after measurements).
 fn drop_recovery_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var("VOX_DROP_RECOVERY").map(|v| v != "0").unwrap_or(true))
+    *ON.get_or_init(|| {
+        std::env::var("VOX_DROP_RECOVERY")
+            .map(|v| v != "0")
+            .unwrap_or(true)
+    })
 }
 
 /// Test knob: `VOX_IDR_GATE=0` sends the delta frames after a drop anyway (v0.6 behaviour, for
 /// before/after measurements of the [`IdrGate`]); the recovery IDR and the budget guard stay on.
 fn idr_gate_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var("VOX_IDR_GATE").map(|v| v != "0").unwrap_or(true))
+    *ON.get_or_init(|| {
+        std::env::var("VOX_IDR_GATE")
+            .map(|v| v != "0")
+            .unwrap_or(true)
+    })
 }
 
 /// Pushes access units into the pre-encoded source and, right after each one, forwards WebRTC's
@@ -1876,7 +2264,9 @@ impl EncodedSink {
         self.poll_encoded();
         if idr_gate_enabled() && !self.idr_gate.pass(keyframe) {
             // Would decode against a picture viewers never got: hold it, the IDR is on its way.
-            self.feedback.withheld_frames.fetch_add(1, Ordering::Relaxed);
+            self.feedback
+                .withheld_frames
+                .fetch_add(1, Ordering::Relaxed);
             if self.idr_gate.withheld.is_multiple_of(30) {
                 self.request_keyframe(); // still no IDR after a second of frames: ask again
             }
@@ -1885,21 +2275,32 @@ impl EncodedSink {
         }
         let (frame_id, broken) = self.drops.push(keyframe);
         if broken > 0 {
-            self.feedback.broken_frames.fetch_add(broken as u64, Ordering::Relaxed);
+            self.feedback
+                .broken_frames
+                .fetch_add(broken as u64, Ordering::Relaxed);
         }
         let frame = EncodedVideoFrame {
             codec: EncodedVideoCodec::H264,
             payload,
             timestamp_us,
-            frame_type: if keyframe { EncodedFrameType::Key } else { EncodedFrameType::Delta },
+            frame_type: if keyframe {
+                EncodedFrameType::Key
+            } else {
+                EncodedFrameType::Delta
+            },
             resolution: VideoResolution { width, height },
-            frame_metadata: Some(FrameMetadata { user_timestamp: None, frame_id: Some(frame_id), user_data: None }),
+            frame_metadata: Some(FrameMetadata {
+                user_timestamp: None,
+                frame_id: Some(frame_id),
+                user_data: None,
+            }),
         };
         if !self.source.capture_encoded_frame(&frame) {
             self.counters.errors.fetch_add(1, Ordering::Relaxed);
             self.break_chain();
         }
-        self.guard.on_frame(payload.len(), Instant::now(), self.webrtc_bps);
+        self.guard
+            .on_frame(payload.len(), Instant::now(), self.webrtc_bps);
         self.counters.frame(width, height);
         if keyframe {
             self.feedback.keyframes_sent.fetch_add(1, Ordering::Relaxed);
@@ -1927,16 +2328,27 @@ impl EncodedSink {
                 }
             }
         }
-        self.feedback.webrtc_encoded.fetch_add(encoded, Ordering::Relaxed);
-        self.feedback.broken_frames.fetch_add(broken, Ordering::Relaxed);
+        self.feedback
+            .webrtc_encoded
+            .fetch_add(encoded, Ordering::Relaxed);
+        self.feedback
+            .broken_frames
+            .fetch_add(broken, Ordering::Relaxed);
         if dropped == 0 {
             return;
         }
-        self.feedback.webrtc_dropped.fetch_add(dropped, Ordering::Relaxed);
+        self.feedback
+            .webrtc_dropped
+            .fetch_add(dropped, Ordering::Relaxed);
         self.feedback.drop_events.fetch_add(1, Ordering::Relaxed);
         let recover = drop_recovery_enabled() && !self.file;
         if !self.drop_logged {
-            info!(dropped, recover, webrtc_kbps = self.webrtc_bps / 1000, "WebRTC dropped pre-encoded frames (reference chain broken)");
+            info!(
+                dropped,
+                recover,
+                webrtc_kbps = self.webrtc_bps / 1000,
+                "WebRTC dropped pre-encoded frames (reference chain broken)"
+            );
             self.drop_logged = true;
         } else {
             debug!(dropped, recover, "WebRTC dropped pre-encoded frames");
@@ -1973,7 +2385,9 @@ impl EncodedSink {
 
     fn poll_feedback(&mut self) {
         if self.source.take_keyframe_request() {
-            self.feedback.keyframe_requests.fetch_add(1, Ordering::Relaxed);
+            self.feedback
+                .keyframe_requests
+                .fetch_add(1, Ordering::Relaxed);
             self.pending_keyframe = true;
         }
         if self.pending_keyframe {
@@ -1982,7 +2396,9 @@ impl EncodedSink {
                 self.pending_keyframe = false;
             } else if self.file {
                 // A file can't make an IDR on demand; viewers wait for the next one in the file.
-                self.feedback.keyframe_requests_ignored.fetch_add(1, Ordering::Relaxed);
+                self.feedback
+                    .keyframe_requests_ignored
+                    .fetch_add(1, Ordering::Relaxed);
                 debug!("keyframe requested; file source can't honour it (next IDR comes from the file)");
                 self.pending_keyframe = false;
             }
@@ -1995,19 +2411,35 @@ impl EncodedSink {
             }
         }
         let cap = self.test.cap_bps.load(Ordering::Relaxed);
-        let Some(base) = encoder_target(self.webrtc_bps, cap, self.max_bitrate) else { return };
-        let guard = if drop_recovery_enabled() { self.guard.factor() } else { 1.0 };
+        let Some(base) = encoder_target(self.webrtc_bps, cap, self.max_bitrate) else {
+            return;
+        };
+        let guard = if drop_recovery_enabled() {
+            self.guard.factor()
+        } else {
+            1.0
+        };
         let mut target = ((base as f64 * guard) as u64).max(MIN_GUARDED_BPS.min(base));
         let overshoot = self.test.overshoot_pct.load(Ordering::Relaxed);
         if overshoot > 0 {
             target = target * overshoot / 100;
         }
-        self.feedback.guard_pct.store((guard * 100.0).round() as u64, Ordering::Relaxed);
-        self.feedback.guard_min_pct.fetch_min((guard * 100.0).round() as u64, Ordering::Relaxed);
+        self.feedback
+            .guard_pct
+            .store((guard * 100.0).round() as u64, Ordering::Relaxed);
+        self.feedback
+            .guard_min_pct
+            .fetch_min((guard * 100.0).round() as u64, Ordering::Relaxed);
         if let Some(c) = self.control.get() {
             if rate_change_worth_forwarding(self.last_forwarded_bps, target) {
                 c.set_bitrate(target.min(u32::MAX as u64) as u32);
-                debug!(target_kbps = target / 1000, webrtc_kbps = self.webrtc_bps / 1000, guard = format!("{guard:.2}"), test_cap_kbps = cap / 1000, "encoder bitrate updated");
+                debug!(
+                    target_kbps = target / 1000,
+                    webrtc_kbps = self.webrtc_bps / 1000,
+                    guard = format!("{guard:.2}"),
+                    test_cap_kbps = cap / 1000,
+                    "encoder bitrate updated"
+                );
                 self.last_forwarded_bps = target;
                 self.feedback.rate_changes.fetch_add(1, Ordering::Relaxed);
                 self.feedback.target_bps.store(target, Ordering::Relaxed);
@@ -2042,7 +2474,10 @@ fn spawn_h264_file(src: &H264FileSource, mut sink: EncodedSink) -> Result<Produc
     let data = std::fs::read(&src.path).with_context(|| format!("read {}", src.path.display()))?;
     let aus = h264::access_units(&data);
     if aus.is_empty() {
-        bail!("{}: no H.264 access units with an SPS found (Annex-B expected)", src.path.display());
+        bail!(
+            "{}: no H.264 access units with an SPS found (Annex-B expected)",
+            src.path.display()
+        );
     }
     let keyframes = aus.iter().filter(|a| a.keyframe).count();
     if !aus[0].keyframe {
@@ -2065,21 +2500,34 @@ fn spawn_h264_file(src: &H264FileSource, mut sink: EncodedSink) -> Result<Produc
         let t0 = Instant::now();
         let mut i = 0usize;
         let done = AtomicBool::new(false);
-        let stop_or_done = StopOrDone { stop: &stop, done: &done };
-        paced_until(&stop_or_done, Duration::from_secs_f64(1.0 / fps as f64), || {
-            let au = &aus[i];
-            let ts = t0.elapsed().as_micros() as i64 + 1;
-            sink.push(&data[au.range.clone()], au.keyframe, au.width, au.height, ts);
-            i += 1;
-            if i == aus.len() {
-                if looped {
-                    i = 0;
-                } else {
-                    info!("h264 file source reached the end");
-                    done.store(true, Ordering::Relaxed);
+        let stop_or_done = StopOrDone {
+            stop: &stop,
+            done: &done,
+        };
+        paced_until(
+            &stop_or_done,
+            Duration::from_secs_f64(1.0 / fps as f64),
+            || {
+                let au = &aus[i];
+                let ts = t0.elapsed().as_micros() as i64 + 1;
+                sink.push(
+                    &data[au.range.clone()],
+                    au.keyframe,
+                    au.width,
+                    au.height,
+                    ts,
+                );
+                i += 1;
+                if i == aus.len() {
+                    if looped {
+                        i = 0;
+                    } else {
+                        info!("h264 file source reached the end");
+                        done.store(true, Ordering::Relaxed);
+                    }
                 }
-            }
-        });
+            },
+        );
     }))
 }
 
@@ -2121,15 +2569,30 @@ fn start_raw(
     preview: Option<&SharePreview>,
 ) -> Result<VideoProducer> {
     match source {
-        ShareSource::TestPattern => Ok(VideoProducer::Test(spawn_test_pattern(width, height, opts.fps, video_source, counters))),
+        ShareSource::TestPattern => Ok(VideoProducer::Test(spawn_test_pattern(
+            width,
+            height,
+            opts.fps,
+            video_source,
+            counters,
+        ))),
         ShareSource::Window(_) | ShareSource::Monitor(_) => {
             let target = match source {
                 ShareSource::Window(h) => VideoTarget::Window(*h),
                 ShareSource::Monitor(m) => VideoTarget::Monitor(*m),
                 _ => unreachable!(),
             };
-            let cfg = VideoConfig { max_fps: opts.fps, max_width: opts.width, max_height: opts.height, capture_cursor: opts.capture_cursor };
-            let stage: RawHandle = Arc::new(Mutex::new(RawStage { stage: Stage::new(standby), source: video_source, counters }));
+            let cfg = VideoConfig {
+                max_fps: opts.fps,
+                max_width: opts.width,
+                max_height: opts.height,
+                capture_cursor: opts.capture_cursor,
+            };
+            let stage: RawHandle = Arc::new(Mutex::new(RawStage {
+                stage: Stage::new(standby),
+                source: video_source,
+                counters,
+            }));
             let cb = stage.clone();
             let tap = preview.and_then(|p| p.attach());
             let pv = tap.as_ref().map(|t| (t.sp.clone(), t.callback()));
@@ -2138,13 +2601,27 @@ fn start_raw(
                     Some((sp, cb)) => (Some(sp), Some(cb)),
                     None => (None, None),
                 };
-                vox_capture::start_video_with_preview(target, cfg, Box::new(move |f| cb.lock().on_frame(f)), sp.as_ref().zip(pcb))
+                vox_capture::start_video_with_preview(
+                    target,
+                    cfg,
+                    Box::new(move |f| cb.lock().on_frame(f)),
+                    sp.as_ref().zip(pcb),
+                )
             })?;
-            info!(?target, max_fps = cfg.max_fps, max_w = cfg.max_width, max_h = cfg.max_height, standby, "screen capture started");
+            info!(
+                ?target,
+                max_fps = cfg.max_fps,
+                max_w = cfg.max_width,
+                max_h = cfg.max_height,
+                standby,
+                "screen capture started"
+            );
             Ok(VideoProducer::Capture(cap, stage, tap))
         }
         ShareSource::H264File(_) => bail!("an h264 file has no raw path"),
-        ShareSource::AudioApp { .. } | ShareSource::AudioSystem | ShareSource::AudioTone => bail!("an audio-only share has no video"),
+        ShareSource::AudioApp { .. } | ShareSource::AudioSystem | ShareSource::AudioTone => {
+            bail!("an audio-only share has no video")
+        }
     }
 }
 
@@ -2160,35 +2637,82 @@ fn build_nv12_frame(counters: &StreamCounters, f: &Nv12Frame<'_>) -> Option<RawF
     if let Some(pb) = vox_capture::retained_pixel_buffer(f) {
         // SAFETY: a CVPixelBuffer retained once for us; `from_cv_pixel_buffer` takes that
         // reference over (libwebrtc releases it with the frame).
-        let buffer = unsafe { livekit::webrtc::video_frame::native::NativeBuffer::from_cv_pixel_buffer(pb.as_ptr()) };
-        let frame = VideoFrame { rotation: VideoRotation::VideoRotation0, timestamp_us: f.timestamp_us, frame_metadata: None, buffer };
-        return Some(RawFrame { frame: RawBuffer::Native(frame), width: w, height: h });
+        let buffer = unsafe {
+            livekit::webrtc::video_frame::native::NativeBuffer::from_cv_pixel_buffer(pb.as_ptr())
+        };
+        let frame = VideoFrame {
+            rotation: VideoRotation::VideoRotation0,
+            timestamp_us: f.timestamp_us,
+            frame_metadata: None,
+            buffer,
+        };
+        return Some(RawFrame {
+            frame: RawBuffer::Native(frame),
+            width: w,
+            height: h,
+        });
     }
     let mut buf = NV12Buffer::new(w, h);
     let (dsy, dsuv) = buf.strides();
     let (dy, duv) = buf.data_mut();
     let uv_row = (w.div_ceil(2) * 2) as usize;
-    if !copy_plane(f.y, f.y_stride as usize, dy, dsy as usize, w as usize, h as usize)
-        || !copy_plane(f.uv, f.uv_stride as usize, duv, dsuv as usize, uv_row, h.div_ceil(2) as usize)
-    {
+    if !copy_plane(
+        f.y,
+        f.y_stride as usize,
+        dy,
+        dsy as usize,
+        w as usize,
+        h as usize,
+    ) || !copy_plane(
+        f.uv,
+        f.uv_stride as usize,
+        duv,
+        dsuv as usize,
+        uv_row,
+        h.div_ceil(2) as usize,
+    ) {
         counters.errors.fetch_add(1, Ordering::Relaxed);
         return None;
     }
-    let frame = VideoFrame { rotation: VideoRotation::VideoRotation0, timestamp_us: f.timestamp_us, frame_metadata: None, buffer: buf };
-    Some(RawFrame { frame: RawBuffer::Nv12(frame), width: w, height: h })
+    let frame = VideoFrame {
+        rotation: VideoRotation::VideoRotation0,
+        timestamp_us: f.timestamp_us,
+        frame_metadata: None,
+        buffer: buf,
+    };
+    Some(RawFrame {
+        frame: RawBuffer::Nv12(frame),
+        width: w,
+        height: h,
+    })
 }
 
-pub(crate) fn copy_plane(src: &[u8], src_stride: usize, dst: &mut [u8], dst_stride: usize, row_bytes: usize, rows: usize) -> bool {
-    if rows == 0 || src.len() < src_stride * (rows - 1) + row_bytes || dst.len() < dst_stride * (rows - 1) + row_bytes {
+pub(crate) fn copy_plane(
+    src: &[u8],
+    src_stride: usize,
+    dst: &mut [u8],
+    dst_stride: usize,
+    row_bytes: usize,
+    rows: usize,
+) -> bool {
+    if rows == 0
+        || src.len() < src_stride * (rows - 1) + row_bytes
+        || dst.len() < dst_stride * (rows - 1) + row_bytes
+    {
         return false;
     }
     for r in 0..rows {
-        dst[r * dst_stride..r * dst_stride + row_bytes].copy_from_slice(&src[r * src_stride..r * src_stride + row_bytes]);
+        dst[r * dst_stride..r * dst_stride + row_bytes]
+            .copy_from_slice(&src[r * src_stride..r * src_stride + row_bytes]);
     }
     true
 }
 
-fn push_audio_chunk(source: &NativeAudioSource, counters: &StreamCounters, chunk: &vox_capture::AudioChunk<'_>) {
+fn push_audio_chunk(
+    source: &NativeAudioSource,
+    counters: &StreamCounters,
+    chunk: &vox_capture::AudioChunk<'_>,
+) {
     let channels = chunk.channels as u32;
     if channels == 0 || chunk.samples.is_empty() {
         return;
@@ -2232,7 +2756,12 @@ fn spawn_test_pattern(
             let (sy, suv) = buf.strides();
             let (y, uv) = buf.data_mut();
             pattern.render(index, y, sy as usize, uv, suv as usize);
-            let frame = VideoFrame { rotation: VideoRotation::VideoRotation0, timestamp_us: 0, frame_metadata: None, buffer: buf };
+            let frame = VideoFrame {
+                rotation: VideoRotation::VideoRotation0,
+                timestamp_us: 0,
+                frame_metadata: None,
+                buffer: buf,
+            };
             source.capture_frame(&frame);
             counters.frame(width, height);
             index += 1;
@@ -2243,7 +2772,8 @@ fn spawn_test_pattern(
 fn spawn_sine(source: NativeAudioSource, counters: Arc<StreamCounters>) -> ProducerThread {
     ProducerThread::spawn("vox-test-tone", move |stop| {
         let mut gen = SineGenerator::new(vox_capture::AUDIO_SAMPLE_RATE, 440.0, 660.0, 0.25);
-        let mut buf = vec![0i16; vox_capture::AUDIO_CHUNK_FRAMES * vox_capture::AUDIO_CHANNELS as usize];
+        let mut buf =
+            vec![0i16; vox_capture::AUDIO_CHUNK_FRAMES * vox_capture::AUDIO_CHANNELS as usize];
         paced(&stop, Duration::from_millis(10), || {
             gen.fill_stereo(&mut buf);
             let chunk = vox_capture::AudioChunk {
@@ -2269,7 +2799,10 @@ mod tests {
         assert!((4_200_000..=4_500_000).contains(&b720), "{b720}");
         assert_eq!(screenshare_bitrate(320, 180, 5), 500_000); // floor
         assert_eq!(screenshare_bitrate(3840, 2160, 60), 20_000_000); // cap
-        let o = ShareOptions { max_bitrate: Some(15_000_000), ..Default::default() };
+        let o = ShareOptions {
+            max_bitrate: Some(15_000_000),
+            ..Default::default()
+        };
         assert_eq!(o.bitrate(), 15_000_000);
         assert_eq!(ShareOptions::default().bitrate(), 8_000_000);
     }
@@ -2284,7 +2817,13 @@ mod tests {
         assert_eq!(t.encoded(k), DropReport::default());
         assert_eq!(t.encoded(d1), DropReport::default());
         // d2 dropped: d3 (already pushed) decodes against the wrong reference.
-        assert_eq!(t.encoded(d3), DropReport { dropped: 1, broken: 1 });
+        assert_eq!(
+            t.encoded(d3),
+            DropReport {
+                dropped: 1,
+                broken: 1
+            }
+        );
         // Every later delta is broken until a keyframe goes out.
         assert_eq!(t.push(false).1, 1);
         assert_eq!(t.push(true).1, 0);
@@ -2323,7 +2862,13 @@ mod tests {
         screen.push(false);
         let (c, _) = cam.push(false);
         assert_eq!(cam.encoded(a), DropReport::default());
-        assert_eq!(cam.encoded(c), DropReport { dropped: 1, broken: 1 });
+        assert_eq!(
+            cam.encoded(c),
+            DropReport {
+                dropped: 1,
+                broken: 1
+            }
+        );
     }
 
     #[test]
@@ -2335,7 +2880,13 @@ mod tests {
         let (key, _) = t.push(true);
         t.encoded(a);
         // b dropped; c broken, the keyframe after it repairs the chain.
-        assert_eq!(t.encoded(c), DropReport { dropped: 1, broken: key - c });
+        assert_eq!(
+            t.encoded(c),
+            DropReport {
+                dropped: 1,
+                broken: key - c
+            }
+        );
         assert_eq!(t.push(false).1, 0);
         // Out-of-order / older ids (another sink's frames) are never counted as drops.
         assert_eq!(t.encoded(a), DropReport::default());
@@ -2371,7 +2922,11 @@ mod tests {
             let now = t0 + Duration::from_secs_f64(i as f64 / 60.0);
             // On target on average (CBR), with a 4x IDR every 2 s paid back by the P frames.
             let unit = target as f64 / 60.0 / 8.0;
-            let bytes = if i % 120 == 0 { 4.0 * unit } else { unit * 116.0 / 119.0 };
+            let bytes = if i % 120 == 0 {
+                4.0 * unit
+            } else {
+                unit * 116.0 / 119.0
+            };
             g.on_frame(bytes as usize, now, target);
         }
         assert!(g.factor() > 0.95, "{}", g.factor());
@@ -2415,10 +2970,22 @@ mod tests {
 
     #[test]
     fn encoder_choice_parsing() {
-        assert_eq!("auto".parse::<EncoderChoice>().unwrap(), EncoderChoice::Auto);
-        assert_eq!("NVENC".parse::<EncoderChoice>().unwrap(), EncoderChoice::Nvenc);
-        assert_eq!("mf".parse::<EncoderChoice>().unwrap(), EncoderChoice::MediaFoundation);
-        assert_eq!("software".parse::<EncoderChoice>().unwrap(), EncoderChoice::Software);
+        assert_eq!(
+            "auto".parse::<EncoderChoice>().unwrap(),
+            EncoderChoice::Auto
+        );
+        assert_eq!(
+            "NVENC".parse::<EncoderChoice>().unwrap(),
+            EncoderChoice::Nvenc
+        );
+        assert_eq!(
+            "mf".parse::<EncoderChoice>().unwrap(),
+            EncoderChoice::MediaFoundation
+        );
+        assert_eq!(
+            "software".parse::<EncoderChoice>().unwrap(),
+            EncoderChoice::Software
+        );
         assert!("x264".parse::<EncoderChoice>().is_err());
     }
 
@@ -2432,22 +2999,38 @@ mod tests {
 
     #[test]
     fn raw_sources_never_take_the_encoded_path() {
-        assert_eq!(encoded_backend(&ShareSource::TestPattern, EncoderChoice::Auto), None);
-        assert_eq!(encoded_backend(&ShareSource::Monitor(0), EncoderChoice::Software), None);
-        let f = ShareSource::H264File(H264FileSource { path: "x.h264".into(), fps: 30, looped: false });
+        assert_eq!(
+            encoded_backend(&ShareSource::TestPattern, EncoderChoice::Auto),
+            None
+        );
+        assert_eq!(
+            encoded_backend(&ShareSource::Monitor(0), EncoderChoice::Software),
+            None
+        );
+        let f = ShareSource::H264File(H264FileSource {
+            path: "x.h264".into(),
+            fps: 30,
+            looped: false,
+        });
         assert_eq!(encoded_backend(&f, EncoderChoice::Software), Some(None));
     }
 
     // ---- source switch state machine (pure parts) ----
 
     fn drive(g: &mut FrameGate<u32>, frames: &[(u32, bool)]) -> Vec<u32> {
-        frames.iter().filter_map(|&(id, key)| g.offer(key, || id)).collect()
+        frames
+            .iter()
+            .filter_map(|&(id, key)| g.offer(key, || id))
+            .collect()
     }
 
     #[test]
     fn live_gate_forwards_everything_and_retired_nothing() {
         let mut g = FrameGate::<u32>::live();
-        assert_eq!(drive(&mut g, &[(1, true), (2, false), (3, false)]), vec![1, 2, 3]);
+        assert_eq!(
+            drive(&mut g, &[(1, true), (2, false), (3, false)]),
+            vec![1, 2, 3]
+        );
         g.retire();
         assert_eq!(g.mode(), FrameMode::Retired);
         assert!(drive(&mut g, &[(4, true), (5, false)]).is_empty());
@@ -2470,7 +3053,11 @@ mod tests {
     fn standby_with_deltas_waits_for_the_next_keyframe() {
         let mut g = FrameGate::<u32>::standby();
         drive(&mut g, &[(1, true), (2, false), (3, false)]);
-        assert_eq!(g.activate(), None, "kept keyframe is stale once a delta followed it");
+        assert_eq!(
+            g.activate(),
+            None,
+            "kept keyframe is stale once a delta followed it"
+        );
         assert_eq!(g.mode(), FrameMode::AwaitKey);
         // Deltas are never forwarded before a keyframe.
         assert!(drive(&mut g, &[(4, false), (5, false)]).is_empty());
@@ -2513,10 +3100,28 @@ mod tests {
         assert_eq!(plan_audio(false, false, true), AudioPlan::Nothing);
         assert_eq!(plan_audio(true, false, true), AudioPlan::Stop);
         // off -> on: publish the audio track the first time, just unmute afterwards
-        assert_eq!(plan_audio(false, true, false), AudioPlan::Start { replace: false, publish: true });
-        assert_eq!(plan_audio(false, true, true), AudioPlan::Start { replace: false, publish: false });
+        assert_eq!(
+            plan_audio(false, true, false),
+            AudioPlan::Start {
+                replace: false,
+                publish: true
+            }
+        );
+        assert_eq!(
+            plan_audio(false, true, true),
+            AudioPlan::Start {
+                replace: false,
+                publish: false
+            }
+        );
         // on -> on (new app): restart the capture on the same publication
-        assert_eq!(plan_audio(true, true, true), AudioPlan::Start { replace: true, publish: false });
+        assert_eq!(
+            plan_audio(true, true, true),
+            AudioPlan::Start {
+                replace: true,
+                publish: false
+            }
+        );
     }
 
     #[test]
@@ -2528,15 +3133,24 @@ mod tests {
         assert_eq!(switch_decision(true, false, true), SwitchDecision::KeepOld);
         assert_eq!(switch_decision(false, false, true), SwitchDecision::KeepOld);
         // old one already dead: take the new one even if it has not delivered yet
-        assert_eq!(switch_decision(true, false, false), SwitchDecision::CommitSilent);
+        assert_eq!(
+            switch_decision(true, false, false),
+            SwitchDecision::CommitSilent
+        );
         assert_eq!(switch_decision(false, false, false), SwitchDecision::Fail);
     }
 
     #[test]
-    fn capture_failures_have_portuguese_text() {
-        let e = capture_error("start_video", vox_capture::CaptureError::NotFound("hwnd 5".into()));
-        assert!(capture_failure_pt(&e).contains("não existe mais"));
-        assert!(format!("{e}").contains("target not found"), "English text kept for logs");
+    fn capture_failures_have_english_text() {
+        let e = capture_error(
+            "start_video",
+            vox_capture::CaptureError::NotFound("hwnd 5".into()),
+        );
+        assert!(capture_failure_pt(&e).contains("no longer exists"));
+        assert!(
+            format!("{e}").contains("target not found"),
+            "English text kept for logs"
+        );
         let other = anyhow!("boom");
         assert_eq!(capture_failure_pt(&other), "boom");
     }
@@ -2551,15 +3165,31 @@ mod audio_only_tests {
         assert!(ShareSource::AudioApp { pid: 7 }.is_audio_only());
         assert!(ShareSource::AudioSystem.is_audio_only());
         assert!(ShareSource::AudioTone.is_audio_only());
-        for s in [ShareSource::Window(1), ShareSource::Monitor(0), ShareSource::TestPattern] {
+        for s in [
+            ShareSource::Window(1),
+            ShareSource::Monitor(0),
+            ShareSource::TestPattern,
+        ] {
             assert!(!s.is_audio_only(), "{s:?}");
         }
         // One app: its process tree. All the sound: everything except us (never echo the call).
-        assert_eq!(default_audio_target(&ShareSource::AudioApp { pid: 7 }), Some(AudioTarget::ProcessTree { pid: 7 }));
-        assert_eq!(default_audio_target(&ShareSource::AudioSystem), Some(AudioTarget::SystemExcludingProcessTree { pid: std::process::id() }));
+        assert_eq!(
+            default_audio_target(&ShareSource::AudioApp { pid: 7 }),
+            Some(AudioTarget::ProcessTree { pid: 7 })
+        );
+        assert_eq!(
+            default_audio_target(&ShareSource::AudioSystem),
+            Some(AudioTarget::SystemExcludingProcessTree {
+                pid: std::process::id()
+            })
+        );
         assert_eq!(default_audio_target(&ShareSource::AudioTone), None);
         // They never take the encoded video path.
-        for s in [ShareSource::AudioApp { pid: 7 }, ShareSource::AudioSystem, ShareSource::AudioTone] {
+        for s in [
+            ShareSource::AudioApp { pid: 7 },
+            ShareSource::AudioSystem,
+            ShareSource::AudioTone,
+        ] {
             assert!(encoded_backend(&s, EncoderChoice::Auto).is_none(), "{s:?}");
         }
     }
@@ -2580,10 +3210,16 @@ mod audio_only_tests {
     }
 
     #[test]
-    fn audio_failures_are_portuguese() {
-        let e = capture_error("start_audio", vox_capture::CaptureError::Unsupported("old windows".into()));
+    fn audio_failures_are_english() {
+        let e = capture_error(
+            "start_audio",
+            vox_capture::CaptureError::Unsupported("old windows".into()),
+        );
         assert!(audio_failure_pt(&e).contains("Windows 10"));
-        let e = capture_error("start_audio", vox_capture::CaptureError::NotFound("pid 9".into()));
-        assert!(audio_failure_pt(&e).contains("não existe mais"));
+        let e = capture_error(
+            "start_audio",
+            vox_capture::CaptureError::NotFound("pid 9".into()),
+        );
+        assert!(audio_failure_pt(&e).contains("no longer exists"));
     }
 }

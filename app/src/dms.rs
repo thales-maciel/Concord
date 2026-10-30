@@ -1,14 +1,5 @@
-//! Direct messages ("Mensagens diretas") and private 1:1 calls in the app: the sidebar section,
-//! the DM chat in the center area, "Nova mensagem", the incoming-call prompt with its ringtone,
-//! notifications, and the call itself on top of the voice machinery.
-//!
-//! A DM call is a voice session like any other (mic, mute/deafen, the denoiser and gate, camera,
-//! Go Live, the call view's tiles), only in the private room the hub hands out. Inside the app it
-//! is the voice "channel" [`DM_CALL_CHANNEL`] (never a real channel id), so the voice bar, the call
-//! view and the backend's session code work unchanged; the hub is never told about it as voice
-//! state, so nobody else sees it.
-//!
-//! A child module of `app` (declared there), so it can use the app's private helpers.
+//! Direct messages and private calls. [`DM_CALL_CHANNEL`] is a local sentinel, not a real
+//! channel ID. Calls reuse the voice stack without publishing public channel voice state.
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -17,13 +8,14 @@ use eframe::egui::{self, Align, Color32, Layout, RichText};
 use vox_client_core::hub::{DmsReply, HttpStatusError, HubClient};
 use vox_client_core::{AlertKind, VoiceEvent};
 use vox_proto::{
-    CallEndReason, CallState, ChannelId, DmCall, DmConversation, DmId, DmMessage, DmMessageId, DmMessageKind, ServerEvent, User, UserId, VoiceMember, CALL_RING_SECS,
-    DM_MESSAGE_MAX_CHARS, ERR_CALL_BUSY, ERR_DM_BLOCKED,
+    CallEndReason, CallState, ChannelId, DmCall, DmConversation, DmId, DmMessage, DmMessageId,
+    DmMessageKind, ServerEvent, User, UserId, VoiceMember, CALL_RING_SECS, DM_MESSAGE_MAX_CHARS,
+    ERR_CALL_BUSY, ERR_DM_BLOCKED,
 };
 
-use crate::context_menu::{Lead, Origin};
 use super::{now_ms, App, Center, Screen, GREEN};
 use crate::backend::Cmd;
+use crate::context_menu::{Lead, Origin};
 
 /// The voice "channel" of a DM call inside the app (real channel ids are positive).
 pub const DM_CALL_CHANNEL: ChannelId = -1;
@@ -35,7 +27,7 @@ const ROW_H: f32 = 40.0;
 const ROW_AVATAR: f32 = 28.0;
 const ICON_PHONE: &str = crate::theme::ph::PHONE;
 /// The honest one-liner under every DM header.
-pub const HOST_NOTE: &str = "Mensagens ficam guardadas no servidor de quem hospeda";
+pub const HOST_NOTE: &str = "Messages are stored on the host's server";
 
 // ---------------------------------------------------------------- backend calls
 
@@ -46,14 +38,34 @@ pub enum DmCmd {
     List,
     People,
     Open(UserId),
-    History { dm: DmId, before: Option<DmMessageId> },
+    History {
+        dm: DmId,
+        before: Option<DmMessageId>,
+    },
     /// `reply_to`: the line this one answers (v0.8).
-    Send { dm: DmId, content: String, reply_to: Option<DmMessageId> },
-    Delete { dm: DmId, id: DmMessageId },
-    Read { dm: DmId, up_to: DmMessageId },
-    Block { user: UserId, blocked: bool },
-    Decline { dm: DmId },
-    End { dm: DmId },
+    Send {
+        dm: DmId,
+        content: String,
+        reply_to: Option<DmMessageId>,
+    },
+    Delete {
+        dm: DmId,
+        id: DmMessageId,
+    },
+    Read {
+        dm: DmId,
+        up_to: DmMessageId,
+    },
+    Block {
+        user: UserId,
+        blocked: bool,
+    },
+    Decline {
+        dm: DmId,
+    },
+    End {
+        dm: DmId,
+    },
 }
 
 #[derive(Debug)]
@@ -61,22 +73,44 @@ pub enum DmEv {
     Listed(DmsReply),
     People(Result<Vec<User>, String>),
     Opened(Result<DmConversation, String>),
-    History { dm: DmId, before: Option<DmMessageId>, result: Result<Vec<DmMessage>, String> },
-    Sent { dm: DmId, content: String, result: Result<DmMessage, String> },
+    History {
+        dm: DmId,
+        before: Option<DmMessageId>,
+        result: Result<Vec<DmMessage>, String>,
+    },
+    Sent {
+        dm: DmId,
+        content: String,
+        result: Result<DmMessage, String>,
+    },
     /// Anything else finished; `Err` is a message for the user.
-    Done { cmd: DmCmd, result: Result<(), String> },
+    Done {
+        cmd: DmCmd,
+        result: Result<(), String>,
+    },
 }
 
 impl DmCmd {
     pub fn offline(self) -> DmEv {
-        let msg = "Sem conexão com o servidor.".to_string();
+        let msg = "Not connected to the server.".to_string();
         match self {
             DmCmd::List => DmEv::Listed(DmsReply::Failed(msg)),
             DmCmd::People => DmEv::People(Err(msg)),
             DmCmd::Open(_) => DmEv::Opened(Err(msg)),
-            DmCmd::History { dm, before } => DmEv::History { dm, before, result: Err(msg) },
-            DmCmd::Send { dm, content, .. } => DmEv::Sent { dm, content, result: Err(msg) },
-            cmd => DmEv::Done { cmd, result: Err(msg) },
+            DmCmd::History { dm, before } => DmEv::History {
+                dm,
+                before,
+                result: Err(msg),
+            },
+            DmCmd::Send { dm, content, .. } => DmEv::Sent {
+                dm,
+                content,
+                result: Err(msg),
+            },
+            cmd => DmEv::Done {
+                cmd,
+                result: Err(msg),
+            },
         }
     }
 }
@@ -88,11 +122,27 @@ pub async fn run(hub: &HubClient, cmd: DmCmd) -> DmEv {
         DmCmd::List => DmEv::Listed(hub.dms().await),
         DmCmd::People => DmEv::People(hub.dm_people().await.map_err(err)),
         DmCmd::Open(user) => DmEv::Opened(hub.open_dm(user).await.map_err(err)),
-        DmCmd::History { dm, before } => DmEv::History { dm, before, result: hub.dm_messages(dm, before, HISTORY_PAGE).await.map_err(err) },
-        DmCmd::Send { dm, content, reply_to } => {
-            let req = vox_proto::DmSendRequest { content: content.clone(), attachments: Vec::new(), reply_to };
+        DmCmd::History { dm, before } => DmEv::History {
+            dm,
+            before,
+            result: hub.dm_messages(dm, before, HISTORY_PAGE).await.map_err(err),
+        },
+        DmCmd::Send {
+            dm,
+            content,
+            reply_to,
+        } => {
+            let req = vox_proto::DmSendRequest {
+                content: content.clone(),
+                attachments: Vec::new(),
+                reply_to,
+            };
             let result = hub.send_dm_request(dm, &req).await.map_err(err);
-            DmEv::Sent { dm, content, result }
+            DmEv::Sent {
+                dm,
+                content,
+                result,
+            }
         }
         cmd => {
             let result = match &cmd {
@@ -103,7 +153,10 @@ pub async fn run(hub: &HubClient, cmd: DmCmd) -> DmEv {
                 DmCmd::End { dm } => hub.dm_call_end(*dm).await,
                 _ => Ok(()),
             };
-            DmEv::Done { cmd, result: result.map_err(err) }
+            DmEv::Done {
+                cmd,
+                result: result.map_err(err),
+            }
         }
     }
 }
@@ -111,13 +164,19 @@ pub async fn run(hub: &HubClient, cmd: DmCmd) -> DmEv {
 /// A failed DM / call request in words for the user.
 pub fn error_text(e: &anyhow::Error) -> String {
     match e.downcast_ref::<HttpStatusError>() {
-        Some(s) if s.status == 403 && s.message == ERR_DM_BLOCKED => "Não dá: um de vocês bloqueou o outro.".into(),
-        Some(s) if s.status == 403 => "Você só pode apagar as suas próprias mensagens.".into(),
-        Some(s) if s.status == 409 && s.message == ERR_CALL_BUSY => "A pessoa está em outra chamada agora. Ela vai ver que você ligou.".into(),
-        Some(s) if s.status == 409 => "Essa chamada já terminou.".into(),
-        Some(s) if s.status == 429 => "Calma: espere um instante e tente de novo.".into(),
-        Some(s) if s.status == 400 => format!("A mensagem precisa ter de 1 a {DM_MESSAGE_MAX_CHARS} caracteres."),
-        Some(s) if s.status == 404 => "Essa conversa não está disponível.".into(),
+        Some(s) if s.status == 403 && s.message == ERR_DM_BLOCKED => {
+            "Not allowed: one of you blocked the other.".into()
+        }
+        Some(s) if s.status == 403 => "You can only delete your own messages.".into(),
+        Some(s) if s.status == 409 && s.message == ERR_CALL_BUSY => {
+            "This person is in another call. They will see that you called.".into()
+        }
+        Some(s) if s.status == 409 => "This call has already ended.".into(),
+        Some(s) if s.status == 429 => "Slow down: wait a moment and try again.".into(),
+        Some(s) if s.status == 400 => {
+            format!("Messages must contain 1 to {DM_MESSAGE_MAX_CHARS} characters.")
+        }
+        Some(s) if s.status == 404 => "This conversation is unavailable.".into(),
         _ => crate::backend::friendly(e),
     }
 }
@@ -133,7 +192,7 @@ pub struct DmLog {
     pub no_more: bool,
 }
 
-/// "Nova mensagem": pick a person.
+/// "New message": pick a person.
 #[derive(Default)]
 pub struct Picker {
     pub open: bool,
@@ -157,9 +216,9 @@ pub struct DmUi {
     pub input: String,
     pub(super) focus_input: bool,
     pub picker: Picker,
-    /// "Enviar mensagem" to somebody with no conversation yet: select it once the hub answers.
+    /// "Send message" to somebody with no conversation yet: select it once the hub answers.
     pending_open: Option<UserId>,
-    /// "Ligar" to somebody with no conversation yet: start the call once it exists.
+    /// "Call" to somebody with no conversation yet: start the call once it exists.
     pending_call: Option<UserId>,
     /// People I blocked from a menu before any conversation with them is listed.
     blocked_hint: HashSet<UserId>,
@@ -209,7 +268,9 @@ impl DmUi {
 
     /// A call is ringing for me to answer.
     pub fn incoming(&self, me: Option<UserId>) -> Option<&DmCall> {
-        self.call.as_ref().filter(|c| c.state == CallState::Ringing && Some(c.callee.id) == me)
+        self.call
+            .as_ref()
+            .filter(|c| c.state == CallState::Ringing && Some(c.callee.id) == me)
     }
 }
 
@@ -217,7 +278,11 @@ impl DmUi {
 
 /// Most recent activity first (ties: the newer conversation first).
 pub fn sort_convs(convs: &mut [DmConversation]) {
-    convs.sort_by(|a, b| b.last_activity_ms.cmp(&a.last_activity_ms).then(b.id.cmp(&a.id)));
+    convs.sort_by(|a, b| {
+        b.last_activity_ms
+            .cmp(&a.last_activity_ms)
+            .then(b.id.cmp(&a.id))
+    });
 }
 
 pub fn total_unread(convs: &[DmConversation]) -> u32 {
@@ -227,8 +292,15 @@ pub fn total_unread(convs: &[DmConversation]) -> u32 {
 /// A new line in DM `msg.dm_id`: the list's preview, order and unread count follow. `reading`:
 /// that DM is on screen right now (its lines are read as they come). Returns false for a DM the
 /// list does not have yet (the caller fetches the list again).
-pub fn apply_message(convs: &mut [DmConversation], msg: &DmMessage, me: UserId, reading: bool) -> bool {
-    let Some(c) = convs.iter_mut().find(|c| c.id == msg.dm_id) else { return false };
+pub fn apply_message(
+    convs: &mut [DmConversation],
+    msg: &DmMessage,
+    me: UserId,
+    reading: bool,
+) -> bool {
+    let Some(c) = convs.iter_mut().find(|c| c.id == msg.dm_id) else {
+        return false;
+    };
     if c.last_message.as_ref().is_none_or(|m| m.id <= msg.id) {
         c.last_message = Some(msg.clone());
         c.last_activity_ms = c.last_activity_ms.max(msg.created_at_ms);
@@ -247,19 +319,39 @@ pub fn apply_message(convs: &mut [DmConversation], msg: &DmMessage, me: UserId, 
 }
 
 /// I read DM `dm` up to `up_to` (here or on another device). `log`: its lines, when loaded.
-pub fn apply_read(convs: &mut [DmConversation], dm: DmId, up_to: DmMessageId, log: Option<&[DmMessage]>, me: UserId) {
-    let Some(c) = convs.iter_mut().find(|c| c.id == dm) else { return };
+pub fn apply_read(
+    convs: &mut [DmConversation],
+    dm: DmId,
+    up_to: DmMessageId,
+    log: Option<&[DmMessage]>,
+    me: UserId,
+) {
+    let Some(c) = convs.iter_mut().find(|c| c.id == dm) else {
+        return;
+    };
     c.read_up_to = c.read_up_to.max(up_to);
     if c.last_message.as_ref().is_none_or(|m| m.id <= c.read_up_to) {
         c.unread = 0;
     } else if let Some(log) = log {
-        c.unread = log.iter().filter(|m| m.author.id != me && m.id > c.read_up_to).count() as u32;
+        c.unread = log
+            .iter()
+            .filter(|m| m.author.id != me && m.id > c.read_up_to)
+            .count() as u32;
     }
 }
 
 /// Line `id` of DM `dm` was deleted (`gone`: the line, if it was loaded).
-pub fn apply_delete(convs: &mut [DmConversation], dm: DmId, id: DmMessageId, gone: Option<&DmMessage>, newest_left: Option<&DmMessage>, me: UserId) {
-    let Some(c) = convs.iter_mut().find(|c| c.id == dm) else { return };
+pub fn apply_delete(
+    convs: &mut [DmConversation],
+    dm: DmId,
+    id: DmMessageId,
+    gone: Option<&DmMessage>,
+    newest_left: Option<&DmMessage>,
+    me: UserId,
+) {
+    let Some(c) = convs.iter_mut().find(|c| c.id == dm) else {
+        return;
+    };
     if c.last_message.as_ref().is_some_and(|m| m.id == id) {
         c.last_message = newest_left.cloned();
     }
@@ -283,11 +375,15 @@ pub fn call_line_text(m: &DmMessage, me: UserId) -> String {
     let mine = m.author.id == me;
     let who = m.author.shown_name();
     match m.kind {
-        DmMessageKind::CallMissed if mine => "Você ligou: sem resposta".into(),
-        DmMessageKind::CallMissed => format!("Chamada perdida de {who}"),
-        DmMessageKind::CallDeclined if mine => "Você ligou: chamada recusada".into(),
-        DmMessageKind::CallDeclined => format!("{who} ligou: você recusou"),
-        DmMessageKind::CallEnded => format!("Chamada de {} · {}", if mine { "você" } else { who }, duration_text(m.call_secs)),
+        DmMessageKind::CallMissed if mine => "You called: no answer".into(),
+        DmMessageKind::CallMissed => format!("Missed call from {who}"),
+        DmMessageKind::CallDeclined if mine => "You called: call declined".into(),
+        DmMessageKind::CallDeclined => format!("{who} called: you declined"),
+        DmMessageKind::CallEnded => format!(
+            "Call from {} · {}",
+            if mine { "you" } else { who },
+            duration_text(m.call_secs)
+        ),
         _ => m.content.clone(),
     }
 }
@@ -304,9 +400,9 @@ pub fn duration_text(secs: u32) -> String {
 /// The one-line preview under a name in the list.
 pub fn preview_text(c: &DmConversation, me: UserId) -> String {
     match &c.last_message {
-        None => "Nenhuma mensagem ainda".into(),
+        None => "No messages yet".into(),
         Some(m) if m.kind.is_call() => format!("{ICON_PHONE} {}", call_line_text(m, me)),
-        Some(m) if m.author.id == me => format!("Você: {}", one_line(&m.content)),
+        Some(m) if m.author.id == me => format!("You: {}", one_line(&m.content)),
         Some(m) => one_line(&m.content),
     }
 }
@@ -315,12 +411,17 @@ fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// "Nova mensagem": people matching `query` (name or display name, any case), by name.
+/// "New message": people matching `query` (name or display name, any case), by name.
 pub fn filter_people<'a>(people: &'a [User], query: &str, me: Option<UserId>) -> Vec<&'a User> {
     let q = query.trim().to_lowercase();
     let mut v: Vec<&User> = people
         .iter()
-        .filter(|u| Some(u.id) != me && (q.is_empty() || u.username.to_lowercase().contains(&q) || u.shown_name().to_lowercase().contains(&q)))
+        .filter(|u| {
+            Some(u.id) != me
+                && (q.is_empty()
+                    || u.username.to_lowercase().contains(&q)
+                    || u.shown_name().to_lowercase().contains(&q))
+        })
         .collect();
     v.sort_by_key(|u| u.shown_name().to_lowercase());
     v
@@ -334,7 +435,7 @@ pub fn ring_due(next: Option<Instant>, now: Instant) -> bool {
 // ---------------------------------------------------------------- the app side
 
 impl App {
-    /// "Não perturbe" (profiles): no DM sounds, no ringtone, no taskbar flash; the call prompt and
+    /// "Do not disturb" (profiles): no DM sounds, no ringtone, no taskbar flash; the call prompt and
     /// the unread badges still show.
     pub fn do_not_disturb(&self) -> bool {
         self.notifications_muted()
@@ -347,7 +448,9 @@ impl App {
             return;
         }
         if self.dms.listed && !self.dms.supported {
-            self.notice = Some("Este servidor ainda não tem mensagens diretas (peça ao host para atualizar).".into());
+            self.notice = Some(
+                "This server does not support direct messages yet (ask the host to update).".into(),
+            );
             return;
         }
         if let Some(id) = self.dms.conv_with(user_id).map(|c| c.id) {
@@ -358,7 +461,7 @@ impl App {
         self.backend.send(Cmd::Dm(DmCmd::Open(user_id)));
     }
 
-    /// "Ligar" from a person's menu: the call of our conversation (opened first when there is none).
+    /// "Call" from a person's menu: the call of our conversation (opened first when there is none).
     pub fn call_user(&mut self, user_id: UserId) {
         if Some(user_id) == self.my_id() || !self.hub_up {
             return;
@@ -371,7 +474,7 @@ impl App {
         self.open_dm(user_id);
     }
 
-    /// "Bloquear" / "Desbloquear" (the header's options and the person menu). Blocking ends a
+    /// "Block" / "Unblock" (the header's options and the person menu). Blocking ends a
     /// call with them.
     pub fn block_user(&mut self, user: &User, blocked: bool) {
         if blocked {
@@ -383,8 +486,16 @@ impl App {
         if let Some(c) = self.dms.convs.iter_mut().find(|c| c.peer.id == user.id) {
             c.blocked = blocked;
         }
-        self.backend.send(Cmd::Dm(DmCmd::Block { user: user.id, blocked }));
-        let in_call_with = self.in_dm_call() && self.dms.voice_dm.and_then(|d| self.dm_peer(d)).is_some_and(|p| p.id == user.id);
+        self.backend.send(Cmd::Dm(DmCmd::Block {
+            user: user.id,
+            blocked,
+        }));
+        let in_call_with = self.in_dm_call()
+            && self
+                .dms
+                .voice_dm
+                .and_then(|d| self.dm_peer(d))
+                .is_some_and(|p| p.id == user.id);
         if blocked && in_call_with {
             self.hang_up_dm_call();
         }
@@ -398,7 +509,8 @@ impl App {
         let log = self.dms.logs.entry(dm).or_default();
         if !log.requested {
             log.requested = true;
-            self.backend.send(Cmd::Dm(DmCmd::History { dm, before: None }));
+            self.backend
+                .send(Cmd::Dm(DmCmd::History { dm, before: None }));
         }
     }
 
@@ -410,19 +522,27 @@ impl App {
             return;
         }
         let text = self.dms.input.trim().to_string();
-        if text.chars().count() <= DM_MESSAGE_MAX_CHARS && self.send_with_images(crate::chat_images::Target::Dm(dm), text.clone()) {
+        if text.chars().count() <= DM_MESSAGE_MAX_CHARS
+            && self.send_with_images(crate::chat_images::Target::Dm(dm), text.clone())
+        {
             return;
         }
         if text.is_empty() {
             return;
         }
         if text.chars().count() > DM_MESSAGE_MAX_CHARS {
-            self.notice = Some(format!("A mensagem passou de {DM_MESSAGE_MAX_CHARS} caracteres."));
+            self.notice = Some(format!(
+                "The message exceeds {DM_MESSAGE_MAX_CHARS} characters."
+            ));
             return;
         }
         self.dms.input.clear();
         let extras = self.take_send_extras(crate::chat_images::Target::Dm(dm), &text);
-        self.backend.send(Cmd::Dm(DmCmd::Send { dm, content: text, reply_to: extras.reply_to }));
+        self.backend.send(Cmd::Dm(DmCmd::Send {
+            dm,
+            content: text,
+            reply_to: extras.reply_to,
+        }));
     }
 
     /// Viewer counts ("👁") come from the hub's voice state, which never has a private call: they
@@ -439,18 +559,30 @@ impl App {
     fn dm_peer(&self, dm: DmId) -> Option<User> {
         self.dms.conv(dm).map(|c| c.peer.clone()).or_else(|| {
             let me = self.my_id()?;
-            self.dms.call.as_ref().filter(|c| c.dm_id == dm).map(|c| c.peer_of(me).clone())
+            self.dms
+                .call
+                .as_ref()
+                .filter(|c| c.dm_id == dm)
+                .map(|c| c.peer_of(me).clone())
         })
     }
 
     /// "Chamada com Fulano" (the voice bar and the call view's title).
     pub fn dm_call_title(&self) -> String {
-        let name = self.dms.voice_dm.and_then(|dm| self.dm_peer(dm)).map(|u| u.shown_name().to_string()).unwrap_or_default();
-        let ringing = self.dms.call.as_ref().is_some_and(|c| c.state == CallState::Ringing && Some(c.caller.id) == self.my_id());
+        let name = self
+            .dms
+            .voice_dm
+            .and_then(|dm| self.dm_peer(dm))
+            .map(|u| u.shown_name().to_string())
+            .unwrap_or_default();
+        let ringing =
+            self.dms.call.as_ref().is_some_and(|c| {
+                c.state == CallState::Ringing && Some(c.caller.id) == self.my_id()
+            });
         if ringing {
             format!("{ICON_PHONE} Chamando {name}...")
         } else {
-            format!("{ICON_PHONE} Chamada com {name}")
+            format!("{ICON_PHONE} Call with {name}")
         }
     }
 
@@ -492,27 +624,32 @@ impl App {
         self.backend.send(Cmd::JoinDmCall { dm, accept, opts });
     }
 
-    /// "Ligar" in DM `dm`'s header (also "Entrar na chamada" when its call is going on).
+    /// "Call" in DM `dm`'s header (also "Join call" when its call is going on).
     pub fn start_dm_call(&mut self, dm: DmId) {
         self.join_dm_call(dm, false);
     }
 
-    /// "Atender".
+    /// "Answer".
     pub fn accept_dm_call(&mut self) {
-        let Some(call) = self.dms.incoming(self.my_id()).cloned() else { return };
+        let Some(call) = self.dms.incoming(self.my_id()).cloned() else {
+            return;
+        };
         self.dms.ring_next = None;
         self.join_dm_call(call.dm_id, true);
     }
 
-    /// "Recusar".
+    /// "Decline".
     pub fn decline_dm_call(&mut self) {
-        let Some(call) = self.dms.incoming(self.my_id()).cloned() else { return };
+        let Some(call) = self.dms.incoming(self.my_id()).cloned() else {
+            return;
+        };
         self.dms.ring_next = None;
         self.dms.call = None;
-        self.backend.send(Cmd::Dm(DmCmd::Decline { dm: call.dm_id }));
+        self.backend
+            .send(Cmd::Dm(DmCmd::Decline { dm: call.dm_id }));
     }
 
-    /// "Desligar": end the call on the hub and leave its room.
+    /// "Turn off": end the call on the hub and leave its room.
     pub fn hang_up_dm_call(&mut self) {
         if let Some(dm) = self.dms.voice_dm.take() {
             self.backend.send(Cmd::Dm(DmCmd::End { dm }));
@@ -548,17 +685,30 @@ impl App {
     /// A hub snapshot (first connect or reconnect): fetch the list, catch up on open DMs.
     pub(super) fn dm_on_ready(&mut self) {
         self.backend.send(Cmd::Dm(DmCmd::List));
-        let reload: Vec<DmId> = self.dms.logs.iter().filter(|(_, l)| l.requested).map(|(id, _)| *id).collect();
+        let reload: Vec<DmId> = self
+            .dms
+            .logs
+            .iter()
+            .filter(|(_, l)| l.requested)
+            .map(|(id, _)| *id)
+            .collect();
         for dm in reload {
-            self.backend.send(Cmd::Dm(DmCmd::History { dm, before: None }));
+            self.backend
+                .send(Cmd::Dm(DmCmd::History { dm, before: None }));
         }
         self.dms.read_sent.clear();
     }
 
     /// The DM is on screen, the window has focus: its lines are being read.
     fn dm_reading(&self, dm: DmId, ctx: Option<&egui::Context>) -> bool {
-        let focused = !self.notify.hidden && self.notify.focus_override.unwrap_or_else(|| ctx.is_none_or(|c| c.input(|i| i.viewport().focused.unwrap_or(true))));
-        self.screen == Screen::Main && self.center == Center::Chat && self.dms.selected == Some(dm) && focused
+        let focused = !self.notify.hidden
+            && self.notify.focus_override.unwrap_or_else(|| {
+                ctx.is_none_or(|c| c.input(|i| i.viewport().focused.unwrap_or(true)))
+            });
+        self.screen == Screen::Main
+            && self.center == Center::Chat
+            && self.dms.selected == Some(dm)
+            && focused
     }
 
     // ------------------------------------------------------------ events
@@ -576,7 +726,9 @@ impl App {
                     self.backend.send(Cmd::Dm(DmCmd::List));
                 }
                 if !mine && !reading {
-                    if !self.do_not_disturb() && self.settings.alerts.allows(AlertKind::DirectMessage) {
+                    if !self.do_not_disturb()
+                        && self.settings.alerts.allows(AlertKind::DirectMessage)
+                    {
                         self.dms.dm_alerts += 1;
                         self.remote_alert(AlertKind::DirectMessage, message.author.id);
                     }
@@ -595,19 +747,35 @@ impl App {
             ServerEvent::DmMessageDeleted { dm_id, message_id } => {
                 let (gone, newest) = match self.dms.logs.get_mut(&dm_id) {
                     Some(log) => {
-                        let gone = log.msgs.iter().position(|m| m.id == message_id).map(|i| log.msgs.remove(i));
+                        let gone = log
+                            .msgs
+                            .iter()
+                            .position(|m| m.id == message_id)
+                            .map(|i| log.msgs.remove(i));
                         (gone, log.msgs.last().cloned())
                     }
                     None => (None, None),
                 };
-                apply_delete(&mut self.dms.convs, dm_id, message_id, gone.as_ref(), newest.as_ref(), me);
+                apply_delete(
+                    &mut self.dms.convs,
+                    dm_id,
+                    message_id,
+                    gone.as_ref(),
+                    newest.as_ref(),
+                    me,
+                );
                 // Its images, chips and a reply being written to it go; replies to it now quote
-                // "mensagem apagada" (v0.8).
+                // "message deleted" (v0.8).
                 let atts = gone.map(|m| m.attachments).unwrap_or_default();
                 self.forget_message(crate::chat_images::Target::Dm(dm_id), message_id, &atts);
             }
             ServerEvent::DmRead { dm_id, up_to } => {
-                let log = self.dms.logs.get(&dm_id).filter(|l| l.requested).map(|l| l.msgs.as_slice());
+                let log = self
+                    .dms
+                    .logs
+                    .get(&dm_id)
+                    .filter(|l| l.requested)
+                    .map(|l| l.msgs.as_slice());
                 apply_read(&mut self.dms.convs, dm_id, up_to, log, me);
             }
             ServerEvent::CallInvite { call } => {
@@ -641,15 +809,22 @@ impl App {
         self.dms.ring_next = None;
         if self.dms.voice_dm == Some(dm) {
             self.dms.voice_dm = None;
-            let name = self.dm_peer(dm).map(|u| u.shown_name().to_string()).unwrap_or_default();
+            let name = self
+                .dm_peer(dm)
+                .map(|u| u.shown_name().to_string())
+                .unwrap_or_default();
             if self.in_dm_call() {
                 self.leave_voice();
             }
             let text = match reason {
                 None => format!("{ICON_PHONE} {name} recusou a chamada."),
-                Some(CallEndReason::Missed) => format!("{ICON_PHONE} {name} não atendeu."),
-                Some(CallEndReason::JoinedVoice) | Some(CallEndReason::Hangup) | Some(CallEndReason::Cancelled) => format!("{ICON_PHONE} Chamada encerrada."),
-                Some(CallEndReason::Offline) => format!("{ICON_PHONE} Chamada encerrada: {name} ficou sem conexão."),
+                Some(CallEndReason::Missed) => format!("{ICON_PHONE} {name} did not answer."),
+                Some(CallEndReason::JoinedVoice)
+                | Some(CallEndReason::Hangup)
+                | Some(CallEndReason::Cancelled) => format!("{ICON_PHONE} Chamada encerrada."),
+                Some(CallEndReason::Offline) => {
+                    format!("{ICON_PHONE} Call ended: {name} lost connection.")
+                }
                 Some(CallEndReason::Other) => format!("{ICON_PHONE} Chamada encerrada."),
             };
             self.toast(text);
@@ -664,8 +839,16 @@ impl App {
                 self.dms.supported = true;
                 self.dms.listed = true;
                 self.dms.convs = list;
-                tracing::info!(convs = self.dms.convs.len(), unread = self.dms.total_unread(), "dm list");
-                if self.dms.selected.is_some_and(|s| self.dms.conv(s).is_none()) {
+                tracing::info!(
+                    convs = self.dms.convs.len(),
+                    unread = self.dms.total_unread(),
+                    "dm list"
+                );
+                if self
+                    .dms
+                    .selected
+                    .is_some_and(|s| self.dms.conv(s).is_none())
+                {
                     self.dms.selected = None;
                 }
             }
@@ -707,7 +890,7 @@ impl App {
             DmEv::Opened(Err(e)) => {
                 self.dms.pending_open = None;
                 self.dms.pending_call = None;
-                self.notice = Some(format!("Não foi possível abrir a conversa: {e}"));
+                self.notice = Some(format!("Could not open the conversation: {e}"));
             }
             DmEv::History { dm, before, result } => {
                 let log = self.dms.logs.entry(dm).or_default();
@@ -720,8 +903,17 @@ impl App {
                         }
                         // The page is the hub's truth for what it covers (lines deleted meanwhile
                         // go, an id an older hub reused shows the new line), see `merge_page`.
-                        let same = |a: &DmMessage, b: &DmMessage| a.author.id == b.author.id && a.created_at_ms == b.created_at_ms;
-                        let out = super::chat_extras::merge_page(&mut log.msgs, page, before, complete, |m| m.id, same);
+                        let same = |a: &DmMessage, b: &DmMessage| {
+                            a.author.id == b.author.id && a.created_at_ms == b.created_at_ms
+                        };
+                        let out = super::chat_extras::merge_page(
+                            &mut log.msgs,
+                            page,
+                            before,
+                            complete,
+                            |m| m.id,
+                            same,
+                        );
                         let target = crate::chat_images::Target::Dm(dm);
                         for m in out.deleted {
                             self.forget_message(target, m.id, &m.attachments);
@@ -733,11 +925,15 @@ impl App {
                     }
                     Err(e) => {
                         log.no_more = true;
-                        self.notice = Some(format!("Não foi possível carregar a conversa: {e}"));
+                        self.notice = Some(format!("Could not load the conversation: {e}"));
                     }
                 }
             }
-            DmEv::Sent { dm, content, result } => match result {
+            DmEv::Sent {
+                dm,
+                content,
+                result,
+            } => match result {
                 Ok(m) => {
                     if let Some(me) = self.my_id() {
                         apply_message(&mut self.dms.convs, &m, me, true);
@@ -752,12 +948,14 @@ impl App {
                     if self.dms.input.is_empty() && self.dms.selected == Some(dm) {
                         self.dms.input = content;
                     }
-                    self.notice = Some(format!("Mensagem não enviada: {e}"));
+                    self.notice = Some(format!("Message not sent: {e}"));
                 }
             },
             DmEv::Done { cmd, result } => match (cmd, result) {
                 (DmCmd::Block { .. }, Ok(())) => self.backend.send(Cmd::Dm(DmCmd::List)),
-                (DmCmd::Read { .. } | DmCmd::End { .. }, Err(e)) => tracing::debug!(error = %e, "dm call failed quietly"),
+                (DmCmd::Read { .. } | DmCmd::End { .. }, Err(e)) => {
+                    tracing::debug!(error = %e, "dm call failed quietly")
+                }
                 (cmd, Err(e)) => {
                     tracing::warn!(?cmd, error = %e, "dm request failed");
                     self.notice = Some(e);
@@ -773,7 +971,9 @@ impl App {
             return;
         }
         match ev {
-            VoiceEvent::Connected { room, participants, .. } => {
+            VoiceEvent::Connected {
+                room, participants, ..
+            } => {
                 tracing::info!(room, others = participants.len(), "dm call room joined");
                 self.dms.room = Some(room.clone());
                 self.dms.room_peers = participants.iter().cloned().collect();
@@ -822,8 +1022,9 @@ impl App {
             if let Some(peer) = self.dm_peer(dm) {
                 let id = peer.id.to_string();
                 if self.dms.room_peers.contains(&id) {
-                    // A screen live shows as a Go Live track; a "Só áudio" one only as its kind.
-                    let streaming = self.dms.live_peers.contains(&id) || self.voice.audio_only.contains(&id);
+                    // A screen live shows as a Go Live track; a "Audio only" one only as its kind.
+                    let streaming =
+                        self.dms.live_peers.contains(&id) || self.voice.audio_only.contains(&id);
                     members.push(VoiceMember {
                         user: peer,
                         channel_id: Some(DM_CALL_CHANNEL),
@@ -845,7 +1046,13 @@ impl App {
     pub(super) fn dm_tick(&mut self, ctx: &egui::Context) {
         // A call that never got going (the hub refused it, the room could not be joined) leaves
         // nothing behind.
-        if !self.in_dm_call() && self.dms.call.as_ref().is_none_or(|c| Some(c.dm_id) != self.dms.voice_dm) {
+        if !self.in_dm_call()
+            && self
+                .dms
+                .call
+                .as_ref()
+                .is_none_or(|c| Some(c.dm_id) != self.dms.voice_dm)
+        {
             self.dms.voice_dm = None;
         }
         self.refresh_call_members();
@@ -874,13 +1081,19 @@ impl App {
         // Read pointer: the DM on screen is read up to its newest line.
         if let Some(dm) = self.dms.selected {
             if self.dm_reading(dm, Some(ctx)) {
-                let newest = self.dms.logs.get(&dm).and_then(|l| l.msgs.last()).map(|m| m.id);
+                let newest = self
+                    .dms
+                    .logs
+                    .get(&dm)
+                    .and_then(|l| l.msgs.last())
+                    .map(|m| m.id);
                 let conv_read = self.dms.conv(dm).map(|c| (c.read_up_to, c.unread));
                 if let (Some(newest), Some((read, unread))) = (newest, conv_read) {
                     let sent = self.dms.read_sent.get(&dm).copied().unwrap_or(0);
                     if (newest > read || unread > 0) && newest > sent {
                         self.dms.read_sent.insert(dm, newest);
-                        self.backend.send(Cmd::Dm(DmCmd::Read { dm, up_to: newest }));
+                        self.backend
+                            .send(Cmd::Dm(DmCmd::Read { dm, up_to: newest }));
                         if let Some(me) = me {
                             let log = self.dms.logs.get(&dm).map(|l| l.msgs.as_slice());
                             apply_read(&mut self.dms.convs, dm, newest, log, me);
@@ -891,10 +1104,12 @@ impl App {
         }
     }
 
-    /// Blink the taskbar button when the window is not in front (and "Não perturbe" is off).
+    /// Blink the taskbar button when the window is not in front (and "Do not disturb" is off).
     fn flash_taskbar(&mut self, ctx: Option<&egui::Context>) {
         // (Autotests simulate the focus: `notify.focus_override`.)
-        let focused = self.notify.focus_override.unwrap_or_else(|| ctx.is_some_and(|c| c.input(|i| i.viewport().focused.unwrap_or(false))));
+        let focused = self.notify.focus_override.unwrap_or_else(|| {
+            ctx.is_some_and(|c| c.input(|i| i.viewport().focused.unwrap_or(false)))
+        });
         if focused || self.do_not_disturb() {
             return;
         }
@@ -904,7 +1119,7 @@ impl App {
 
     // ------------------------------------------------------------ drawing
 
-    /// "Mensagens diretas" at the top of the sidebar (v1.0: highlighted only while open in the
+    /// "Direct messages" at the top of the sidebar (v1.0: highlighted only while open in the
     /// center, like the channels).
     pub(super) fn dm_sidebar(&mut self, ui: &mut egui::Ui) {
         if !self.dms.supported {
@@ -914,17 +1129,41 @@ impl App {
         ui.horizontal(|ui| {
             ui.add_space(8.0);
             let unread = self.dms.total_unread();
-            let title = if unread > 0 { format!("Mensagens diretas ({unread})") } else { "Mensagens diretas".to_string() };
+            let title = if unread > 0 {
+                format!("Mensagens diretas ({unread})")
+            } else {
+                "Direct messages".to_string()
+            };
             crate::ui_kit::section(ui, &title);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if crate::ui_kit::icon_button(ui, crate::theme::ph::PLUS, "Nova mensagem", crate::ui_kit::IconState::Normal).clicked() {
+                if crate::ui_kit::icon_button(
+                    ui,
+                    crate::theme::ph::PLUS,
+                    "New message",
+                    crate::ui_kit::IconState::Normal,
+                )
+                .clicked()
+                {
                     self.open_dm_picker();
                 }
             });
         });
         let convs: Vec<DmConversation> = self.dms.convs.clone();
         if convs.is_empty() {
-            let r = crate::ui_kit::sidebar_row(ui, crate::ui_kit::Row { icon: crate::theme::ph::PLUS, name: "Nova mensagem", label: "Nova mensagem", selected: false, unread: false, count: 0, mentions: 0, hover: None }).0;
+            let r = crate::ui_kit::sidebar_row(
+                ui,
+                crate::ui_kit::Row {
+                    icon: crate::theme::ph::PLUS,
+                    name: "New message",
+                    label: "New message",
+                    selected: false,
+                    unread: false,
+                    count: 0,
+                    mentions: 0,
+                    hover: None,
+                },
+            )
+            .0;
             if r.clicked() {
                 self.open_dm_picker();
             }
@@ -933,43 +1172,111 @@ impl App {
         for c in convs {
             let selected = open == crate::layout::Open::Dm(c.id);
             let calling = self.dms.call.as_ref().is_some_and(|k| k.dm_id == c.id);
-            let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), egui::Sense::click());
+            let (rect, resp) = ui.allocate_exact_size(
+                egui::vec2(ui.available_width(), ROW_H),
+                egui::Sense::click(),
+            );
             if ui.is_rect_visible(rect) {
                 if selected {
-                    ui.painter().rect_filled(rect, crate::theme::radius::ROW, crate::theme::ROW_SELECTED);
+                    ui.painter().rect_filled(
+                        rect,
+                        crate::theme::radius::ROW,
+                        crate::theme::ROW_SELECTED,
+                    );
                 } else if resp.hovered() {
-                    ui.painter().rect_filled(rect, crate::theme::radius::ROW, crate::theme::ROW_HOVER);
+                    ui.painter().rect_filled(
+                        rect,
+                        crate::theme::radius::ROW,
+                        crate::theme::ROW_HOVER,
+                    );
                 }
                 let p = ui.painter_at(rect);
                 let center = egui::pos2(rect.left() + 8.0 + ROW_AVATAR / 2.0, rect.center().y);
                 let ctx = ui.ctx().clone();
-                crate::avatars::draw_avatar(&mut self.avatars.store, &p, &ctx, center, ROW_AVATAR / 2.0, &c.peer, crate::avatars::Surface::Sidebar);
+                crate::avatars::draw_avatar(
+                    &mut self.avatars.store,
+                    &p,
+                    &ctx,
+                    center,
+                    ROW_AVATAR / 2.0,
+                    &c.peer,
+                    crate::avatars::Surface::Sidebar,
+                );
                 let tx = rect.left() + 18.0 + ROW_AVATAR;
                 // The name and the preview end before the badges (v0.8.2: the same layout as the
                 // channels', so a "99+" never runs into the name).
                 let show_count = c.unread > 0 && !c.blocked;
-                let count_w = show_count.then(|| super::notify::pill_width(p.layout_no_wrap(super::notify::count_text(c.unread), crate::theme::semibold(11.0), Color32::WHITE).size().x));
-                let layout = super::notify::row_layout(rect, tx, count_w, false, if calling { 16.0 } else { 0.0 });
+                let count_w = show_count.then(|| {
+                    super::notify::pill_width(
+                        p.layout_no_wrap(
+                            super::notify::count_text(c.unread),
+                            crate::theme::semibold(11.0),
+                            Color32::WHITE,
+                        )
+                        .size()
+                        .x,
+                    )
+                });
+                let layout = super::notify::row_layout(
+                    rect,
+                    tx,
+                    count_w,
+                    false,
+                    if calling { 16.0 } else { 0.0 },
+                );
                 let w = layout.name.width().max(1.0);
                 let strong = (c.unread > 0 && !c.blocked) || selected || resp.hovered();
-                let name_color = if strong { crate::theme::GIZ } else { crate::theme::NEVOA };
-                let name_font = if c.unread > 0 && !c.blocked { crate::theme::semibold(14.0) } else { crate::theme::body(14.0) };
+                let name_color = if strong {
+                    crate::theme::GIZ
+                } else {
+                    crate::theme::NEVOA
+                };
+                let name_font = if c.unread > 0 && !c.blocked {
+                    crate::theme::semibold(14.0)
+                } else {
+                    crate::theme::body(14.0)
+                };
                 let mut name = c.peer.shown_name().to_string();
                 if c.blocked {
                     name.push_str(" (bloqueado)");
                 }
-                let mut drawn = super::notify::DrawnRow { label: name.clone(), layout, text_right: tx, elided: false, selected };
+                let mut drawn = super::notify::DrawnRow {
+                    label: name.clone(),
+                    layout,
+                    text_right: tx,
+                    elided: false,
+                    selected,
+                };
                 let preview_color = crate::theme::NEVOA.gamma_multiply(0.85);
-                for (i, (text, font, color, dy)) in [(name, name_font, name_color, 3.0), (preview_text(&c, me), crate::theme::body(11.5), preview_color, 21.0)].into_iter().enumerate() {
+                for (i, (text, font, color, dy)) in [
+                    (name, name_font, name_color, 3.0),
+                    (
+                        preview_text(&c, me),
+                        crate::theme::body(11.5),
+                        preview_color,
+                        21.0,
+                    ),
+                ]
+                .into_iter()
+                .enumerate()
+                {
                     let g = super::notify::fit_name(&p, &text, font, color, w);
                     if i == 0 {
-                        (drawn.text_right, drawn.elided) = ((tx + g.size().x).min(layout.name.right()), g.elided);
+                        (drawn.text_right, drawn.elided) =
+                            ((tx + g.size().x).min(layout.name.right()), g.elided);
                     }
-                    p.with_clip_rect(layout.name.intersect(p.clip_rect())).galley(egui::pos2(tx, rect.top() + dy), g, color);
+                    p.with_clip_rect(layout.name.intersect(p.clip_rect()))
+                        .galley(egui::pos2(tx, rect.top() + dy), g, color);
                 }
                 super::notify::paint_badges(&p, &layout, c.unread);
                 if let Some(icon) = layout.icon {
-                    p.text(icon.center(), egui::Align2::CENTER_CENTER, ICON_PHONE, crate::theme::body(14.0), GREEN);
+                    p.text(
+                        icon.center(),
+                        egui::Align2::CENTER_CENTER,
+                        ICON_PHONE,
+                        crate::theme::body(14.0),
+                        GREEN,
+                    );
                 }
                 self.sidebar_rows.push(drawn);
             }
@@ -991,55 +1298,95 @@ impl App {
     }
 
     /// The DM header's buttons (right to left): the options (the person's menu), then the call:
-    /// "Ligar", "Entrar na chamada", "Atender" / "Recusar", or "Desligar" / "Ver chamada".
+    /// "Call", "Join call", "Answer" / "Decline", or "Turn off" / "View call".
     pub(super) fn dm_header_actions(&mut self, ui: &mut egui::Ui, dm: DmId, conv: &DmConversation) {
         use crate::ui_kit::{button, icon_button, IconState, Kind};
         let me = self.my_id().unwrap_or_default();
         let peer = conv.peer.clone();
         let call_here = self.dms.call.as_ref().filter(|c| c.dm_id == dm).cloned();
         let in_this_call = self.in_dm_call() && self.dms.voice_dm == Some(dm);
-        let opts = icon_button(ui, crate::theme::ph::DOTS_THREE, "Opções", IconState::Normal);
-        egui::Popup::menu(&opts).frame(crate::ui_kit::popup_frame(ui.style())).style(crate::ui_kit::menu_style).show(|ui| {
-            let pos = ui.min_rect().left_top();
-            self.person_menu_ui(ui, &peer, Origin::Dm, Lead::None, pos);
-        });
+        let opts = icon_button(
+            ui,
+            crate::theme::ph::DOTS_THREE,
+            "Options",
+            IconState::Normal,
+        );
+        egui::Popup::menu(&opts)
+            .frame(crate::ui_kit::popup_frame(ui.style()))
+            .style(crate::ui_kit::menu_style)
+            .show(|ui| {
+                let pos = ui.min_rect().left_top();
+                self.person_menu_ui(ui, &peer, Origin::Dm, Lead::None, pos);
+            });
         ui.add_space(6.0);
         if in_this_call {
-            if button(ui, Kind::Danger, Some(crate::theme::ph::PHONE_X), "Desligar").clicked() {
+            if button(
+                ui,
+                Kind::Danger,
+                Some(crate::theme::ph::PHONE_X),
+                "Turn off",
+            )
+            .clicked()
+            {
                 self.hang_up_dm_call();
             }
-            if self.center != Center::Call && button(ui, Kind::Secondary, Some(crate::theme::ph::SQUARES_FOUR), "Ver chamada").clicked() {
+            if self.center != Center::Call
+                && button(
+                    ui,
+                    Kind::Secondary,
+                    Some(crate::theme::ph::SQUARES_FOUR),
+                    "View call",
+                )
+                .clicked()
+            {
                 self.center = Center::Call;
             }
-        } else if call_here.as_ref().is_some_and(|c| c.state == CallState::Ringing && c.callee.id == me) {
-            if button(ui, Kind::Danger, Some(crate::theme::ph::PHONE_X), "Recusar").clicked() {
+        } else if call_here
+            .as_ref()
+            .is_some_and(|c| c.state == CallState::Ringing && c.callee.id == me)
+        {
+            if button(ui, Kind::Danger, Some(crate::theme::ph::PHONE_X), "Decline").clicked() {
                 self.decline_dm_call();
             }
-            // (Secondary here: the ringing window's "Atender" is the view's one lamp button.)
-            if button(ui, Kind::Secondary, Some(ICON_PHONE), "Atender").clicked() {
+            // (Secondary here: the ringing window's "Answer" is the view's one lamp button.)
+            if button(ui, Kind::Secondary, Some(ICON_PHONE), "Answer").clicked() {
                 self.accept_dm_call();
             }
         } else if call_here.is_some() {
-            if button(ui, Kind::Primary, Some(ICON_PHONE), "Entrar na chamada").clicked() {
+            if button(ui, Kind::Primary, Some(ICON_PHONE), "Join call").clicked() {
                 self.start_dm_call(dm);
             }
         } else {
-            let r = ui.add_enabled_ui(!conv.blocked && self.hub_up, |ui| button(ui, Kind::Secondary, Some(ICON_PHONE), "Ligar")).inner;
-            let why = if conv.blocked { "Você bloqueou esta pessoa: desbloqueie para ligar" } else { "Sem conexão com o servidor" };
-            if r.on_disabled_hover_text(why).on_hover_text(format!("Chamada de voz privada com {} (só vocês dois)", peer.shown_name())).clicked() {
+            let r = ui
+                .add_enabled_ui(!conv.blocked && self.hub_up, |ui| {
+                    button(ui, Kind::Secondary, Some(ICON_PHONE), "Call")
+                })
+                .inner;
+            let why = if conv.blocked {
+                "You blocked this person: unblock them to call"
+            } else {
+                "Not connected to the server"
+            };
+            if r.on_disabled_hover_text(why)
+                .on_hover_text(format!(
+                    "Private voice call with {} (just the two of you)",
+                    peer.shown_name()
+                ))
+                .clicked()
+            {
                 self.start_dm_call(dm);
             }
         }
     }
 
-    /// "Nova mensagem" (the people picker) and the incoming-call prompt, in the kit's frames.
+    /// "New message" (the people picker) and the incoming-call prompt, in the kit's frames.
     pub(super) fn dm_windows(&mut self, ctx: &egui::Context) {
         use crate::theme::{self, ph, space};
         use crate::ui_kit::{self, IconState, Kind};
         if self.dms.picker.open {
             let mut open = !ctx.input(|i| i.key_pressed(egui::Key::Escape));
             let mut pick = None;
-            egui::Window::new("Nova mensagem")
+            egui::Window::new("New message")
                 .id(egui::Id::new("dm_picker"))
                 .title_bar(false)
                 .collapsible(false)
@@ -1050,40 +1397,52 @@ impl App {
                     ui.set_width(PICKER_W);
                     ui.spacing_mut().item_spacing.y = 6.0;
                     ui.horizontal(|ui| {
-                        ui_kit::dialog_title(ui, "Nova mensagem");
+                        ui_kit::dialog_title(ui, "New message");
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui_kit::icon_button(ui, ph::X, "Fechar", IconState::Normal).clicked() {
+                            if ui_kit::icon_button(ui, ph::X, "Close", IconState::Normal).clicked()
+                            {
                                 open = false;
                             }
                         });
                     });
-                    ui_kit::hint(ui, "Uma conversa só entre vocês dois. Escolha a pessoa:");
-                    let r = ui.add(ui_kit::field(&mut self.dms.picker.filter).hint_text(format!("{}  Procurar pelo nome", ph::MAGNIFYING_GLASS)).desired_width(PICKER_W));
+                    ui_kit::hint(ui, "A conversation between the two of you. Choose someone:");
+                    let r = ui.add(
+                        ui_kit::field(&mut self.dms.picker.filter)
+                            .hint_text(format!("{}  Search by name", ph::MAGNIFYING_GLASS))
+                            .desired_width(PICKER_W),
+                    );
                     if !r.has_focus() && self.dms.picker.filter.is_empty() {
                         r.request_focus();
                     }
                     if self.dms.picker.loading {
-                        ui_kit::hint(ui, "Carregando...");
+                        ui_kit::hint(ui, "Loading...");
                     }
                     if let Some(e) = &self.dms.picker.error {
                         ui_kit::result_text(ui, false, e);
                     }
                     let me = self.my_id();
-                    let people: Vec<User> = filter_people(&self.dms.picker.people, &self.dms.picker.filter, me).into_iter().cloned().collect();
+                    let people: Vec<User> =
+                        filter_people(&self.dms.picker.people, &self.dms.picker.filter, me)
+                            .into_iter()
+                            .cloned()
+                            .collect();
                     ui.add_space(space::S);
-                    egui::ScrollArea::vertical().max_height(320.0).auto_shrink([false, true]).show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        let typed = !self.dms.picker.filter.trim().is_empty();
-                        for (i, u) in people.iter().enumerate() {
-                            // With a search typed, the first one is what Enter picks: shown raised.
-                            if self.picker_row(ui, u, i == 0 && typed).clicked() {
-                                pick = Some(u.id);
+                    egui::ScrollArea::vertical()
+                        .max_height(320.0)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            let typed = !self.dms.picker.filter.trim().is_empty();
+                            for (i, u) in people.iter().enumerate() {
+                                // With a search typed, the first one is what Enter picks: shown raised.
+                                if self.picker_row(ui, u, i == 0 && typed).clicked() {
+                                    pick = Some(u.id);
+                                }
                             }
-                        }
-                        if people.is_empty() && !self.dms.picker.loading {
-                            ui_kit::hint(ui, "Ninguém encontrado.");
-                        }
-                    });
+                            if people.is_empty() && !self.dms.picker.loading {
+                                ui_kit::hint(ui, "Nobody found.");
+                            }
+                        });
                     if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         pick = pick.or(people.first().map(|u| u.id));
                     }
@@ -1095,38 +1454,91 @@ impl App {
                 self.dms.picker.open = false;
             }
         }
-        let Some(call) = self.dms.incoming(self.my_id()).cloned() else { return };
+        let Some(call) = self.dms.incoming(self.my_id()).cloned() else {
+            return;
+        };
         let caller = call.caller.clone();
         let mut action = None;
-        egui::Window::new("Chamada recebida")
+        egui::Window::new("Incoming call")
             .id(egui::Id::new("dm_incoming_call"))
             .collapsible(false)
             .resizable(false)
             .title_bar(false)
             .anchor(egui::Align2::CENTER_TOP, [0.0, 60.0])
-            .frame(ui_kit::dialog_frame(&ctx.global_style()).inner_margin(egui::Margin { left: 24, right: 24, top: 22, bottom: 20 }))
+            .frame(
+                ui_kit::dialog_frame(&ctx.global_style()).inner_margin(egui::Margin {
+                    left: 24,
+                    right: 24,
+                    top: 22,
+                    bottom: 20,
+                }),
+            )
             .show(ctx, |ui| {
                 ui.set_width(RING_W);
                 ui.vertical_centered(|ui| {
                     ui.spacing_mut().item_spacing.y = 4.0;
-                    ui.label(RichText::new(format!("{}  Chamada recebida", ph::PHONE_INCOMING)).font(theme::semibold(12.5)).color(theme::NEVOA));
+                    ui.label(
+                        RichText::new(format!("{}  Incoming call", ph::PHONE_INCOMING))
+                            .font(theme::semibold(12.5))
+                            .color(theme::NEVOA),
+                    );
                     ui.add_space(space::M);
-                    let pic = crate::avatars::avatar_widget(&mut self.avatars.store, ui, &caller, 72.0, crate::avatars::Surface::Chat);
+                    let pic = crate::avatars::avatar_widget(
+                        &mut self.avatars.store,
+                        ui,
+                        &caller,
+                        72.0,
+                        crate::avatars::Surface::Chat,
+                    );
                     // A chalk ring: somebody wants to talk (drawn once, it does not pulse; the lamp's ring
                     // is only for whoever speaks).
-                    ui_kit::paint_ring(ui.painter(), pic.rect.center(), 36.0, theme::PAREDE, theme::GIZ);
+                    ui_kit::paint_ring(
+                        ui.painter(),
+                        pic.rect.center(),
+                        36.0,
+                        theme::PAREDE,
+                        theme::GIZ,
+                    );
                     ui.add_space(space::M);
-                    ui.add(egui::Label::new(RichText::new(caller.shown_name()).font(theme::display(19.0)).color(theme::GIZ)).truncate().selectable(false));
-                    ui.label(RichText::new("está ligando para você · chamada de voz privada").font(theme::body(12.5)).color(theme::NEVOA));
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(caller.shown_name())
+                                .font(theme::display(19.0))
+                                .color(theme::GIZ),
+                        )
+                        .truncate()
+                        .selectable(false),
+                    );
+                    ui.label(
+                        RichText::new("is calling you · private voice call")
+                            .font(theme::body(12.5))
+                            .color(theme::NEVOA),
+                    );
                     ui.add_space(space::XL);
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = space::M;
                         let w = 2.0 * 124.0 + space::M;
                         ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
-                        if ui_kit::button_sized(ui, Kind::Danger, ui_kit::Size::Large, Some(ph::PHONE_X), "Recusar").clicked() {
+                        if ui_kit::button_sized(
+                            ui,
+                            Kind::Danger,
+                            ui_kit::Size::Large,
+                            Some(ph::PHONE_X),
+                            "Decline",
+                        )
+                        .clicked()
+                        {
                             action = Some(false);
                         }
-                        if ui_kit::button_sized(ui, Kind::Primary, ui_kit::Size::Large, Some(ICON_PHONE), "Atender").clicked() {
+                        if ui_kit::button_sized(
+                            ui,
+                            Kind::Primary,
+                            ui_kit::Size::Large,
+                            Some(ICON_PHONE),
+                            "Answer",
+                        )
+                        .clicked()
+                        {
                             action = Some(true);
                         }
                     });
@@ -1139,30 +1551,59 @@ impl App {
         }
     }
 
-    /// A person of "Nova mensagem": the picture, the name and the username, the row raised under
+    /// A person of "New message": the picture, the name and the username, the row raised under
     /// the pointer (or when it is what Enter picks).
     fn picker_row(&mut self, ui: &mut egui::Ui, u: &User, first: bool) -> egui::Response {
         use crate::theme;
-        let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 40.0), egui::Sense::click());
+        let (rect, resp) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 40.0), egui::Sense::click());
         if resp.hovered() || first {
-            ui.painter().rect_filled(rect, theme::radius::ROW, if resp.hovered() { theme::MOVEL_HOVER } else { theme::ROW_HOVER });
+            ui.painter().rect_filled(
+                rect,
+                theme::radius::ROW,
+                if resp.hovered() {
+                    theme::MOVEL_HOVER
+                } else {
+                    theme::ROW_HOVER
+                },
+            );
         }
-        let mut row = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(8.0, 0.0))).layout(Layout::left_to_right(Align::Center)));
+        let mut row = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect.shrink2(egui::vec2(8.0, 0.0)))
+                .layout(Layout::left_to_right(Align::Center)),
+        );
         row.spacing_mut().item_spacing.x = 10.0;
-        crate::avatars::avatar_widget(&mut self.avatars.store, &mut row, u, 28.0, crate::avatars::Surface::Online);
+        crate::avatars::avatar_widget(
+            &mut self.avatars.store,
+            &mut row,
+            u,
+            28.0,
+            crate::avatars::Surface::Online,
+        );
         row.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            ui.label(RichText::new(u.shown_name()).font(theme::semibold(13.5)).color(theme::GIZ));
+            ui.label(
+                RichText::new(u.shown_name())
+                    .font(theme::semibold(13.5))
+                    .color(theme::GIZ),
+            );
             if u.has_display_name() {
-                ui.label(RichText::new(format!("@{}", u.username)).font(theme::body(12.0)).color(theme::NEVOA));
+                ui.label(
+                    RichText::new(format!("@{}", u.username))
+                        .font(theme::body(12.0))
+                        .color(theme::NEVOA),
+                );
             }
         });
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, u.shown_name()));
+        resp.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, u.shown_name())
+        });
         resp.on_hover_cursor(egui::CursorIcon::PointingHand)
     }
 }
 
-/// Width of "Nova mensagem" and of the incoming-call prompt.
+/// Width of "New message" and of the incoming-call prompt.
 const PICKER_W: f32 = 360.0;
 const RING_W: f32 = 300.0;
 
@@ -1171,27 +1612,62 @@ mod tests {
     use super::*;
 
     fn conv(id: DmId, peer: UserId, at: i64) -> DmConversation {
-        DmConversation { id, peer: User::new(peer, format!("u{peer}")), last_message: None, last_activity_ms: at, unread: 0, read_up_to: 0, blocked: false }
+        DmConversation {
+            id,
+            peer: User::new(peer, format!("u{peer}")),
+            last_message: None,
+            last_activity_ms: at,
+            unread: 0,
+            read_up_to: 0,
+            blocked: false,
+        }
     }
 
     fn line(id: DmMessageId, dm: DmId, author: UserId, at: i64) -> DmMessage {
-        DmMessage { id, dm_id: dm, author: User::new(author, format!("u{author}")), content: format!("m{id}"), created_at_ms: at, kind: DmMessageKind::Text, call_secs: 0, attachments: vec![], reply: None, reactions: vec![] }
+        DmMessage {
+            id,
+            dm_id: dm,
+            author: User::new(author, format!("u{author}")),
+            content: format!("m{id}"),
+            created_at_ms: at,
+            kind: DmMessageKind::Text,
+            call_secs: 0,
+            attachments: vec![],
+            reply: None,
+            reactions: vec![],
+        }
     }
 
     const ME: UserId = 1;
 
     #[test]
     fn the_list_is_ordered_by_last_activity() {
-        let mut v = vec![conv(1, 2, 100), conv(2, 3, 300), conv(3, 4, 200), conv(4, 5, 300)];
+        let mut v = vec![
+            conv(1, 2, 100),
+            conv(2, 3, 300),
+            conv(3, 4, 200),
+            conv(4, 5, 300),
+        ];
         sort_convs(&mut v);
-        assert_eq!(v.iter().map(|c| c.id).collect::<Vec<_>>(), [4, 2, 3, 1], "newest first; a tie puts the newer conversation first");
+        assert_eq!(
+            v.iter().map(|c| c.id).collect::<Vec<_>>(),
+            [4, 2, 3, 1],
+            "newest first; a tie puts the newer conversation first"
+        );
         // A message moves its conversation to the top.
         assert!(apply_message(&mut v, &line(10, 1, 2, 400), ME, false));
         assert_eq!(v[0].id, 1);
         assert_eq!(v[0].last_message.as_ref().map(|m| m.id), Some(10));
         // An older line arriving late (history) does not replace the preview or move it back.
         assert!(apply_message(&mut v, &line(5, 1, 2, 50), ME, false));
-        assert_eq!((v[0].id, v[0].last_message.as_ref().map(|m| m.id), v[0].last_activity_ms), (1, Some(10), 400));
+        assert_eq!(
+            (
+                v[0].id,
+                v[0].last_message.as_ref().map(|m| m.id),
+                v[0].last_activity_ms
+            ),
+            (1, Some(10), 400)
+        );
         // Unknown conversation: the caller must fetch the list.
         assert!(!apply_message(&mut v, &line(11, 99, 2, 500), ME, false));
     }
@@ -1218,7 +1694,10 @@ mod tests {
         assert_eq!(v[0].read_up_to, 2, "never backwards");
         // Deleting an unread line takes it off the count; deleting the newest changes the preview.
         apply_delete(&mut v, 1, 4, Some(&log[3]), Some(&log[2]), ME);
-        assert_eq!((v[0].unread, v[0].last_message.as_ref().map(|m| m.id)), (1, Some(3)));
+        assert_eq!(
+            (v[0].unread, v[0].last_message.as_ref().map(|m| m.id)),
+            (1, Some(3))
+        );
         // Reading up to the newest line clears it, even without the log.
         apply_read(&mut v, 1, 3, None, ME);
         assert_eq!(v[0].unread, 0);
@@ -1244,31 +1723,48 @@ mod tests {
     #[test]
     fn previews_and_call_lines_read_well() {
         let mut c = conv(1, 2, 0);
-        assert_eq!(preview_text(&c, ME), "Nenhuma mensagem ainda");
+        assert_eq!(preview_text(&c, ME), "No messages yet");
         let mut m = line(1, 1, ME, 1);
         m.content = "oi\n  tudo   bem?".into();
         c.last_message = Some(m.clone());
-        assert_eq!(preview_text(&c, ME), "Você: oi tudo bem?");
+        assert_eq!(preview_text(&c, ME), "You: hi, how are you?");
         m.author = User::new(2, "bia");
         c.last_message = Some(m.clone());
         assert_eq!(preview_text(&c, ME), "oi tudo bem?");
         m.kind = DmMessageKind::CallMissed;
-        assert_eq!(call_line_text(&m, ME), "Chamada perdida de bia");
+        assert_eq!(call_line_text(&m, ME), "Missed call from bia");
         m.author = User::new(ME, "eu");
-        assert_eq!(call_line_text(&m, ME), "Você ligou: sem resposta");
+        assert_eq!(call_line_text(&m, ME), "You called: no answer");
         m.kind = DmMessageKind::CallEnded;
         m.call_secs = 125;
-        assert_eq!(call_line_text(&m, ME), "Chamada de você · 2 min");
-        assert_eq!((duration_text(9), duration_text(3600 + 5 * 60)), ("9 s".to_string(), "1 h 05 min".to_string()));
+        assert_eq!(call_line_text(&m, ME), "Call from you · 2 min");
+        assert_eq!(
+            (duration_text(9), duration_text(3600 + 5 * 60)),
+            ("9 s".to_string(), "1 h 05 min".to_string())
+        );
     }
 
     #[test]
     fn people_are_filtered_by_name_and_display_name() {
         let mut ana = User::new(2, "ana");
         ana.display_name = Some("Aninha".into());
-        let people = vec![User::new(1, "eu"), User::new(3, "Bruno"), ana, User::new(4, "caio")];
-        let names = |q: &str| filter_people(&people, q, Some(1)).iter().map(|u| u.username.clone()).collect::<Vec<_>>();
-        assert_eq!(names(""), ["ana", "Bruno", "caio"], "by shown name, me left out");
+        let people = vec![
+            User::new(1, "eu"),
+            User::new(3, "Bruno"),
+            ana,
+            User::new(4, "caio"),
+        ];
+        let names = |q: &str| {
+            filter_people(&people, q, Some(1))
+                .iter()
+                .map(|u| u.username.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(""),
+            ["ana", "Bruno", "caio"],
+            "by shown name, me left out"
+        );
         assert_eq!(names("NINH"), ["ana"]);
         assert_eq!(names("br"), ["Bruno"]);
         assert!(names("zzz").is_empty());

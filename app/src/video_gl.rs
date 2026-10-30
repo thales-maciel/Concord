@@ -1,27 +1,10 @@
-//! macOS: watched streams and cameras drawn by the app itself (M2 of docs/PLANO-macOS.md).
+//! macOS video rendering from `vox_client_core::golive::viewer_tex` frame mailboxes.
+//! New visible frames are converted once into display-sized RGBA textures; strip tiles
+//! are throttled and offscreen mailboxes do not wake the UI.
 //!
-//! On Windows every video plays in a native child window presented by the core's viewer thread
-//! (`call.rs`). macOS has no such thing here: the core only keeps the newest decoded frame of each
-//! stream ([`vox_client_core::golive::viewer_tex`]) and this module draws it in the app's own
-//! OpenGL window, as an egui texture inside the tile's rect. So egui's menus, popups and dialogs
-//! simply draw over a video (no cut-outs, no hiding), and a popped-out stream is one more egui
-//! viewport (window) showing the same texture.
-//!
-//! - Only a new frame costs anything: it is taken from the stream's mailbox at the start of a UI
-//!   pass and one small shader pass turns it into an RGBA texture of the size it is shown at (the
-//!   video's size at most; a smaller tile gets a 4-tap filtered downscale, so it stays smooth
-//!   without mipmaps, whose generation costs an extra GPU submission per frame on macOS).
-//!   Repaints for any other reason just draw that texture again.
-//! - Zero copy for what VideoToolbox decodes: its NV12 picture lives in an IOSurface, and the
-//!   shader reads the surface's two planes directly (`CGLTexImageIOSurface2D`, rectangle
-//!   textures); the CPU never touches the pixels. The frame is kept until the next one replaces it,
-//!   so the decoder cannot reuse the surface while the GPU may still read it. Other buffers (a
-//!   software decoder's I420, our own camera's NV12) are uploaded plane by plane.
-//! - A stream is uploaded only while it is on screen (its tile was drawn last pass, or it is
-//!   popped out) and, for the strip's small tiles, at most `max_fps` times a second. A frame
-//!   nobody can see stays in its mailbox and wakes nobody.
-//! - If the GL path cannot start (no GL 3 / shader compile error) frames are converted on the CPU
-//!   (libyuv) into ordinary egui textures instead.
+//! VideoToolbox NV12 uses IOSurface planes without CPU copies. Retain each frame until
+//! replacement so the decoder cannot reuse its surface while the GPU reads it. Other
+//! formats upload by plane; GL initialization failure falls back to libyuv/egui textures.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -141,7 +124,17 @@ mod cgl {
     extern "C" {
         pub fn CGLGetCurrentContext() -> *mut c_void;
         #[allow(clippy::too_many_arguments)]
-        pub fn CGLTexImageIOSurface2D(ctx: *mut c_void, target: u32, internal_format: u32, width: i32, height: i32, format: u32, ty: u32, io_surface: *mut c_void, plane: u32) -> i32;
+        pub fn CGLTexImageIOSurface2D(
+            ctx: *mut c_void,
+            target: u32,
+            internal_format: u32,
+            width: i32,
+            height: i32,
+            format: u32,
+            ty: u32,
+            io_surface: *mut c_void,
+            plane: u32,
+        ) -> i32;
     }
 }
 
@@ -208,15 +201,35 @@ pub struct MacVideo {
 impl MacVideo {
     /// Start of a UI pass: take the new frames of the streams on screen (or in their own window)
     /// and upload them. `visible_extra`: streams that count as on screen anyway (popped out).
-    pub fn upload(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame, viewer: &Viewer, minimized: bool) {
+    pub fn upload(
+        &mut self,
+        ctx: &egui::Context,
+        frame: &mut eframe::Frame,
+        viewer: &Viewer,
+        minimized: bool,
+    ) {
         let keys = viewer.keys();
         self.tiles.retain(|k, t| {
             let keep = keys.contains(k);
             if !keep {
-                if let (Tex::Gpu { planes, surfaces, out, .. }, Some(gl)) = (&t.tex, &self.gl) {
+                if let (
+                    Tex::Gpu {
+                        planes,
+                        surfaces,
+                        out,
+                        ..
+                    },
+                    Some(gl),
+                ) = (&t.tex, &self.gl)
+                {
                     // SAFETY: our own GL objects on the context they were made on (current here).
                     unsafe {
-                        for p in planes.iter().flatten().map(|(p, _, _)| p).chain(surfaces.iter().flatten()) {
+                        for p in planes
+                            .iter()
+                            .flatten()
+                            .map(|(p, _, _)| p)
+                            .chain(surfaces.iter().flatten())
+                        {
                             gl.delete_texture(*p);
                         }
                         gl.delete_texture(*out);
@@ -230,15 +243,27 @@ impl MacVideo {
         }
         let now = Instant::now();
         for key in keys {
-            let Some(st) = viewer.state(&key) else { continue };
-            let shown = if st.popped_out { true } else { !minimized && self.on_screen.contains(&key) };
+            let Some(st) = viewer.state(&key) else {
+                continue;
+            };
+            let shown = if st.popped_out {
+                true
+            } else {
+                !minimized && self.on_screen.contains(&key)
+            };
             if !shown || !viewer.has_frame(&key) {
                 continue;
             }
             // Small tiles (the strip) are drawn at most `max_fps` times a second; the newest frame
             // is shown once the interval is over.
             let last = self.tiles.get(&key).and_then(|t| t.last_upload);
-            let cap = if self.measure_cap > 0 { self.measure_cap } else if st.popped_out { 0 } else { st.max_fps };
+            let cap = if self.measure_cap > 0 {
+                self.measure_cap
+            } else if st.popped_out {
+                0
+            } else {
+                st.max_fps
+            };
             if cap > 0 {
                 if let Some(last) = last {
                     let every = Duration::from_secs(1) / cap;
@@ -249,11 +274,20 @@ impl MacVideo {
                     }
                 }
             }
-            let Some(f) = viewer.take_frame(&key) else { continue };
-            let style = viewer.draw_info(&key).map(|(s, _, _)| s).unwrap_or_default();
+            let Some(f) = viewer.take_frame(&key) else {
+                continue;
+            };
+            let style = viewer
+                .draw_info(&key)
+                .map(|(s, _, _)| s)
+                .unwrap_or_default();
             let t0 = Instant::now();
-            let zero_copy = f.native_nv12().is_some_and(|n| self.upload_surface(frame, &key, style, n));
-            let ok = zero_copy || f.with_planes(|v| self.upload_one(ctx, frame, &key, style, v)).unwrap_or(false);
+            let zero_copy = f
+                .native_nv12()
+                .is_some_and(|n| self.upload_surface(frame, &key, style, n));
+            let ok = zero_copy
+                || f.with_planes(|v| self.upload_one(ctx, frame, &key, style, v))
+                    .unwrap_or(false);
             if ok {
                 f.presented();
                 if let Some(t) = self.tiles.get_mut(&key) {
@@ -279,9 +313,17 @@ impl MacVideo {
     /// Make the GL objects on first use; false: the CPU path (from now on).
     fn ensure_gpu(&mut self) -> bool {
         if !self.cpu_only && self.gpu.is_none() {
-            match self.gl.clone().ok_or_else(|| "no GL context".to_string()).and_then(|gl| Gpu::new(&gl)) {
+            match self
+                .gl
+                .clone()
+                .ok_or_else(|| "no GL context".to_string())
+                .and_then(|gl| Gpu::new(&gl))
+            {
                 Ok(g) => {
-                    tracing::info!(zero_copy = g.surface.is_some(), "mac video: GPU path (YUV shader)");
+                    tracing::info!(
+                        zero_copy = g.surface.is_some(),
+                        "mac video: GPU path (YUV shader)"
+                    );
                     self.gpu = Some(g);
                 }
                 Err(e) => {
@@ -294,7 +336,13 @@ impl MacVideo {
     }
 
     /// `key`'s GPU tile (made on first use).
-    fn gpu_tile<'a>(tiles: &'a mut HashMap<String, Tile>, gl: &glow::Context, frame: &mut eframe::Frame, key: &str, style: TileStyle) -> Option<&'a mut Tile> {
+    fn gpu_tile<'a>(
+        tiles: &'a mut HashMap<String, Tile>,
+        gl: &glow::Context,
+        frame: &mut eframe::Frame,
+        key: &str,
+        style: TileStyle,
+    ) -> Option<&'a mut Tile> {
         let tile = match tiles.entry(key.to_string()) {
             std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
             std::collections::hash_map::Entry::Vacant(e) => {
@@ -307,7 +355,20 @@ impl MacVideo {
                     }
                 };
                 let id = frame.register_native_glow_texture(out);
-                e.insert(Tile { tex: Tex::Gpu { planes: [None, None, None], surfaces: [None, None], out, out_size: (0, 0), id }, size: (0, 0), style, last_upload: None, held: None, shown_px: Default::default() })
+                e.insert(Tile {
+                    tex: Tex::Gpu {
+                        planes: [None, None, None],
+                        surfaces: [None, None],
+                        out,
+                        out_size: (0, 0),
+                        id,
+                    },
+                    size: (0, 0),
+                    style,
+                    last_upload: None,
+                    held: None,
+                    shown_px: Default::default(),
+                })
             }
         };
         tile.style = style;
@@ -315,15 +376,35 @@ impl MacVideo {
     }
 
     /// Zero copy: convert a decoded IOSurface straight into the tile's texture.
-    fn upload_surface(&mut self, frame: &mut eframe::Frame, key: &str, style: TileStyle, n: NativeNv12) -> bool {
+    fn upload_surface(
+        &mut self,
+        frame: &mut eframe::Frame,
+        key: &str,
+        style: TileStyle,
+        n: NativeNv12,
+    ) -> bool {
         if !self.ensure_gpu() {
             return false;
         }
-        let (Some(gl), Some(gpu)) = (self.gl.clone(), self.gpu.as_ref()) else { return false };
-        let Some(prog) = gpu.surface.as_ref() else { return false };
-        let Some(tile) = Self::gpu_tile(&mut self.tiles, &gl, frame, key, style) else { return false };
+        let (Some(gl), Some(gpu)) = (self.gl.clone(), self.gpu.as_ref()) else {
+            return false;
+        };
+        let Some(prog) = gpu.surface.as_ref() else {
+            return false;
+        };
+        let Some(tile) = Self::gpu_tile(&mut self.tiles, &gl, frame, key, style) else {
+            return false;
+        };
         let target = out_dims((n.width, n.height), tile.shown_px.get());
-        let Tex::Gpu { surfaces, out, out_size, .. } = &mut tile.tex else { return false };
+        let Tex::Gpu {
+            surfaces,
+            out,
+            out_size,
+            ..
+        } = &mut tile.tex
+        else {
+            return false;
+        };
         // SAFETY: GL calls on the app's context (current during the UI pass); the surface
         // belongs to a frame the caller keeps alive.
         let res = unsafe { gpu.convert_surface(&gl, prog, n, surfaces, *out, out_size, target) };
@@ -342,17 +423,34 @@ impl MacVideo {
         ok
     }
 
-    fn upload_one(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame, key: &str, style: TileStyle, v: &PlaneView<'_>) -> bool {
+    fn upload_one(
+        &mut self,
+        ctx: &egui::Context,
+        frame: &mut eframe::Frame,
+        key: &str,
+        style: TileStyle,
+        v: &PlaneView<'_>,
+    ) -> bool {
         *self.stats.sources.entry(v.source).or_default() += 1;
         if v.full_range {
             self.stats.full_range += 1;
         }
         if self.ensure_gpu() {
-            let (Some(gl), Some(gpu)) = (self.gl.clone(), self.gpu.as_ref()) else { return false };
-            let Some(tile) = Self::gpu_tile(&mut self.tiles, &gl, frame, key, style) else { return false };
+            let (Some(gl), Some(gpu)) = (self.gl.clone(), self.gpu.as_ref()) else {
+                return false;
+            };
+            let Some(tile) = Self::gpu_tile(&mut self.tiles, &gl, frame, key, style) else {
+                return false;
+            };
             tile.size = (v.width, v.height);
             let target = out_dims((v.width, v.height), tile.shown_px.get());
-            if let Tex::Gpu { planes, out, out_size, .. } = &mut tile.tex {
+            if let Tex::Gpu {
+                planes,
+                out,
+                out_size,
+                ..
+            } = &mut tile.tex
+            {
                 // SAFETY: GL calls on the app's context, current during the UI pass.
                 return unsafe { gpu.convert_planes(&gl, v, planes, *out, out_size, target) };
             }
@@ -360,7 +458,14 @@ impl MacVideo {
         }
         // CPU fallback: libyuv to RGBA, then an ordinary egui texture.
         let tile = self.tiles.entry(key.to_string()).or_insert_with(|| Tile {
-            tex: Tex::Cpu { handle: ctx.load_texture(format!("video:{key}"), egui::ColorImage::filled([1, 1], Color32::BLACK), egui::TextureOptions::LINEAR), rgba: Vec::new() },
+            tex: Tex::Cpu {
+                handle: ctx.load_texture(
+                    format!("video:{key}"),
+                    egui::ColorImage::filled([1, 1], Color32::BLACK),
+                    egui::TextureOptions::LINEAR,
+                ),
+                rgba: Vec::new(),
+            },
             size: (0, 0),
             style,
             last_upload: None,
@@ -370,7 +475,10 @@ impl MacVideo {
         tile.style = style;
         if let Tex::Cpu { handle, rgba } = &mut tile.tex {
             v.to_rgba(rgba);
-            let img = egui::ColorImage::from_rgba_unmultiplied([v.width as usize, v.height as usize], rgba);
+            let img = egui::ColorImage::from_rgba_unmultiplied(
+                [v.width as usize, v.height as usize],
+                rgba,
+            );
             handle.set(img, egui::TextureOptions::LINEAR);
             tile.size = (v.width, v.height);
             return true;
@@ -393,7 +501,10 @@ impl MacVideo {
         let (draw, mut uv) = fit(rect, w as f32 / h as f32, t.style.fill);
         // The picture's size on screen (all of it, also the part a fill crop cuts off).
         let ppp = painter.ctx().pixels_per_point();
-        t.shown_px.set(Some((draw.width() * ppp / uv.width().abs().max(1e-3), draw.height() * ppp / uv.height().abs().max(1e-3))));
+        t.shown_px.set(Some((
+            draw.width() * ppp / uv.width().abs().max(1e-3),
+            draw.height() * ppp / uv.height().abs().max(1e-3),
+        )));
         if t.style.mirror {
             uv = Rect::from_min_max(Pos2::new(uv.max.x, uv.min.y), Pos2::new(uv.min.x, uv.max.y));
         }
@@ -408,8 +519,17 @@ impl MacVideo {
             return;
         }
         if self.stats.uploads > 0 || self.stats.not_drawn > 0 {
-            let replaced: u64 = self.tiles.keys().filter_map(|k| viewer.draw_info(k)).map(|(_, _, r)| r).sum();
-            let sizes: Vec<String> = self.tiles.iter().map(|(k, t)| format!("{k}={}x{}", t.size.0, t.size.1)).collect();
+            let replaced: u64 = self
+                .tiles
+                .keys()
+                .filter_map(|k| viewer.draw_info(k))
+                .map(|(_, _, r)| r)
+                .sum();
+            let sizes: Vec<String> = self
+                .tiles
+                .iter()
+                .map(|(k, t)| format!("{k}={}x{}", t.size.0, t.size.1))
+                .collect();
             tracing::info!(
                 path = if self.cpu_only { "cpu" } else { "gpu" },
                 uploaded_fps = format!("{:.1}", self.stats.uploads as f64 / secs),
@@ -422,7 +542,10 @@ impl MacVideo {
                 "mac video stats"
             );
         }
-        self.stats = Stats { since: Some(now), ..Default::default() };
+        self.stats = Stats {
+            since: Some(now),
+            ..Default::default()
+        };
     }
 }
 
@@ -451,8 +574,12 @@ impl crate::app::App {
         let paint_at = std::mem::take(&mut mac.paint_at);
         let mut on_screen = HashSet::new();
         for key in keys {
-            let Some(rect) = self.video.want.get(key) else { continue };
-            let Some((layer, clip)) = paint_at.get(key) else { continue };
+            let Some(rect) = self.video.want.get(key) else {
+                continue;
+            };
+            let Some((layer, clip)) = paint_at.get(key) else {
+                continue;
+            };
             mac.paint(&ctx.layer_painter(*layer).with_clip_rect(*clip), key, *rect);
             on_screen.insert(key.clone());
         }
@@ -466,7 +593,10 @@ impl crate::app::App {
             }
         }
         // A frame that came while its tile was off screen woke nobody: show it now.
-        if on_screen.iter().any(|k| !mac.on_screen.contains(k) && v.has_frame(k)) {
+        if on_screen
+            .iter()
+            .any(|k| !mac.on_screen.contains(k) && v.has_frame(k))
+        {
             ctx.request_repaint();
         }
         mac.on_screen = on_screen;
@@ -476,19 +606,43 @@ impl crate::app::App {
     /// Each popped-out watched stream in its own window (an egui viewport). Closing it brings
     /// the stream back into the app; a double-click or F11 toggles fullscreen, Esc leaves it.
     fn popout_windows(&mut self, ctx: &egui::Context, v: &Viewer) {
-        let watched: Vec<String> = self.voice.watching.iter().filter(|k| self.is_watching(k)).cloned().collect();
+        let watched: Vec<String> = self
+            .voice
+            .watching
+            .iter()
+            .filter(|k| self.is_watching(k))
+            .cloned()
+            .collect();
         let mut open = HashSet::new();
         for key in watched {
-            let Some(st) = v.state(&key).filter(|s| s.popped_out) else { continue };
+            let Some(st) = v.state(&key).filter(|s| s.popped_out) else {
+                continue;
+            };
             open.insert(key.clone());
-            let title = v.draw_info(&key).map(|(_, t, _)| t).filter(|t| !t.is_empty()).unwrap_or_else(|| crate::brand::APP_NAME.to_string());
-            let size = *self.video.mac.popout_size.entry(key.clone()).or_insert_with(|| {
-                let (w, h) = if st.video.0 > 0 { st.video } else { (1280, 720) };
-                let s = (1280.0 / w as f32).min(720.0 / h as f32).min(1.0);
-                Vec2::new(w as f32 * s, h as f32 * s)
-            });
+            let title = v
+                .draw_info(&key)
+                .map(|(_, t, _)| t)
+                .filter(|t| !t.is_empty())
+                .unwrap_or_else(|| crate::brand::APP_NAME.to_string());
+            let size = *self
+                .video
+                .mac
+                .popout_size
+                .entry(key.clone())
+                .or_insert_with(|| {
+                    let (w, h) = if st.video.0 > 0 {
+                        st.video
+                    } else {
+                        (1280, 720)
+                    };
+                    let s = (1280.0 / w as f32).min(720.0 / h as f32).min(1.0);
+                    Vec2::new(w as f32 * s, h as f32 * s)
+                });
             let id = egui::ViewportId::from_hash_of(("stream_popout", &key));
-            let builder = egui::ViewportBuilder::default().with_title(title).with_inner_size(size).with_min_inner_size([320.0, 180.0]);
+            let builder = egui::ViewportBuilder::default()
+                .with_title(title)
+                .with_inner_size(size)
+                .with_min_inner_size([320.0, 180.0]);
             let mac = &self.video.mac;
             let action = ctx.show_viewport_immediate(id, builder, |ui, _class| {
                 let vctx = ui.ctx().clone();
@@ -496,9 +650,19 @@ impl crate::app::App {
                 let painter = ui.painter().clone();
                 painter.rect_filled(rect, 0.0, Color32::BLACK);
                 mac.paint(&painter, &key, rect);
-                let resp = ui.interact(rect, egui::Id::new(("stream_popout_area", &key)), egui::Sense::click());
+                let resp = ui.interact(
+                    rect,
+                    egui::Id::new(("stream_popout_area", &key)),
+                    egui::Sense::click(),
+                );
                 let fullscreen = vctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
-                let (esc, f11, close) = vctx.input(|i| (i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::F11), i.viewport().close_requested()));
+                let (esc, f11, close) = vctx.input(|i| {
+                    (
+                        i.key_pressed(egui::Key::Escape),
+                        i.key_pressed(egui::Key::F11),
+                        i.viewport().close_requested(),
+                    )
+                });
                 if close {
                     return Some(PopAction::Close);
                 }
@@ -529,7 +693,9 @@ impl crate::app::App {
 /// The converted texture's size: the size the picture was last shown at (whole picture, physical
 /// pixels), never larger than the video, keeping its aspect; the video's size before it was shown.
 fn out_dims((vw, vh): (u32, u32), shown: Option<(f32, f32)>) -> (i32, i32) {
-    let scale = shown.map_or(1.0, |(sw, sh)| (sw / vw as f32).max(sh / vh as f32).min(1.0));
+    let scale = shown.map_or(1.0, |(sw, sh)| {
+        (sw / vw as f32).max(sh / vh as f32).min(1.0)
+    });
     let w = ((vw as f32 * scale).round() as i32).max(2);
     let h = ((vh as f32 * scale).round() as i32).max(2);
     (w, h)
@@ -543,25 +709,43 @@ fn fit(rect: Rect, aspect: f32, fill: bool) -> (Rect, Rect) {
     if fill {
         let uv = if aspect > ra {
             let u = ra / aspect;
-            Rect::from_min_max(Pos2::new((1.0 - u) / 2.0, 0.0), Pos2::new((1.0 + u) / 2.0, 1.0))
+            Rect::from_min_max(
+                Pos2::new((1.0 - u) / 2.0, 0.0),
+                Pos2::new((1.0 + u) / 2.0, 1.0),
+            )
         } else {
             let v = aspect / ra;
-            Rect::from_min_max(Pos2::new(0.0, (1.0 - v) / 2.0), Pos2::new(1.0, (1.0 + v) / 2.0))
+            Rect::from_min_max(
+                Pos2::new(0.0, (1.0 - v) / 2.0),
+                Pos2::new(1.0, (1.0 + v) / 2.0),
+            )
         };
         return (rect, uv);
     }
-    let size = if aspect > ra { Vec2::new(rect.width(), rect.width() / aspect) } else { Vec2::new(rect.height() * aspect, rect.height()) };
+    let size = if aspect > ra {
+        Vec2::new(rect.width(), rect.width() / aspect)
+    } else {
+        Vec2::new(rect.height() * aspect, rect.height())
+    };
     (Rect::from_center_size(rect.center(), size), full)
 }
 
 /// A `target` texture with linear filtering (and mipmaps when `mips`), clamped at the edges.
 /// Leaves it bound on the active unit.
-unsafe fn new_texture(gl: &glow::Context, target: u32, mips: bool) -> Result<glow::Texture, String> {
+unsafe fn new_texture(
+    gl: &glow::Context,
+    target: u32,
+    mips: bool,
+) -> Result<glow::Texture, String> {
     // SAFETY: plain GL object creation and parameters on the current context.
     unsafe {
         let t = gl.create_texture()?;
         gl.bind_texture(target, Some(t));
-        let min = if mips { glow::LINEAR_MIPMAP_LINEAR } else { glow::LINEAR };
+        let min = if mips {
+            glow::LINEAR_MIPMAP_LINEAR
+        } else {
+            glow::LINEAR
+        };
         gl.tex_parameter_i32(target, glow::TEXTURE_MIN_FILTER, min as i32);
         gl.tex_parameter_i32(target, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
         gl.tex_parameter_i32(target, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
@@ -578,7 +762,10 @@ unsafe fn link(gl: &glow::Context, version: &str, fs: &str) -> Result<Prog, Stri
         let mut shaders = Vec::new();
         for (kind, src) in [(glow::VERTEX_SHADER, VS), (glow::FRAGMENT_SHADER, fs)] {
             let s = gl.create_shader(kind)?;
-            gl.shader_source(s, &format!("{version}#define NEW_SHADER_INTERFACE 1\n{src}"));
+            gl.shader_source(
+                s,
+                &format!("{version}#define NEW_SHADER_INTERFACE 1\n{src}"),
+            );
             gl.compile_shader(s);
             if !gl.get_shader_compile_status(s) {
                 let log = gl.get_shader_info_log(s);
@@ -603,7 +790,17 @@ unsafe fn link(gl: &glow::Context, version: &str, fs: &str) -> Result<Prog, Stri
             return Err(format!("link: {log}"));
         }
         let u = |name: &str| gl.get_uniform_location(program, name);
-        Ok(Prog { u_y: u("u_y"), u_u: u("u_u"), u_v: u("u_v"), u_nv12: u("u_nv12"), u_full: u("u_full"), u_ysize: u("u_ysize"), u_csize: u("u_csize"), u_tap: u("u_tap"), program })
+        Ok(Prog {
+            u_y: u("u_y"),
+            u_u: u("u_u"),
+            u_v: u("u_v"),
+            u_nv12: u("u_nv12"),
+            u_full: u("u_full"),
+            u_ysize: u("u_ysize"),
+            u_csize: u("u_csize"),
+            u_tap: u("u_tap"),
+            program,
+        })
     }
 }
 
@@ -611,7 +808,10 @@ impl Gpu {
     fn new(gl: &glow::Context) -> Result<Gpu, String> {
         let version = egui_glow_version(gl);
         if !version.1 {
-            return Err(format!("GLSL {} has no RG textures / new interface", version.0.trim()));
+            return Err(format!(
+                "GLSL {} has no RG textures / new interface",
+                version.0.trim()
+            ));
         }
         // SAFETY: GL object creation on the current context; every object is checked.
         unsafe {
@@ -637,13 +837,28 @@ impl Gpu {
             gl.bind_vertex_array(None);
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
             let fbo = gl.create_framebuffer()?;
-            Ok(Gpu { planes, surface, vao, vbo, a_pos, fbo })
+            Ok(Gpu {
+                planes,
+                surface,
+                vao,
+                vbo,
+                a_pos,
+                fbo,
+            })
         }
     }
 
     /// Upload `v`'s planes and convert them into `out`.
     #[allow(clippy::too_many_arguments)]
-    unsafe fn convert_planes(&self, gl: &glow::Context, v: &PlaneView<'_>, planes: &mut [Option<(glow::Texture, i32, i32)>; 3], out: glow::Texture, out_size: &mut (i32, i32), target: (i32, i32)) -> bool {
+    unsafe fn convert_planes(
+        &self,
+        gl: &glow::Context,
+        v: &PlaneView<'_>,
+        planes: &mut [Option<(glow::Texture, i32, i32)>; 3],
+        out: glow::Texture,
+        out_size: &mut (i32, i32),
+        target: (i32, i32),
+    ) -> bool {
         let (w, h) = (v.width as i32, v.height as i32);
         let (cw, ch) = ((w + 1) / 2, (h + 1) / 2);
         // SAFETY: GL calls on the current context with our own objects; uploads read
@@ -652,13 +867,75 @@ impl Gpu {
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
             let nv12 = matches!(v.planes, Planes::Nv12 { .. });
             let ok = match v.planes {
-                Planes::I420 { y, u, v: pv, strides: (sy, su, sv) } => {
-                    upload_plane(gl, &mut planes[0], 0, glow::R8, glow::RED, y, sy as i32, 1, w, h)
-                        && upload_plane(gl, &mut planes[1], 1, glow::R8, glow::RED, u, su as i32, 1, cw, ch)
-                        && upload_plane(gl, &mut planes[2], 2, glow::R8, glow::RED, pv, sv as i32, 1, cw, ch)
+                Planes::I420 {
+                    y,
+                    u,
+                    v: pv,
+                    strides: (sy, su, sv),
+                } => {
+                    upload_plane(
+                        gl,
+                        &mut planes[0],
+                        0,
+                        glow::R8,
+                        glow::RED,
+                        y,
+                        sy as i32,
+                        1,
+                        w,
+                        h,
+                    ) && upload_plane(
+                        gl,
+                        &mut planes[1],
+                        1,
+                        glow::R8,
+                        glow::RED,
+                        u,
+                        su as i32,
+                        1,
+                        cw,
+                        ch,
+                    ) && upload_plane(
+                        gl,
+                        &mut planes[2],
+                        2,
+                        glow::R8,
+                        glow::RED,
+                        pv,
+                        sv as i32,
+                        1,
+                        cw,
+                        ch,
+                    )
                 }
-                Planes::Nv12 { y, uv, strides: (sy, suv) } => {
-                    upload_plane(gl, &mut planes[0], 0, glow::R8, glow::RED, y, sy as i32, 1, w, h) && upload_plane(gl, &mut planes[1], 1, glow::RG8, glow::RG, uv, suv as i32, 2, cw, ch)
+                Planes::Nv12 {
+                    y,
+                    uv,
+                    strides: (sy, suv),
+                } => {
+                    upload_plane(
+                        gl,
+                        &mut planes[0],
+                        0,
+                        glow::R8,
+                        glow::RED,
+                        y,
+                        sy as i32,
+                        1,
+                        w,
+                        h,
+                    ) && upload_plane(
+                        gl,
+                        &mut planes[1],
+                        1,
+                        glow::RG8,
+                        glow::RG,
+                        uv,
+                        suv as i32,
+                        2,
+                        cw,
+                        ch,
+                    )
                 }
             };
             gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, 0);
@@ -670,7 +947,10 @@ impl Gpu {
             gl.use_program(Some(p.program));
             gl.uniform_1_f32(p.u_nv12.as_ref(), if nv12 { 1.0 } else { 0.0 });
             gl.uniform_1_f32(p.u_full.as_ref(), if v.full_range { 1.0 } else { 0.0 });
-            let units: Vec<(u32, Option<glow::Texture>)> = planes.iter().map(|p| (glow::TEXTURE_2D, p.map(|(t, _, _)| t))).collect();
+            let units: Vec<(u32, Option<glow::Texture>)> = planes
+                .iter()
+                .map(|p| (glow::TEXTURE_2D, p.map(|(t, _, _)| t)))
+                .collect();
             self.draw(gl, p, &units, out, out_size, (w, h), target)
         }
     }
@@ -678,7 +958,16 @@ impl Gpu {
     /// Zero copy: bind the IOSurface's planes (Y: R8, UV: RG8) to rectangle textures and convert
     /// them into `out`. False when the binding fails (the caller uploads planes instead).
     #[allow(clippy::too_many_arguments)]
-    unsafe fn convert_surface(&self, gl: &glow::Context, p: &Prog, n: NativeNv12, surfaces: &mut [Option<glow::Texture>; 2], out: glow::Texture, out_size: &mut (i32, i32), target: (i32, i32)) -> Result<(), String> {
+    unsafe fn convert_surface(
+        &self,
+        gl: &glow::Context,
+        p: &Prog,
+        n: NativeNv12,
+        surfaces: &mut [Option<glow::Texture>; 2],
+        out: glow::Texture,
+        out_size: &mut (i32, i32),
+        target: (i32, i32),
+    ) -> Result<(), String> {
         let (w, h) = (n.width as i32, n.height as i32);
         let (cw, ch) = ((w + 1) / 2, (h + 1) / 2);
         // SAFETY: GL / CGL calls on the current context with our own textures; the IOSurface is
@@ -688,7 +977,11 @@ impl Gpu {
             if ctx.is_null() {
                 return Err("no current CGL context".into());
             }
-            for (i, (internal, format, pw, ph)) in [(glow::R8, glow::RED, w, h), (glow::RG8, glow::RG, cw, ch)].into_iter().enumerate() {
+            for (i, (internal, format, pw, ph)) in
+                [(glow::R8, glow::RED, w, h), (glow::RG8, glow::RG, cw, ch)]
+                    .into_iter()
+                    .enumerate()
+            {
                 gl.active_texture(glow::TEXTURE0 + i as u32);
                 let t = match surfaces[i] {
                     Some(t) => {
@@ -704,18 +997,33 @@ impl Gpu {
                     },
                 };
                 let _ = t;
-                let err = cgl::CGLTexImageIOSurface2D(ctx, glow::TEXTURE_RECTANGLE, internal, pw, ph, format, glow::UNSIGNED_BYTE, n.io_surface, i as u32);
+                let err = cgl::CGLTexImageIOSurface2D(
+                    ctx,
+                    glow::TEXTURE_RECTANGLE,
+                    internal,
+                    pw,
+                    ph,
+                    format,
+                    glow::UNSIGNED_BYTE,
+                    n.io_surface,
+                    i as u32,
+                );
                 if err != 0 {
                     gl.bind_texture(glow::TEXTURE_RECTANGLE, None);
                     gl.active_texture(glow::TEXTURE0);
-                    return Err(format!("CGLTexImageIOSurface2D plane {i} ({pw}x{ph}): CGL error {err}"));
+                    return Err(format!(
+                        "CGLTexImageIOSurface2D plane {i} ({pw}x{ph}): CGL error {err}"
+                    ));
                 }
             }
             gl.use_program(Some(p.program));
             gl.uniform_2_f32(p.u_ysize.as_ref(), w as f32, h as f32);
             gl.uniform_2_f32(p.u_csize.as_ref(), cw as f32, ch as f32);
             gl.uniform_1_f32(p.u_full.as_ref(), if n.full_range { 1.0 } else { 0.0 });
-            let units = [(glow::TEXTURE_RECTANGLE, surfaces[0]), (glow::TEXTURE_RECTANGLE, surfaces[1])];
+            let units = [
+                (glow::TEXTURE_RECTANGLE, surfaces[0]),
+                (glow::TEXTURE_RECTANGLE, surfaces[1]),
+            ];
             let ok = self.draw(gl, p, &units, out, out_size, (w, h), target);
             for i in 0..2 {
                 gl.active_texture(glow::TEXTURE0 + i);
@@ -735,7 +1043,16 @@ impl Gpu {
     /// GL state egui relies on as egui sets it again before painting (it binds its own program,
     /// VAO, textures, blending, scissor and viewport); restores the framebuffer and the viewport.
     #[allow(clippy::too_many_arguments)]
-    unsafe fn draw(&self, gl: &glow::Context, p: &Prog, units: &[(u32, Option<glow::Texture>)], out: glow::Texture, out_size: &mut (i32, i32), src: (i32, i32), (w, h): (i32, i32)) -> bool {
+    unsafe fn draw(
+        &self,
+        gl: &glow::Context,
+        p: &Prog,
+        units: &[(u32, Option<glow::Texture>)],
+        out: glow::Texture,
+        out_size: &mut (i32, i32),
+        src: (i32, i32),
+        (w, h): (i32, i32),
+    ) -> bool {
         // SAFETY: GL calls on the current context with our own objects.
         unsafe {
             let prev_fbo = gl.get_parameter_framebuffer(glow::FRAMEBUFFER_BINDING);
@@ -744,13 +1061,30 @@ impl Gpu {
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(out));
             if *out_size != (w, h) {
-                gl.tex_image_2d(glow::TEXTURE_2D, 0, glow::RGBA8 as i32, w, h, 0, glow::RGBA, glow::UNSIGNED_BYTE, glow::PixelUnpackData::Slice(None));
+                gl.tex_image_2d(
+                    glow::TEXTURE_2D,
+                    0,
+                    glow::RGBA8 as i32,
+                    w,
+                    h,
+                    0,
+                    glow::RGBA,
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelUnpackData::Slice(None),
+                );
                 *out_size = (w, h);
             }
             gl.bind_texture(glow::TEXTURE_2D, None);
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
-            gl.framebuffer_texture_2d(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(out), 0);
-            let complete = gl.check_framebuffer_status(glow::FRAMEBUFFER) == glow::FRAMEBUFFER_COMPLETE;
+            gl.framebuffer_texture_2d(
+                glow::FRAMEBUFFER,
+                glow::COLOR_ATTACHMENT0,
+                glow::TEXTURE_2D,
+                Some(out),
+                0,
+            );
+            let complete =
+                gl.check_framebuffer_status(glow::FRAMEBUFFER) == glow::FRAMEBUFFER_COMPLETE;
             if complete {
                 gl.viewport(0, 0, w, h);
                 gl.disable(glow::SCISSOR_TEST);
@@ -759,7 +1093,11 @@ impl Gpu {
                 gl.uniform_1_i32(p.u_u.as_ref(), 1);
                 gl.uniform_1_i32(p.u_v.as_ref(), 2);
                 // Downscaling by more than ~1.3x: four taps a quarter of an output pixel apart.
-                let tap = if src.0 as f32 > w as f32 * 1.3 { (0.25 / w as f32, 0.25 / h as f32) } else { (0.0, 0.0) };
+                let tap = if src.0 as f32 > w as f32 * 1.3 {
+                    (0.25 / w as f32, 0.25 / h as f32)
+                } else {
+                    (0.0, 0.0)
+                };
                 gl.uniform_2_f32(p.u_tap.as_ref(), tap.0, tap.1);
                 for (i, (target, t)) in units.iter().enumerate() {
                     gl.active_texture(glow::TEXTURE0 + i as u32);
@@ -783,8 +1121,23 @@ impl Gpu {
 
 /// Upload one plane into texture unit `unit` (made / resized as needed). `bpp`: bytes per texel.
 #[allow(clippy::too_many_arguments)]
-unsafe fn upload_plane(gl: &glow::Context, slot: &mut Option<(glow::Texture, i32, i32)>, unit: u32, internal: u32, format: u32, data: &[u8], stride: i32, bpp: i32, w: i32, h: i32) -> bool {
-    if w <= 0 || h <= 0 || stride < w * bpp || data.len() < (stride as usize) * (h as usize - 1) + (w * bpp) as usize {
+unsafe fn upload_plane(
+    gl: &glow::Context,
+    slot: &mut Option<(glow::Texture, i32, i32)>,
+    unit: u32,
+    internal: u32,
+    format: u32,
+    data: &[u8],
+    stride: i32,
+    bpp: i32,
+    w: i32,
+    h: i32,
+) -> bool {
+    if w <= 0
+        || h <= 0
+        || stride < w * bpp
+        || data.len() < (stride as usize) * (h as usize - 1) + (w * bpp) as usize
+    {
         return false;
     }
     // SAFETY: GL calls on the current context; the slice covers `h` rows of `stride` bytes.
@@ -799,15 +1152,37 @@ unsafe fn upload_plane(gl: &glow::Context, slot: &mut Option<(glow::Texture, i32
                 if let Some((t, _, _)) = other {
                     gl.delete_texture(t);
                 }
-                let Ok(t) = new_texture(gl, glow::TEXTURE_2D, false) else { return false };
-                gl.tex_image_2d(glow::TEXTURE_2D, 0, internal as i32, w, h, 0, format, glow::UNSIGNED_BYTE, glow::PixelUnpackData::Slice(None));
+                let Ok(t) = new_texture(gl, glow::TEXTURE_2D, false) else {
+                    return false;
+                };
+                gl.tex_image_2d(
+                    glow::TEXTURE_2D,
+                    0,
+                    internal as i32,
+                    w,
+                    h,
+                    0,
+                    format,
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelUnpackData::Slice(None),
+                );
                 *slot = Some((t, w, h));
                 t
             }
         };
         let _ = tex;
         gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, stride / bpp);
-        gl.tex_sub_image_2d(glow::TEXTURE_2D, 0, 0, 0, w, h, format, glow::UNSIGNED_BYTE, glow::PixelUnpackData::Slice(Some(data)));
+        gl.tex_sub_image_2d(
+            glow::TEXTURE_2D,
+            0,
+            0,
+            0,
+            w,
+            h,
+            format,
+            glow::UNSIGNED_BYTE,
+            glow::PixelUnpackData::Slice(Some(data)),
+        );
         true
     }
 }
@@ -826,7 +1201,11 @@ mod tests {
     fn the_texture_follows_the_shown_size_up_to_the_video() {
         assert_eq!(out_dims((1920, 1080), None), (1920, 1080));
         assert_eq!(out_dims((1920, 1080), Some((960.0, 540.0))), (960, 540));
-        assert_eq!(out_dims((1920, 1080), Some((3840.0, 2160.0))), (1920, 1080), "never upscaled");
+        assert_eq!(
+            out_dims((1920, 1080), Some((3840.0, 2160.0))),
+            (1920, 1080),
+            "never upscaled"
+        );
         // A letterboxed tile: the larger ratio wins (no axis below its shown size).
         assert_eq!(out_dims((1920, 1080), Some((640.0, 400.0))), (711, 400));
         assert_eq!(out_dims((640, 360), Some((0.5, 0.5))), (2, 2));
@@ -843,7 +1222,11 @@ mod tests {
         // Fill: the whole rect, the sides of the picture cut off.
         let (d, uv) = fit(r, 16.0 / 9.0, true);
         assert_eq!(d, r);
-        assert!((uv.width() - 0.75).abs() < 0.001 && (uv.center().x - 0.5).abs() < 0.001 && uv.height() == 1.0);
+        assert!(
+            (uv.width() - 0.75).abs() < 0.001
+                && (uv.center().x - 0.5).abs() < 0.001
+                && uv.height() == 1.0
+        );
         // A tall picture in a wide rect: pillarbox / crop top and bottom.
         let (d, _) = fit(r, 0.5, false);
         assert!((d.height() - 300.0).abs() < 0.01 && (d.width() - 150.0).abs() < 0.01);

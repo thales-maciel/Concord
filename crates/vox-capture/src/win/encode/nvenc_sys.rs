@@ -7,7 +7,12 @@
 //!
 //! Bitfields are modelled as plain `u32` words with the bit constants below.
 
-#![allow(non_camel_case_types, non_snake_case, dead_code, clippy::upper_case_acronyms)]
+#![allow(
+    non_camel_case_types,
+    non_snake_case,
+    dead_code,
+    clippy::upper_case_acronyms
+)]
 
 use std::ffi::c_void;
 
@@ -459,8 +464,7 @@ pub struct NV_ENCODE_API_FUNCTION_LIST {
     pub version: u32,
     pub reserved: u32,
     pub nvEncOpenEncodeSession: Unused,
-    pub nvEncGetEncodeGUIDCount:
-        Option<unsafe extern "system" fn(Enc, *mut u32) -> NVENCSTATUS>,
+    pub nvEncGetEncodeGUIDCount: Option<unsafe extern "system" fn(Enc, *mut u32) -> NVENCSTATUS>,
     pub nvEncGetEncodeProfileGUIDCount: Unused,
     pub nvEncGetEncodeProfileGUIDs: Unused,
     pub nvEncGetEncodeGUIDs:
@@ -477,9 +481,8 @@ pub struct NV_ENCODE_API_FUNCTION_LIST {
         Option<unsafe extern "system" fn(Enc, *mut NV_ENC_INITIALIZE_PARAMS) -> NVENCSTATUS>,
     pub nvEncCreateInputBuffer: Unused,
     pub nvEncDestroyInputBuffer: Unused,
-    pub nvEncCreateBitstreamBuffer: Option<
-        unsafe extern "system" fn(Enc, *mut NV_ENC_CREATE_BITSTREAM_BUFFER) -> NVENCSTATUS,
-    >,
+    pub nvEncCreateBitstreamBuffer:
+        Option<unsafe extern "system" fn(Enc, *mut NV_ENC_CREATE_BITSTREAM_BUFFER) -> NVENCSTATUS>,
     pub nvEncDestroyBitstreamBuffer:
         Option<unsafe extern "system" fn(Enc, *mut c_void) -> NVENCSTATUS>,
     pub nvEncEncodePicture:
@@ -497,25 +500,25 @@ pub struct NV_ENCODE_API_FUNCTION_LIST {
         Option<unsafe extern "system" fn(Enc, *mut NV_ENC_EVENT_PARAMS) -> NVENCSTATUS>,
     pub nvEncMapInputResource:
         Option<unsafe extern "system" fn(Enc, *mut NV_ENC_MAP_INPUT_RESOURCE) -> NVENCSTATUS>,
-    pub nvEncUnmapInputResource:
-        Option<unsafe extern "system" fn(Enc, *mut c_void) -> NVENCSTATUS>,
+    pub nvEncUnmapInputResource: Option<unsafe extern "system" fn(Enc, *mut c_void) -> NVENCSTATUS>,
     pub nvEncDestroyEncoder: Option<unsafe extern "system" fn(Enc) -> NVENCSTATUS>,
     pub nvEncInvalidateRefFrames: Unused,
     pub nvEncOpenEncodeSessionEx: Option<
-        unsafe extern "system" fn(*mut NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS, *mut Enc) -> NVENCSTATUS,
+        unsafe extern "system" fn(
+            *mut NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS,
+            *mut Enc,
+        ) -> NVENCSTATUS,
     >,
     pub nvEncRegisterResource:
         Option<unsafe extern "system" fn(Enc, *mut NV_ENC_REGISTER_RESOURCE) -> NVENCSTATUS>,
-    pub nvEncUnregisterResource:
-        Option<unsafe extern "system" fn(Enc, *mut c_void) -> NVENCSTATUS>,
+    pub nvEncUnregisterResource: Option<unsafe extern "system" fn(Enc, *mut c_void) -> NVENCSTATUS>,
     pub nvEncReconfigureEncoder:
         Option<unsafe extern "system" fn(Enc, *mut NV_ENC_RECONFIGURE_PARAMS) -> NVENCSTATUS>,
     pub reserved1: *mut c_void,
     pub nvEncCreateMVBuffer: Unused,
     pub nvEncDestroyMVBuffer: Unused,
     pub nvEncRunMotionEstimationOnly: Unused,
-    pub nvEncGetLastErrorString:
-        Option<unsafe extern "system" fn(Enc) -> *const std::ffi::c_char>,
+    pub nvEncGetLastErrorString: Option<unsafe extern "system" fn(Enc) -> *const std::ffi::c_char>,
     pub nvEncSetIOCudaStreams: Unused,
     pub nvEncGetEncodePresetConfigEx: Option<
         unsafe extern "system" fn(Enc, GUID, GUID, u32, *mut NV_ENC_PRESET_CONFIG) -> NVENCSTATUS,
@@ -566,7 +569,10 @@ pub fn status_name(s: NVENCSTATUS) -> &'static str {
         "NV_ENC_ERR_RESOURCE_NOT_MAPPED",
         "NV_ENC_ERR_NEED_MORE_OUTPUT",
     ];
-    NAMES.get(s as usize).copied().unwrap_or("NV_ENC_ERR_<unknown>")
+    NAMES
+        .get(s as usize)
+        .copied()
+        .unwrap_or("NV_ENC_ERR_<unknown>")
 }
 
 // Layout pins (x64 MSVC values from nvEncodeAPI.h n13.0.19.1).

@@ -1,12 +1,8 @@
 #!/bin/bash
-# Build concord for macOS (Apple Silicon) and pack it for friends: concord.app (ad-hoc signed)
-# plus LEIA-ME-MAC.txt (tools/LEIA-ME-MAC.txt) in dist/concord-<version>-mac-arm64.zip.
-#
-# Run ON the Mac, from anywhere inside the repository:   tools/package-mac.sh
-#   -j N             cargo jobs (default 3: an 8 GB Mac builds without swapping)
-#   --skip-build     pack the binary already in the target dir
-# Needs: rustup's Rust (aarch64-apple-darwin) and the Command Line Tools (codesign, ditto, plutil).
-# CARGO_TARGET_DIR is honoured (default: <repo>/target).
+# Package an ad-hoc signed Apple Silicon app in dist/concord-<version>-mac-arm64.zip.
+# Requires macOS, aarch64 Rust and Xcode Command Line Tools.
+# Usage: tools/package-mac.sh [-j N] [--skip-build]
+# Honors CARGO_TARGET_DIR; defaults to 3 build jobs for 8 GB machines.
 set -euo pipefail
 
 JOBS=3
@@ -25,17 +21,14 @@ cd "$ROOT"
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 
-# The workspace version (`version = "x.y.z"` under [workspace.package]).
 VERSION="$(awk '/^\[workspace.package\]/{f=1; next} /^\[/{f=0} f && /^version *=/{gsub(/[" \r]/, "", $0); split($0, a, "="); print a[2]; exit}' Cargo.toml)"
 [ -n "$VERSION" ] || { echo "no version in Cargo.toml" >&2; exit 1; }
 echo "concord $VERSION for macOS (arm64)"
 
 if [ "$BUILD" = 1 ]; then
-  # A release goes to other people: keep the builder's home folder (their macOS user name) out of
-  # the binary's panic/debug paths. RUSTFLAGS replaces .cargo/config.toml's rustflags, so -ObjC
-  # (see there) must be repeated here.
+  # Redact builder paths. RUSTFLAGS overrides .cargo/config.toml, so repeat -ObjC here.
   RUSTFLAGS="-C link-args=-ObjC --remap-path-prefix=$HOME=~ --remap-path-prefix=$ROOT=concord" \
-    CARGO_INCREMENTAL=0 cargo build --release -p voxhub-app -j "$JOBS"
+    CARGO_INCREMENTAL=0 cargo build --locked --release -p voxhub-app -j "$JOBS"
 fi
 BIN="$TARGET_DIR/release/concord"
 [ -x "$BIN" ] || { echo "no binary at $BIN" >&2; exit 1; }
@@ -55,7 +48,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
-	<string>pt-BR</string>
+	<string>en</string>
 	<key>CFBundleDisplayName</key>
 	<string>concord</string>
 	<key>CFBundleExecutable</key>
@@ -83,23 +76,23 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>O concord usa o microfone para a voz nas salas e chamadas.</string>
+	<string>concord uses the microphone for voice rooms and calls.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>O concord usa a câmera quando você liga a sua câmera numa sala.</string>
+	<string>concord uses the camera when you turn it on in a room.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>O concord conversa com o servidor do seu grupo, que pode estar na sua rede de casa.</string>
+	<string>concord connects to your group's server, which may be on your home network.</string>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>O concord grava a tela ou a janela que você escolher para transmitir aos seus amigos.</string>
+	<string>concord captures the screen or window you choose to share with friends.</string>
 </dict>
 </plist>
 PLIST
 plutil -lint "$APP/Contents/Info.plist" > /dev/null
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
-# The pt-BR read-me for friends (what to click the first time, the permissions, what works).
-sed "s/@VERSION@/$VERSION/g" "$ROOT/tools/LEIA-ME-MAC.txt" > "$STAGE/LEIA-ME-MAC.txt"
+sed "s/@VERSION@/$VERSION/g" "$ROOT/tools/README-MAC.txt" > "$STAGE/README-MAC.txt"
+# Preserve the filename used by existing download instructions.
+cp "$STAGE/README-MAC.txt" "$STAGE/LEIA-ME-MAC.txt"
 
-# Ad-hoc signature (no Apple developer account): the friends open it with right-click > Abrir.
 codesign --force --deep -s - "$APP"
 codesign --verify --deep --strict "$APP"
 

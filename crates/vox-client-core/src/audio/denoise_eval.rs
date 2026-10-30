@@ -10,7 +10,7 @@
 //! each level runs over the mix (the APM without AGC, so its time-varying gain does not blur the
 //! numbers) and the table reports SI-SDR improvement, noise attenuation in speech pauses, the
 //! SI-SDR of clean speech run through the same chain (speech preservation) and the denoiser's
-//! delay. "IA máxima" runs offline (each DeepFilterNet frame is waited for, never replaced).
+//! delay. "Maximum AI" runs offline (each DeepFilterNet frame is waited for, never replaced).
 //! Nothing is played or recorded.
 
 use std::path::Path;
@@ -37,7 +37,12 @@ fn read_wav(path: &Path) -> Vec<f32> {
             fmt_ok = true;
         } else if id == b"data" {
             assert!(fmt_ok);
-            return body.as_chunks::<2>().0.iter().map(|c| i16::from_le_bytes([c[0], c[1]]) as f32).collect();
+            return body
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32)
+                .collect();
         }
         i += 8 + len + (len & 1);
     }
@@ -70,8 +75,11 @@ fn fan(n: usize) -> Vec<f32> {
             let t = i as f32 / 48_000.0;
             lp1 += 0.05 * (r.white() - lp1);
             lp2 += 0.2 * (r.white() - lp2);
-            let hum: f32 = (1..=4).map(|h| (t * 2.0 * std::f32::consts::PI * 120.0 * h as f32).sin() / h as f32).sum();
-            (lp1 * 3.0 + lp2 * 0.6 + hum * 0.08) * (1.0 + 0.15 * (t * 2.0 * std::f32::consts::PI * 0.7).sin())
+            let hum: f32 = (1..=4)
+                .map(|h| (t * 2.0 * std::f32::consts::PI * 120.0 * h as f32).sin() / h as f32)
+                .sum();
+            (lp1 * 3.0 + lp2 * 0.6 + hum * 0.08)
+                * (1.0 + 0.15 * (t * 2.0 * std::f32::consts::PI * 0.7).sin())
         })
         .collect()
 }
@@ -109,7 +117,11 @@ fn street(n: usize) -> Vec<f32> {
         car_lp2 += 0.3 * (car_lp - car_lp2);
         // A car every 5 s, loudest in the middle of its 3 s pass.
         let phase = (t % 5.0) / 3.0;
-        let car = if phase < 1.0 { (phase * std::f32::consts::PI).sin().powi(2) } else { 0.0 };
+        let car = if phase < 1.0 {
+            (phase * std::f32::consts::PI).sin().powi(2)
+        } else {
+            0.0
+        };
         *o = brown * 4.0 + (car_lp - car_lp2) * 2.5 * (0.2 + car);
         // A horn (0.4 s, 410 + 520 Hz with harmonics) every 11 s.
         let h = t % 11.0 - 7.0;
@@ -117,7 +129,11 @@ fn street(n: usize) -> Vec<f32> {
             let env = (h / 0.4 * std::f32::consts::PI).sin().min(0.3) / 0.3;
             let tone: f32 = [410.0f32, 520.0]
                 .iter()
-                .flat_map(|f| (1..=4).map(move |k| (t * 2.0 * std::f32::consts::PI * f * k as f32).sin() / k as f32))
+                .flat_map(|f| {
+                    (1..=4).map(move |k| {
+                        (t * 2.0 * std::f32::consts::PI * f * k as f32).sin() / k as f32
+                    })
+                })
                 .sum();
             *o += tone * 0.25 * env;
         }
@@ -142,11 +158,13 @@ fn mix(clean: &[f32], noise: &[f32], snr_db: f32) -> Vec<f32> {
     clean.iter().zip(noise).map(|(s, n)| s + n * g).collect()
 }
 
-/// Run one level's chain over `x`: APM (AEC + HPF, NS only at Padrão; no AGC) then the denoiser.
+/// Run one level's chain over `x`: APM (AEC + HPF, NS only at Default; no AGC) then the denoiser.
 /// `None` = no suppression at all (the APM with NS off and no denoiser): the reference chain.
 fn chain(x: &[f32], level: Option<NoiseLevel>) -> (Vec<f32>, std::time::Duration) {
     let mut apm = AudioProcessingModule::new(true, false, true, level.is_some_and(|l| l.apm_ns()));
-    let mut d = Denoiser::new(Arc::new(NoiseControl::new(level.unwrap_or(NoiseLevel::Standard))));
+    let mut d = Denoiser::new(Arc::new(NoiseControl::new(
+        level.unwrap_or(NoiseLevel::Standard),
+    )));
     d.set_offline(true);
     let mut out = Vec::with_capacity(x.len());
     let mut chunk = [0i16; FRAME];
@@ -177,7 +195,11 @@ fn delay(x: &[f32], y: &[f32]) -> usize {
 
 /// Scale-invariant SDR of `est` against `reference` (same length), in dB.
 fn si_sdr(reference: &[f32], est: &[f32]) -> f32 {
-    let dot: f64 = reference.iter().zip(est).map(|(a, b)| *a as f64 * *b as f64).sum();
+    let dot: f64 = reference
+        .iter()
+        .zip(est)
+        .map(|(a, b)| *a as f64 * *b as f64)
+        .sum();
     let rr: f64 = reference.iter().map(|a| (*a as f64).powi(2)).sum();
     let a = dot / rr;
     let (mut s, mut e) = (0.0f64, 0.0f64);
@@ -191,8 +213,15 @@ fn si_sdr(reference: &[f32], est: &[f32]) -> f32 {
 
 /// 10 ms frames of `clean` that are speech pauses (with 100 ms of margin around speech).
 fn pauses(clean: &[f32]) -> Vec<bool> {
-    let frames: Vec<bool> = clean.as_chunks::<FRAME>().0.iter().map(|c| rms(c) < 32768.0 * 10f32.powf(-50.0 / 20.0)).collect();
-    (0..frames.len()).map(|i| (i.saturating_sub(10)..(i + 11).min(frames.len())).all(|j| frames[j])).collect()
+    let frames: Vec<bool> = clean
+        .as_chunks::<FRAME>()
+        .0
+        .iter()
+        .map(|c| rms(c) < 32768.0 * 10f32.powf(-50.0 / 20.0))
+        .collect();
+    (0..frames.len())
+        .map(|i| (i.saturating_sub(10)..(i + 11).min(frames.len())).all(|j| frames[j]))
+        .collect()
 }
 
 fn pause_rms(x: &[f32], quiet: &[bool]) -> f32 {
@@ -217,10 +246,18 @@ fn denoise_eval() {
     // Normalise the talker to about -26 dBFS RMS (a typical mic level).
     let g = 32768.0 * 10f32.powf(-26.0 / 20.0) / rms(&clean);
     clean.iter_mut().for_each(|s| *s *= g);
-    let talkers: Vec<Vec<f32>> = ["speech1.wav", "speech2.wav", "speech4.wav"].iter().map(|f| read_wav(&dir.join(f))).collect();
+    let talkers: Vec<Vec<f32>> = ["speech1.wav", "speech2.wav", "speech4.wav"]
+        .iter()
+        .map(|f| read_wav(&dir.join(f)))
+        .collect();
     let n = clean.len();
     let quiet = pauses(&clean);
-    let noises = [("ventilador", fan(n)), ("teclado", keyboard(n)), ("multidão", babble(n, &talkers)), ("rua", street(n))];
+    let noises = [
+        ("ventilador", fan(n)),
+        ("teclado", keyboard(n)),
+        ("crowd", babble(n, &talkers)),
+        ("rua", street(n)),
+    ];
 
     // The reference is the clean speech through the APM with no suppression (its band-split
     // filter bank and high-pass change the phase; that is not what is measured here).
@@ -232,7 +269,7 @@ fn denoise_eval() {
         quiet.iter().filter(|q| **q).count(),
         apm_delay as f32 / 48.0
     );
-    println!("| ruído | nível | SI-SDR sem supressão | SI-SDR com | melhora | ruído nas pausas | fala limpa (SI-SDR) | atraso extra |");
+    println!("| noise | level | SI-SDR without suppression | SI-SDR with | improvement | noise in pauses | clean speech (SI-SDR) | extra delay |");
     println!("|---|---|---|---|---|---|---|---|");
     let mut ai_time = [std::time::Duration::ZERO; 2];
     let mut ai_frames = 0u32;
@@ -266,8 +303,14 @@ fn denoise_eval() {
             }
         }
     }
-    for (name, t) in [("RNNoise", ai_time[0]), ("DeepFilterNet3 (callback + worker, wall time)", ai_time[1])] {
+    for (name, t) in [
+        ("RNNoise", ai_time[0]),
+        ("DeepFilterNet3 (callback + worker, wall time)", ai_time[1]),
+    ] {
         let per = t / ai_frames;
-        println!("\n{name}: {per:?} per 10 ms frame = {:.2}% of one core", per.as_secs_f64() / 0.010 * 100.0);
+        println!(
+            "\n{name}: {per:?} per 10 ms frame = {:.2}% of one core",
+            per.as_secs_f64() / 0.010 * 100.0
+        );
     }
 }

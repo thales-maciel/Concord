@@ -9,7 +9,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, Color32, FontId, Margin, RichText, Sense, TextureHandle, TextureOptions, Vec2};
+use eframe::egui::{
+    self, Color32, FontId, Margin, RichText, Sense, TextureHandle, TextureOptions, Vec2,
+};
 use vox_client_core::hub::PreviewReply;
 use vox_proto::LinkPreview;
 
@@ -49,7 +51,9 @@ enum State {
     /// The hub has nothing worth a card for this link.
     NoCard,
     /// Failed or busy; asked again once `at` has passed (and the link is on screen).
-    Retry { at: Instant },
+    Retry {
+        at: Instant,
+    },
     Ready(LinkPreview),
 }
 
@@ -82,7 +86,15 @@ pub struct PreviewStore {
 
 impl Default for PreviewStore {
     fn default() -> Self {
-        PreviewStore { entries: HashMap::new(), queue: VecDeque::new(), in_flight: 0, unsupported: false, view: None, decodes_left: DECODES_PER_FRAME, last_sweep: None }
+        PreviewStore {
+            entries: HashMap::new(),
+            queue: VecDeque::new(),
+            in_flight: 0,
+            unsupported: false,
+            view: None,
+            decodes_left: DECODES_PER_FRAME,
+            last_sweep: None,
+        }
     }
 }
 
@@ -109,7 +121,10 @@ impl PreviewStore {
 
     /// Housekeeping, cheap to call every frame: sweeps at most every 5 seconds.
     pub fn maintain(&mut self, now: Instant) {
-        if self.last_sweep.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(5)) {
+        if self
+            .last_sweep
+            .is_none_or(|t| now.duration_since(t) >= Duration::from_secs(5))
+        {
             self.last_sweep = Some(now);
             self.sweep(now);
         }
@@ -122,7 +137,15 @@ impl PreviewStore {
         }
         match self.entries.get_mut(url) {
             None => {
-                self.entries.insert(url.to_string(), Entry { state: State::Loading, img: Img::None, tex: None, last_seen: now });
+                self.entries.insert(
+                    url.to_string(),
+                    Entry {
+                        state: State::Loading,
+                        img: Img::None,
+                        tex: None,
+                        last_seen: now,
+                    },
+                );
                 self.queue.push_back(Request::Preview(url.to_string()));
             }
             Some(e) => {
@@ -139,7 +162,9 @@ impl PreviewStore {
     pub fn take_requests(&mut self) -> Vec<Request> {
         let mut out = Vec::new();
         while self.in_flight < MAX_IN_FLIGHT {
-            let Some(r) = self.queue.pop_front() else { break };
+            let Some(r) = self.queue.pop_front() else {
+                break;
+            };
             self.in_flight += 1;
             out.push(r);
         }
@@ -153,10 +178,17 @@ impl PreviewStore {
                 // An older hub: quietly no previews, and no further requests.
                 self.unsupported = true;
                 self.queue.clear();
-                self.entries.retain(|_, e| !matches!(e.state, State::Loading));
+                self.entries
+                    .retain(|_, e| !matches!(e.state, State::Loading));
             }
             reply => {
-                let Some(e) = self.entries.get_mut(url).filter(|e| matches!(e.state, State::Loading)) else { return };
+                let Some(e) = self
+                    .entries
+                    .get_mut(url)
+                    .filter(|e| matches!(e.state, State::Loading))
+                else {
+                    return;
+                };
                 match reply {
                     PreviewReply::Ready(p) if p.is_empty() => e.state = State::NoCard,
                     PreviewReply::Ready(p) => {
@@ -166,8 +198,16 @@ impl PreviewStore {
                         }
                         e.state = State::Ready(p);
                     }
-                    PreviewReply::Busy => e.state = State::Retry { at: now + RETRY_BUSY },
-                    PreviewReply::Failed(_) | PreviewReply::Unsupported => e.state = State::Retry { at: now + RETRY_FAILED },
+                    PreviewReply::Busy => {
+                        e.state = State::Retry {
+                            at: now + RETRY_BUSY,
+                        }
+                    }
+                    PreviewReply::Failed(_) | PreviewReply::Unsupported => {
+                        e.state = State::Retry {
+                            at: now + RETRY_FAILED,
+                        }
+                    }
                 }
             }
         }
@@ -175,7 +215,11 @@ impl PreviewStore {
 
     pub fn on_image(&mut self, url: &str, bytes: Option<Vec<u8>>) {
         self.in_flight = self.in_flight.saturating_sub(1);
-        if let Some(e) = self.entries.get_mut(url).filter(|e| matches!(e.img, Img::Loading)) {
+        if let Some(e) = self
+            .entries
+            .get_mut(url)
+            .filter(|e| matches!(e.img, Img::Loading))
+        {
             e.img = bytes.map_or(Img::Failed, Img::Bytes);
         }
     }
@@ -185,7 +229,9 @@ impl PreviewStore {
     pub fn card(&mut self, ctx: &egui::Context, url: &str, now: Instant) -> Option<Card<'_>> {
         let e = self.entries.get_mut(url)?;
         e.last_seen = now;
-        let State::Ready(p) = &e.state else { return None };
+        let State::Ready(p) = &e.state else {
+            return None;
+        };
         if e.tex.is_none() && matches!(e.img, Img::Bytes(_)) {
             if self.decodes_left > 0 {
                 self.decodes_left -= 1;
@@ -194,7 +240,13 @@ impl PreviewStore {
                     _ => None,
                 };
                 match decoded {
-                    Some(img) => e.tex = Some(ctx.load_texture(format!("link-preview-{url}"), img, TextureOptions::LINEAR)),
+                    Some(img) => {
+                        e.tex = Some(ctx.load_texture(
+                            format!("link-preview-{url}"),
+                            img,
+                            TextureOptions::LINEAR,
+                        ))
+                    }
                     None => e.img = Img::Failed,
                 }
             } else {
@@ -203,7 +255,9 @@ impl PreviewStore {
         }
         let image = match (&e.img, &e.tex) {
             (_, Some(t)) => ImageView::Texture(t),
-            (Img::Loading | Img::Bytes(_), None) if p.image_w > 0 && p.image_h > 0 => ImageView::Placeholder(p.image_w, p.image_h),
+            (Img::Loading | Img::Bytes(_), None) if p.image_w > 0 && p.image_h > 0 => {
+                ImageView::Placeholder(p.image_w, p.image_h)
+            }
             _ => ImageView::None,
         };
         Some(Card { preview: p, image })
@@ -221,7 +275,9 @@ impl PreviewStore {
             let mut idle: Vec<(Instant, String)> = self
                 .entries
                 .iter()
-                .filter(|(_, e)| !matches!(e.state, State::Loading) && !matches!(e.img, Img::Loading))
+                .filter(|(_, e)| {
+                    !matches!(e.state, State::Loading) && !matches!(e.img, Img::Loading)
+                })
                 .map(|(k, e)| (e.last_seen, k.clone()))
                 .collect();
             idle.sort();
@@ -233,8 +289,16 @@ impl PreviewStore {
 
     /// (links remembered, cards ready to draw, textures alive) for the autotest log.
     pub fn stats(&self) -> (usize, usize, usize) {
-        let ready = self.entries.values().filter(|e| matches!(e.state, State::Ready(_))).count();
-        (self.entries.len(), ready, self.entries.values().filter(|e| e.tex.is_some()).count())
+        let ready = self
+            .entries
+            .values()
+            .filter(|e| matches!(e.state, State::Ready(_)))
+            .count();
+        (
+            self.entries.len(),
+            ready,
+            self.entries.values().filter(|e| e.tex.is_some()).count(),
+        )
     }
 
     #[cfg(test)]
@@ -258,11 +322,18 @@ pub enum ImageView<'a> {
 /// Decode the hub's JPEG thumbnail. Anything but a small JPEG is refused.
 pub fn decode_thumb(bytes: &[u8]) -> Option<egui::ColorImage> {
     let img = image::load_from_memory_with_format(bytes, image::ImageFormat::Jpeg).ok()?;
-    if img.width() == 0 || img.height() == 0 || img.width() > MAX_THUMB_SIDE || img.height() > MAX_THUMB_SIDE {
+    if img.width() == 0
+        || img.height() == 0
+        || img.width() > MAX_THUMB_SIDE
+        || img.height() > MAX_THUMB_SIDE
+    {
         return None;
     }
     let rgba = img.to_rgba8();
-    Some(egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw()))
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        [rgba.width() as usize, rgba.height() as usize],
+        rgba.as_raw(),
+    ))
 }
 
 // ------------------------------------------------------------------ layout
@@ -288,13 +359,20 @@ pub fn layout(avail_w: f32, image: Option<(u32, u32)>) -> CardLayout {
         let scale = (inner_w / w).min(1.0);
         Vec2::new((w * scale).round().max(1.0), (h * scale).round().max(1.0))
     });
-    CardLayout { card_w, inner_w, image }
+    CardLayout {
+        card_w,
+        inner_w,
+        image,
+    }
 }
 
 // ------------------------------------------------------------------ drawing
 
 fn clamped_job(text: &str, size: f32, color: Color32, rows: usize) -> egui::text::LayoutJob {
-    let mut job = egui::text::LayoutJob::single_section(text.to_string(), egui::TextFormat::simple(FontId::proportional(size), color));
+    let mut job = egui::text::LayoutJob::single_section(
+        text.to_string(),
+        egui::TextFormat::simple(FontId::proportional(size), color),
+    );
     job.wrap.max_rows = rows;
     job.wrap.break_anywhere = false;
     job.wrap.overflow_character = Some('…');
@@ -314,9 +392,17 @@ pub fn show_card(ui: &mut egui::Ui, url: &str, card: &Card<'_>) {
     let visuals = ui.visuals().clone();
     let frame = egui::Frame::new()
         .fill(crate::theme::PAREDE)
-        .stroke(egui::Stroke::new(crate::theme::stroke::HAIRLINE, crate::theme::RISCO))
+        .stroke(egui::Stroke::new(
+            crate::theme::stroke::HAIRLINE,
+            crate::theme::RISCO,
+        ))
         .corner_radius(crate::theme::radius::BUTTON)
-        .inner_margin(Margin { left: CARD_MARGIN + ACCENT_W as i8, right: CARD_MARGIN, top: CARD_MARGIN - 2, bottom: CARD_MARGIN });
+        .inner_margin(Margin {
+            left: CARD_MARGIN + ACCENT_W as i8,
+            right: CARD_MARGIN,
+            top: CARD_MARGIN - 2,
+            bottom: CARD_MARGIN,
+        });
     let out = frame.show(ui, |ui| {
         ui.set_width(lay.inner_w);
         ui.spacing_mut().item_spacing.y = 3.0;
@@ -325,20 +411,31 @@ pub fn show_card(ui: &mut egui::Ui, url: &str, card: &Card<'_>) {
         }
         if !p.title.is_empty() {
             let job = clamped_job(&p.title, 14.5, visuals.hyperlink_color, 2);
-            let r = ui.add(egui::Label::new(job).sense(Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand);
+            let r = ui
+                .add(egui::Label::new(job).sense(Sense::click()))
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
             if r.clicked() {
                 crate::links::open_url(url);
             }
         }
         if !p.description.is_empty() {
-            ui.add(egui::Label::new(clamped_job(&p.description, 13.0, visuals.weak_text_color(), 2)));
+            ui.add(egui::Label::new(clamped_job(
+                &p.description,
+                13.0,
+                visuals.weak_text_color(),
+                2,
+            )));
         }
         if let Some(size) = lay.image {
             ui.add_space(3.0);
             match &card.image {
                 ImageView::Texture(t) => {
                     let r = ui
-                        .add(egui::Image::new(egui::load::SizedTexture::new(t.id(), size)).corner_radius(6.0).sense(Sense::click()))
+                        .add(
+                            egui::Image::new(egui::load::SizedTexture::new(t.id(), size))
+                                .corner_radius(6.0)
+                                .sense(Sense::click()),
+                        )
                         .on_hover_cursor(egui::CursorIcon::PointingHand);
                     if r.clicked() {
                         crate::links::open_url(url);
@@ -354,7 +451,16 @@ pub fn show_card(ui: &mut egui::Ui, url: &str, card: &Card<'_>) {
     // The coloured bar down the left edge, as on Discord's embeds.
     let r = out.response.rect;
     let bar = egui::Rect::from_min_max(r.min, egui::pos2(r.min.x + ACCENT_W, r.max.y));
-    ui.painter().rect_filled(bar, egui::CornerRadius { nw: 8, sw: 8, ne: 0, se: 0 }, crate::theme::LINK.gamma_multiply(0.7));
+    ui.painter().rect_filled(
+        bar,
+        egui::CornerRadius {
+            nw: 8,
+            sw: 8,
+            ne: 0,
+            se: 0,
+        },
+        crate::theme::LINK.gamma_multiply(0.7),
+    );
 }
 
 // ------------------------------------------------------------------ tests
@@ -364,9 +470,13 @@ mod tests {
     use super::*;
 
     fn jpeg(w: u32, h: u32) -> Vec<u8> {
-        let img = image::RgbImage::from_fn(w, h, |x, y| image::Rgb([(x % 256) as u8, (y % 256) as u8, 90]));
+        let img = image::RgbImage::from_fn(w, h, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, 90])
+        });
         let mut out = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 80).encode_image(&img).unwrap();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 80)
+            .encode_image(&img)
+            .unwrap();
         out
     }
 
@@ -397,14 +507,20 @@ mod tests {
         let img = wide.image.unwrap();
         // Column = 420 - 2*10 - 4 = 396: the 400 px picture shrinks a hair to fit.
         assert_eq!(wide.inner_w, 396.0);
-        assert!(img.x <= wide.inner_w && (img.x / img.y - 400.0 / 225.0).abs() < 0.02, "{img:?}");
+        assert!(
+            img.x <= wide.inner_w && (img.x / img.y - 400.0 / 225.0).abs() < 0.02,
+            "{img:?}"
+        );
 
         let narrow = layout(260.0, Some((400, 225)));
         assert_eq!(narrow.card_w, 260.0);
         assert!(narrow.image.unwrap().x <= narrow.inner_w);
 
         // A small picture is not blown up; tiny windows still get a usable card.
-        assert_eq!(layout(900.0, Some((120, 80))).image, Some(Vec2::new(120.0, 80.0)));
+        assert_eq!(
+            layout(900.0, Some((120, 80))).image,
+            Some(Vec2::new(120.0, 80.0))
+        );
         let tiny = layout(30.0, Some((400, 225)));
         assert!(tiny.card_w >= 120.0 && tiny.image.unwrap().x <= tiny.inner_w);
         assert_eq!(layout(500.0, None).image, None);
@@ -425,8 +541,15 @@ mod tests {
         let first = s.take_requests();
         assert_eq!(first.len(), 3);
         assert!(s.take_requests().is_empty(), "the window is full");
-        s.on_preview("https://a/0", PreviewReply::Ready(preview("https://a/0", "T", false)), now);
-        assert_eq!(s.take_requests(), vec![Request::Preview("https://a/3".into())]);
+        s.on_preview(
+            "https://a/0",
+            PreviewReply::Ready(preview("https://a/0", "T", false)),
+            now,
+        );
+        assert_eq!(
+            s.take_requests(),
+            vec![Request::Preview("https://a/3".into())]
+        );
     }
 
     #[test]
@@ -447,12 +570,25 @@ mod tests {
         s.want("https://a/x", now);
         s.take_requests();
         let ctx = egui::Context::default();
-        assert!(s.card(&ctx, "https://a/x", now).is_none(), "no card before the answer");
-        s.on_preview("https://a/x", PreviewReply::Ready(preview("https://a/x", "T", true)), now);
-        assert!(matches!(s.card(&ctx, "https://a/x", now).unwrap().image, ImageView::Placeholder(400, 225)));
+        assert!(
+            s.card(&ctx, "https://a/x", now).is_none(),
+            "no card before the answer"
+        );
+        s.on_preview(
+            "https://a/x",
+            PreviewReply::Ready(preview("https://a/x", "T", true)),
+            now,
+        );
+        assert!(matches!(
+            s.card(&ctx, "https://a/x", now).unwrap().image,
+            ImageView::Placeholder(400, 225)
+        ));
         // The thumbnail fails to load: the card stays, without the picture.
         s.on_image("https://a/x", None);
-        assert!(matches!(s.card(&ctx, "https://a/x", now).unwrap().image, ImageView::None));
+        assert!(matches!(
+            s.card(&ctx, "https://a/x", now).unwrap().image,
+            ImageView::None
+        ));
     }
 
     #[test]
@@ -461,12 +597,25 @@ mod tests {
         let mut s = PreviewStore::default();
         s.want("https://a/x", now);
         s.take_requests();
-        let nothing = LinkPreview { url: "https://a/x".into(), title: String::new(), description: String::new(), site_name: "a".into(), has_image: false, image_w: 0, image_h: 0 };
+        let nothing = LinkPreview {
+            url: "https://a/x".into(),
+            title: String::new(),
+            description: String::new(),
+            site_name: "a".into(),
+            has_image: false,
+            image_w: 0,
+            image_h: 0,
+        };
         s.on_preview("https://a/x", PreviewReply::Ready(nothing), now);
         assert!(s.take_requests().is_empty());
-        assert!(s.card(&egui::Context::default(), "https://a/x", now).is_none());
+        assert!(s
+            .card(&egui::Context::default(), "https://a/x", now)
+            .is_none());
         s.want("https://a/x", now + Duration::from_secs(3600));
-        assert!(s.take_requests().is_empty(), "'nothing to show' is final for the session");
+        assert!(
+            s.take_requests().is_empty(),
+            "'nothing to show' is final for the session"
+        );
     }
 
     #[test]
@@ -483,7 +632,9 @@ mod tests {
         s.want("https://a/9", now);
         s.on_preview("https://a/1", PreviewReply::Unsupported, now); // late replies of the first batch
         assert!(s.take_requests().is_empty());
-        assert!(s.card(&egui::Context::default(), "https://a/9", now).is_none());
+        assert!(s
+            .card(&egui::Context::default(), "https://a/9", now)
+            .is_none());
         // A different server later: asked again.
         s.reset();
         assert!(!s.unsupported());
@@ -502,10 +653,17 @@ mod tests {
         assert!(s.take_requests().is_empty(), "too soon");
         s.want("https://a/x", now + RETRY_BUSY + Duration::from_secs(1));
         assert_eq!(s.take_requests().len(), 1);
-        s.on_preview("https://a/x", PreviewReply::Failed("boom".into()), now + RETRY_BUSY);
+        s.on_preview(
+            "https://a/x",
+            PreviewReply::Failed("boom".into()),
+            now + RETRY_BUSY,
+        );
         s.want("https://a/x", now + RETRY_BUSY + Duration::from_secs(60));
         assert!(s.take_requests().is_empty());
-        s.want("https://a/x", now + RETRY_BUSY + RETRY_FAILED + Duration::from_secs(1));
+        s.want(
+            "https://a/x",
+            now + RETRY_BUSY + RETRY_FAILED + Duration::from_secs(1),
+        );
         assert_eq!(s.take_requests().len(), 1);
     }
 
@@ -526,15 +684,24 @@ mod tests {
         let mut s = PreviewStore::default();
         ready_with_image(&mut s, "https://a/x", now);
         let ctx = egui::Context::default();
-        assert!(matches!(s.card(&ctx, "https://a/x", now).unwrap().image, ImageView::Texture(_)));
+        assert!(matches!(
+            s.card(&ctx, "https://a/x", now).unwrap().image,
+            ImageView::Texture(_)
+        ));
         assert!(s.has_texture("https://a/x"));
         s.sweep(now + Duration::from_secs(10));
         assert!(s.has_texture("https://a/x"), "recently drawn: kept");
         s.sweep(now + TEXTURE_IDLE + Duration::from_secs(1));
-        assert!(!s.has_texture("https://a/x"), "scrolled far away: texture freed");
+        assert!(
+            !s.has_texture("https://a/x"),
+            "scrolled far away: texture freed"
+        );
         // Scrolled back: the card is still there and the texture is rebuilt, with no new request.
         let later = now + TEXTURE_IDLE + Duration::from_secs(5);
-        assert!(matches!(s.card(&ctx, "https://a/x", later).unwrap().image, ImageView::Texture(_)));
+        assert!(matches!(
+            s.card(&ctx, "https://a/x", later).unwrap().image,
+            ImageView::Texture(_)
+        ));
         assert!(s.take_requests().is_empty());
     }
 
@@ -549,14 +716,22 @@ mod tests {
         }
         s.sweep(now + Duration::from_secs(1));
         assert_eq!(s.entries.len(), MAX_ENTRIES);
-        assert!(!s.entries.contains_key("https://a/0"), "the oldest went first");
-        assert!(s.entries.contains_key(&format!("https://a/{}", MAX_ENTRIES + 49)));
+        assert!(
+            !s.entries.contains_key("https://a/0"),
+            "the oldest went first"
+        );
+        assert!(s
+            .entries
+            .contains_key(&format!("https://a/{}", MAX_ENTRIES + 49)));
     }
 
     #[test]
     fn thumbnails_are_checked_before_they_become_textures() {
         assert!(decode_thumb(&jpeg(400, 225)).is_some());
-        assert!(decode_thumb(&jpeg(900, 100)).is_none(), "bigger than the hub ever sends");
+        assert!(
+            decode_thumb(&jpeg(900, 100)).is_none(),
+            "bigger than the hub ever sends"
+        );
         assert!(decode_thumb(b"<html>").is_none());
         assert!(decode_thumb(&[]).is_none());
     }

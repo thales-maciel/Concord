@@ -46,7 +46,9 @@ pub fn plan(bind: &str, ipv6: bool) -> Plan {
     let bind = bind.trim();
     match bind.parse::<SocketAddr>() {
         Ok(a) if a.ip().is_unspecified() && ipv6 => Plan::DualStack(a.port()),
-        Ok(a) if a.ip().is_unspecified() => Plan::Exact(SocketAddr::from((Ipv4Addr::UNSPECIFIED, a.port()))),
+        Ok(a) if a.ip().is_unspecified() => {
+            Plan::Exact(SocketAddr::from((Ipv4Addr::UNSPECIFIED, a.port())))
+        }
         Ok(a) => Plan::Exact(a),
         Err(_) => Plan::Named(bind.to_string()),
     }
@@ -62,7 +64,7 @@ pub struct Bound {
 }
 
 impl Bound {
-    /// The addresses, for people: `[::]:7890 (IPv4 e IPv6)`, `0.0.0.0:7890 (IPv4)`...
+    /// The addresses, for people: `[::]:7890 (IPv4 and IPv6)`, `0.0.0.0:7890 (IPv4)`...
     pub fn describe(&self) -> String {
         describe(&self.addrs, self.dual_stack)
     }
@@ -71,11 +73,15 @@ impl Bound {
 /// See [`Bound::describe`].
 pub fn describe(addrs: &[SocketAddr], dual_stack: bool) -> String {
     let what = |a: &SocketAddr| match a {
-        SocketAddr::V6(v6) if dual_stack && v6.ip().is_unspecified() => "IPv4 e IPv6",
+        SocketAddr::V6(v6) if dual_stack && v6.ip().is_unspecified() => "IPv4 and IPv6",
         SocketAddr::V6(_) => "IPv6",
         SocketAddr::V4(_) => "IPv4",
     };
-    addrs.iter().map(|a| format!("{a} ({})", what(a))).collect::<Vec<_>>().join(" e ")
+    addrs
+        .iter()
+        .map(|a| format!("{a} ({})", what(a)))
+        .collect::<Vec<_>>()
+        .join(" and ")
 }
 
 /// Listen as `plan` says. Only the IPv4 side of a [`Plan::DualStack`] is required: without IPv6
@@ -93,11 +99,15 @@ pub async fn bind(plan: &Plan) -> Result<Bound> {
                 let mut b = one(v4, false)?;
                 match v6_socket(Ipv6Addr::UNSPECIFIED, port, true).and_then(TcpListener::from_std) {
                     Ok(v6) => {
-                        tracing::info!("one socket for IPv4 and IPv6 not possible ({dual_err}): two sockets");
+                        tracing::info!(
+                            "one socket for IPv4 and IPv6 not possible ({dual_err}): two sockets"
+                        );
                         b.addrs.push(v6.local_addr()?);
                         b.listeners.push(v6);
                     }
-                    Err(e) => tracing::warn!("IPv6 not available ({dual_err}; {e}): listening on IPv4 only"),
+                    Err(e) => tracing::warn!(
+                        "IPv6 not available ({dual_err}; {e}): listening on IPv4 only"
+                    ),
                 }
                 b
             }
@@ -108,7 +118,11 @@ pub async fn bind(plan: &Plan) -> Result<Bound> {
 
 fn one(l: TcpListener, dual_stack: bool) -> Result<Bound> {
     let addr = l.local_addr().context("listener address")?;
-    Ok(Bound { listeners: vec![l], addrs: vec![addr], dual_stack })
+    Ok(Bound {
+        listeners: vec![l],
+        addrs: vec![addr],
+        dual_stack,
+    })
 }
 
 /// A listening IPv6 socket (`[::]:port` for real), nonblocking. `only_v6 = false`: dual-stack
@@ -158,19 +172,46 @@ mod tests {
     #[test]
     fn mapped_peers_become_ipv4_and_ipv6_counts_by_network() {
         let mapped: SocketAddr = "[::ffff:192.0.2.7]:5000".parse().unwrap();
-        assert_eq!(canonical_peer(mapped), "192.0.2.7:5000".parse::<SocketAddr>().unwrap());
+        assert_eq!(
+            canonical_peer(mapped),
+            "192.0.2.7:5000".parse::<SocketAddr>().unwrap()
+        );
         let lo: SocketAddr = "[::ffff:127.0.0.1]:5000".parse().unwrap();
-        assert!(canonical_peer(lo).ip().is_loopback(), "the host's own login stays a loopback one");
+        assert!(
+            canonical_peer(lo).ip().is_loopback(),
+            "the host's own login stays a loopback one"
+        );
         let v6: SocketAddr = "[2001:db8:1:2:3:4:5:6]:9".parse().unwrap();
         assert_eq!(canonical_peer(v6), v6);
-        assert_eq!(canonical_peer("[::1]:9".parse().unwrap()), "[::1]:9".parse::<SocketAddr>().unwrap());
+        assert_eq!(
+            canonical_peer("[::1]:9".parse().unwrap()),
+            "[::1]:9".parse::<SocketAddr>().unwrap()
+        );
 
-        assert_eq!(peer_group("2001:db8:1:2:3:4:5:6".parse().unwrap()), "2001:db8:1:2::".parse::<IpAddr>().unwrap());
-        assert_eq!(peer_group("2001:db8:1:2:ffff::1".parse().unwrap()), peer_group("2001:db8:1:2::9".parse().unwrap()));
-        assert_ne!(peer_group("2001:db8:1:2::1".parse().unwrap()), peer_group("2001:db8:1:3::1".parse().unwrap()));
-        assert_eq!(peer_group("192.0.2.7".parse().unwrap()), "192.0.2.7".parse::<IpAddr>().unwrap());
-        assert_eq!(peer_group("::ffff:192.0.2.7".parse().unwrap()), "192.0.2.7".parse::<IpAddr>().unwrap());
-        assert_eq!(peer_group("::1".parse().unwrap()), "::1".parse::<IpAddr>().unwrap());
+        assert_eq!(
+            peer_group("2001:db8:1:2:3:4:5:6".parse().unwrap()),
+            "2001:db8:1:2::".parse::<IpAddr>().unwrap()
+        );
+        assert_eq!(
+            peer_group("2001:db8:1:2:ffff::1".parse().unwrap()),
+            peer_group("2001:db8:1:2::9".parse().unwrap())
+        );
+        assert_ne!(
+            peer_group("2001:db8:1:2::1".parse().unwrap()),
+            peer_group("2001:db8:1:3::1".parse().unwrap())
+        );
+        assert_eq!(
+            peer_group("192.0.2.7".parse().unwrap()),
+            "192.0.2.7".parse::<IpAddr>().unwrap()
+        );
+        assert_eq!(
+            peer_group("::ffff:192.0.2.7".parse().unwrap()),
+            "192.0.2.7".parse::<IpAddr>().unwrap()
+        );
+        assert_eq!(
+            peer_group("::1".parse().unwrap()),
+            "::1".parse::<IpAddr>().unwrap()
+        );
     }
 
     #[test]
@@ -180,7 +221,10 @@ mod tests {
         assert!(!plan("0.0.0.0:7890", false).has_ipv6());
         assert!(!plan("[::]:7890", false).has_ipv6());
         assert!(plan("[2001:db8::1]:7890", true).has_ipv6());
-        assert!(!plan("[::1]:7890", true).has_ipv6(), "loopback: nobody else reaches it");
+        assert!(
+            !plan("[::1]:7890", true).has_ipv6(),
+            "loopback: nobody else reaches it"
+        );
         assert!(!plan("192.0.2.1:7890", true).has_ipv6());
         assert!(!plan("localhost:7890", true).has_ipv6());
     }
@@ -188,9 +232,15 @@ mod tests {
     #[test]
     fn descriptions_name_the_families() {
         let dual = ["[::]:7890".parse().unwrap()];
-        assert_eq!(describe(&dual, true), "[::]:7890 (IPv4 e IPv6)");
-        let two = ["0.0.0.0:7890".parse().unwrap(), "[::]:7890".parse().unwrap()];
-        assert_eq!(describe(&two, false), "0.0.0.0:7890 (IPv4) e [::]:7890 (IPv6)");
+        assert_eq!(describe(&dual, true), "[::]:7890 (IPv4 and IPv6)");
+        let two = [
+            "0.0.0.0:7890".parse().unwrap(),
+            "[::]:7890".parse().unwrap(),
+        ];
+        assert_eq!(
+            describe(&two, false),
+            "0.0.0.0:7890 (IPv4) and [::]:7890 (IPv6)"
+        );
     }
 
     /// Loopback only (a test must not open a port to the network): an explicit `[::1]` and
@@ -202,7 +252,12 @@ mod tests {
         assert!(b.addrs[0].is_ipv6() && b.addrs[0].port() != 0 && !b.dual_stack);
         let port = b.addrs[0].port();
         assert!(tokio::net::TcpStream::connect(("::1", port)).await.is_ok());
-        assert!(tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_err(), "an IPv6 address takes no IPv4");
+        assert!(
+            tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_err(),
+            "an IPv6 address takes no IPv4"
+        );
         let b4 = bind(&plan("127.0.0.1:0", true)).await.unwrap();
         assert!(b4.addrs[0].is_ipv4() && !b4.dual_stack);
     }
@@ -217,11 +272,21 @@ mod tests {
         let std_l = v6_socket(Ipv4Addr::LOCALHOST.to_ipv6_mapped(), 0, false).unwrap();
         let l = TcpListener::from_std(std_l).unwrap();
         let port = l.local_addr().unwrap().port();
-        let app = axum::Router::new().route("/", axum::routing::get(|ConnectInfo(peer): ConnectInfo<SocketAddr>| async move { peer.ip().to_string() }));
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::get(|ConnectInfo(peer): ConnectInfo<SocketAddr>| async move {
+                peer.ip().to_string()
+            }),
+        );
         let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
         let slots = crate::serve::Slots::new(crate::serve::Limits::default());
         let task = tokio::spawn(crate::serve::serve(l, app, slots, stop_rx));
-        let body = reqwest::get(format!("http://127.0.0.1:{port}/")).await.unwrap().text().await.unwrap();
+        let body = reqwest::get(format!("http://127.0.0.1:{port}/"))
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
         assert_eq!(body, "127.0.0.1");
         let _ = stop_tx.send(true);
         let _ = task.await;

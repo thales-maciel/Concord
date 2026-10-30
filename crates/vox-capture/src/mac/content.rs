@@ -10,7 +10,9 @@ use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::AllocAnyThread;
 use objc2_foundation::{NSArray, NSError};
-use objc2_screen_capture_kit::{SCContentFilter, SCDisplay, SCRunningApplication, SCShareableContent, SCWindow};
+use objc2_screen_capture_kit::{
+    SCContentFilter, SCDisplay, SCRunningApplication, SCShareableContent, SCWindow,
+};
 
 use super::{ffi, lock, note_screen_permission, os, SendBox};
 use crate::{fit_inside, CaptureError, MonitorInfo, Result, VideoTarget, WindowInfo};
@@ -38,17 +40,23 @@ pub(crate) fn permission_error(what: &str) -> CaptureError {
 
 /// A fresh snapshot of the shareable content: on-screen windows only, no desktop windows.
 fn fetch() -> Result<Retained<SCShareableContent>> {
-    let (tx, rx) = mpsc::sync_channel::<std::result::Result<SendBox<Retained<SCShareableContent>>, (String, bool)>>(1);
+    let (tx, rx) = mpsc::sync_channel::<
+        std::result::Result<SendBox<Retained<SCShareableContent>>, (String, bool)>,
+    >(1);
     let block = RcBlock::new(move |content: *mut SCShareableContent, err: *mut NSError| {
         // SAFETY: the completion handler's arguments are valid (or null) for its duration.
         let r = match unsafe { Retained::retain(content) } {
             Some(c) => Ok(SendBox(c)),
-            None => Err(unsafe { err.as_ref() }.map(ns_error).unwrap_or_else(|| ("no content and no error".into(), false))),
+            None => Err(unsafe { err.as_ref() }
+                .map(ns_error)
+                .unwrap_or_else(|| ("no content and no error".into(), false))),
         };
         let _ = tx.try_send(r);
     });
     // SAFETY: the block lives until the call returns; ScreenCaptureKit copies it.
-    unsafe { SCShareableContent::getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler(true, true, &block) };
+    unsafe {
+        SCShareableContent::getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler(true, true, &block)
+    };
     match rx.recv_timeout(CONTENT_TIMEOUT) {
         Ok(Ok(c)) => {
             note_screen_permission(true);
@@ -56,7 +64,9 @@ fn fetch() -> Result<Retained<SCShareableContent>> {
         }
         Ok(Err((_, true))) => Err(permission_error("shareable content")),
         Ok(Err((text, false))) => Err(os("SCShareableContent", text)),
-        Err(_) => Err(CaptureError::Stopped("ScreenCaptureKit did not answer the content query".into())),
+        Err(_) => Err(CaptureError::Stopped(
+            "ScreenCaptureKit did not answer the content query".into(),
+        )),
     }
 }
 
@@ -80,7 +90,9 @@ pub(crate) fn shareable(fresh: bool) -> Result<Retained<SCShareableContent>> {
 static WINDOW_PIDS: Mutex<Option<HashMap<u32, i32>>> = Mutex::new(None);
 
 pub(crate) fn window_pid(id: u32) -> Option<i32> {
-    lock(&WINDOW_PIDS).as_ref().and_then(|m| m.get(&id).copied())
+    lock(&WINDOW_PIDS)
+        .as_ref()
+        .and_then(|m| m.get(&id).copied())
 }
 
 /// Displays in a stable order: the main display first, then left to right, top to bottom.
@@ -91,7 +103,11 @@ fn ordered_displays(content: &SCShareableContent) -> Vec<Retained<SCDisplay>> {
     v.sort_by(|a, b| {
         let key = |d: &SCDisplay| {
             let f = unsafe { d.frame() };
-            (unsafe { d.displayID() } != main, f.origin.x as i64, f.origin.y as i64)
+            (
+                unsafe { d.displayID() } != main,
+                f.origin.x as i64,
+                f.origin.y as i64,
+            )
         };
         key(a).cmp(&key(b))
     });
@@ -105,7 +121,10 @@ pub(crate) fn display_pixels(d: &SCDisplay) -> (u32, u32) {
         let id = d.displayID();
         let mode = ffi::CGDisplayCopyDisplayMode(id);
         if !mode.is_null() {
-            let (w, h) = (ffi::CGDisplayModeGetPixelWidth(mode), ffi::CGDisplayModeGetPixelHeight(mode));
+            let (w, h) = (
+                ffi::CGDisplayModeGetPixelWidth(mode),
+                ffi::CGDisplayModeGetPixelHeight(mode),
+            );
             ffi::CGDisplayModeRelease(mode);
             if w > 0 && h > 0 {
                 return (w as u32, h as u32);
@@ -120,7 +139,10 @@ fn scale_at(content: &SCShareableContent, x: f64, y: f64) -> f64 {
     let displays = ordered_displays(content);
     let hit = displays.iter().find(|d| {
         let f = unsafe { d.frame() };
-        x >= f.origin.x && x < f.origin.x + f.size.width && y >= f.origin.y && y < f.origin.y + f.size.height
+        x >= f.origin.x
+            && x < f.origin.x + f.size.width
+            && y >= f.origin.y
+            && y < f.origin.y + f.size.height
     });
     let d = hit.or(displays.first());
     d.map(|d| {
@@ -162,7 +184,17 @@ pub fn list_monitors() -> Result<Vec<MonitorInfo>> {
                 let (width, height) = display_pixels(d);
                 // SAFETY: plain query.
                 let builtin = unsafe { ffi::CGDisplayIsBuiltin(id) } != 0;
-                MonitorInfo { index, name: if builtin { "Tela integrada".into() } else { "Monitor externo".into() }, width, height, primary: id == main }
+                MonitorInfo {
+                    index,
+                    name: if builtin {
+                        "Built-in display".into()
+                    } else {
+                        "External monitor".into()
+                    },
+                    width,
+                    height,
+                    primary: id == main,
+                }
             })
             .collect())
     })
@@ -175,15 +207,32 @@ pub fn list_windows() -> Result<Vec<WindowInfo>> {
         let mut out = Vec::new();
         let mut pids = HashMap::new();
         for w in unsafe { content.windows() }.iter() {
-            let Some((app, pid)) = listable(&w, own) else { continue };
+            let Some((app, pid)) = listable(&w, own) else {
+                continue;
+            };
             // SAFETY: getters of an immutable snapshot.
-            let (id, title, name) = unsafe { (w.windowID(), w.title().map(|t| t.to_string()).unwrap_or_default(), app.applicationName().to_string()) };
-            let title = if title.trim().is_empty() { name.clone() } else { title };
+            let (id, title, name) = unsafe {
+                (
+                    w.windowID(),
+                    w.title().map(|t| t.to_string()).unwrap_or_default(),
+                    app.applicationName().to_string(),
+                )
+            };
+            let title = if title.trim().is_empty() {
+                name.clone()
+            } else {
+                title
+            };
             if title.trim().is_empty() {
                 continue;
             }
             pids.insert(id, pid);
-            out.push(WindowInfo { hwnd: id as isize, title, process_id: pid as u32, exe_name: name });
+            out.push(WindowInfo {
+                hwnd: id as isize,
+                title,
+                process_id: pid as u32,
+                exe_name: name,
+            });
         }
         *lock(&WINDOW_PIDS) = Some(pids);
         Ok(out)
@@ -206,21 +255,44 @@ pub(crate) fn resolve(target: VideoTarget, fresh: bool) -> Result<Resolved> {
     match target {
         VideoTarget::Monitor(i) => {
             let displays = ordered_displays(&content);
-            let d = displays.get(i).ok_or_else(|| CaptureError::NotFound(format!("monitor {i}")))?;
+            let d = displays
+                .get(i)
+                .ok_or_else(|| CaptureError::NotFound(format!("monitor {i}")))?;
             let none: Retained<NSArray<SCWindow>> = NSArray::new();
             // SAFETY: a display of the snapshot and an empty exclusion list.
-            let filter = unsafe { SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), d, &none) };
-            Ok(Resolved { filter, pixels: display_pixels(d) })
+            let filter = unsafe {
+                SCContentFilter::initWithDisplay_excludingWindows(
+                    SCContentFilter::alloc(),
+                    d,
+                    &none,
+                )
+            };
+            Ok(Resolved {
+                filter,
+                pixels: display_pixels(d),
+            })
         }
         VideoTarget::Window(h) => {
             let id = u32::try_from(h).map_err(|_| CaptureError::NotFound(format!("window {h}")))?;
             let windows = unsafe { content.windows() };
-            let w = windows.iter().find(|w| unsafe { w.windowID() } == id).ok_or_else(|| CaptureError::NotFound(format!("window {id}")))?;
+            let w = windows
+                .iter()
+                .find(|w| unsafe { w.windowID() } == id)
+                .ok_or_else(|| CaptureError::NotFound(format!("window {id}")))?;
             let f = unsafe { w.frame() };
-            let s = scale_at(&content, f.origin.x + f.size.width / 2.0, f.origin.y + f.size.height / 2.0);
-            let px = (((f.size.width * s).round() as u32).max(2), ((f.size.height * s).round() as u32).max(2));
+            let s = scale_at(
+                &content,
+                f.origin.x + f.size.width / 2.0,
+                f.origin.y + f.size.height / 2.0,
+            );
+            let px = (
+                ((f.size.width * s).round() as u32).max(2),
+                ((f.size.height * s).round() as u32).max(2),
+            );
             // SAFETY: a window of the snapshot.
-            let filter = unsafe { SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &w) };
+            let filter = unsafe {
+                SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &w)
+            };
             Ok(Resolved { filter, pixels: px })
         }
     }
@@ -231,7 +303,9 @@ pub(crate) fn resolve(target: VideoTarget, fresh: bool) -> Result<Resolved> {
 pub(crate) fn audio_filter(pid: u32, only: bool) -> Result<Retained<SCContentFilter>> {
     let content = shareable(true)?;
     let displays = ordered_displays(&content);
-    let d = displays.first().ok_or_else(|| CaptureError::NotFound("no display".into()))?;
+    let d = displays
+        .first()
+        .ok_or_else(|| CaptureError::NotFound("no display".into()))?;
     let apps = unsafe { content.applications() };
     let app = apps.iter().find(|a| unsafe { a.processID() } == pid as i32);
     let none: Retained<NSArray<SCWindow>> = NSArray::new();
@@ -240,14 +314,34 @@ pub(crate) fn audio_filter(pid: u32, only: bool) -> Result<Retained<SCContentFil
         match (only, app) {
             (true, Some(a)) => {
                 let list = NSArray::from_retained_slice(&[a]);
-                Ok(SCContentFilter::initWithDisplay_includingApplications_exceptingWindows(SCContentFilter::alloc(), d, &list, &none))
+                Ok(
+                    SCContentFilter::initWithDisplay_includingApplications_exceptingWindows(
+                        SCContentFilter::alloc(),
+                        d,
+                        &list,
+                        &none,
+                    ),
+                )
             }
-            (true, None) => Err(CaptureError::NotFound(format!("no app with pid {pid} (closed?)"))),
+            (true, None) => Err(CaptureError::NotFound(format!(
+                "no app with pid {pid} (closed?)"
+            ))),
             (false, Some(a)) if pid != std::process::id() => {
                 let list = NSArray::from_retained_slice(&[a]);
-                Ok(SCContentFilter::initWithDisplay_excludingApplications_exceptingWindows(SCContentFilter::alloc(), d, &list, &none))
+                Ok(
+                    SCContentFilter::initWithDisplay_excludingApplications_exceptingWindows(
+                        SCContentFilter::alloc(),
+                        d,
+                        &list,
+                        &none,
+                    ),
+                )
             }
-            (false, _) => Ok(SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), d, &none)),
+            (false, _) => Ok(SCContentFilter::initWithDisplay_excludingWindows(
+                SCContentFilter::alloc(),
+                d,
+                &none,
+            )),
         }
     }
 }

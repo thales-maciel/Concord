@@ -55,10 +55,31 @@ struct RawMsDecoder {
 extern "C" {
     fn opus_decoder_create(fs: i32, channels: c_int, error: *mut c_int) -> *mut RawDecoder;
     fn opus_decoder_destroy(st: *mut RawDecoder);
-    fn opus_decode_float(st: *mut RawDecoder, data: *const u8, len: i32, pcm: *mut f32, frame_size: c_int, decode_fec: c_int) -> c_int;
-    fn opus_multistream_decoder_create(fs: i32, channels: c_int, streams: c_int, coupled_streams: c_int, mapping: *const u8, error: *mut c_int) -> *mut RawMsDecoder;
+    fn opus_decode_float(
+        st: *mut RawDecoder,
+        data: *const u8,
+        len: i32,
+        pcm: *mut f32,
+        frame_size: c_int,
+        decode_fec: c_int,
+    ) -> c_int;
+    fn opus_multistream_decoder_create(
+        fs: i32,
+        channels: c_int,
+        streams: c_int,
+        coupled_streams: c_int,
+        mapping: *const u8,
+        error: *mut c_int,
+    ) -> *mut RawMsDecoder;
     fn opus_multistream_decoder_destroy(st: *mut RawMsDecoder);
-    fn opus_multistream_decode_float(st: *mut RawMsDecoder, data: *const u8, len: i32, pcm: *mut f32, frame_size: c_int, decode_fec: c_int) -> c_int;
+    fn opus_multistream_decode_float(
+        st: *mut RawMsDecoder,
+        data: *const u8,
+        len: i32,
+        pcm: *mut f32,
+        frame_size: c_int,
+        decode_fec: c_int,
+    ) -> c_int;
 }
 
 /// What the `OpusHead` header says.
@@ -81,32 +102,48 @@ impl OpusHead {
     pub fn parse(b: &[u8]) -> Result<Self, ProcessError> {
         let bad = |why: &str| ProcessError::Unsupported(format!("Opus: {why}"));
         if b.len() < 19 || &b[..8] != b"OpusHead" {
-            return Err(bad("cabeçalho inválido"));
+            return Err(bad("invalid header"));
         }
         if b[8] >> 4 != 0 {
-            return Err(bad("versão desconhecida"));
+            return Err(bad("unknown version"));
         }
         let channels = b[9] as usize;
         let pre_skip = u16::from_le_bytes([b[10], b[11]]) as usize;
         let gain_q8 = i16::from_le_bytes([b[16], b[17]]);
         let family = b[18];
         if channels == 0 || channels > MAX_CHANNELS {
-            return Err(bad("número de canais não suportado"));
+            return Err(bad("unsupported channel count"));
         }
         match family {
-            0 if channels <= 2 => Ok(OpusHead { channels, pre_skip, gain_q8, family, streams: 1, coupled: channels - 1, mapping: Vec::new() }),
+            0 if channels <= 2 => Ok(OpusHead {
+                channels,
+                pre_skip,
+                gain_q8,
+                family,
+                streams: 1,
+                coupled: channels - 1,
+                mapping: Vec::new(),
+            }),
             // 1: Vorbis channel order (1..8 channels); 255: unlabelled discrete channels.
             1 | 255 => {
                 if b.len() < 21 + channels {
-                    return Err(bad("cabeçalho de canais truncado"));
+                    return Err(bad("truncated channel header"));
                 }
                 let (streams, coupled) = (b[19] as usize, b[20] as usize);
                 if streams == 0 || coupled > streams {
-                    return Err(bad("mapa de canais inválido"));
+                    return Err(bad("invalid channel map"));
                 }
-                Ok(OpusHead { channels, pre_skip, gain_q8, family, streams, coupled, mapping: b[21..21 + channels].to_vec() })
+                Ok(OpusHead {
+                    channels,
+                    pre_skip,
+                    gain_q8,
+                    family,
+                    streams,
+                    coupled,
+                    mapping: b[21..21 + channels].to_vec(),
+                })
             }
-            _ => Err(bad("mapeamento de canais não suportado")),
+            _ => Err(bad("unsupported channel mapping")),
         }
     }
 
@@ -157,9 +194,20 @@ impl OpusStream {
         // and libopus validates its values itself, reporting through `err`.
         let raw = unsafe {
             if head.family == 0 {
-                Raw::Single(opus_decoder_create(OPUS_RATE as i32, head.channels as c_int, &mut err))
+                Raw::Single(opus_decoder_create(
+                    OPUS_RATE as i32,
+                    head.channels as c_int,
+                    &mut err,
+                ))
             } else {
-                Raw::Multi(opus_multistream_decoder_create(OPUS_RATE as i32, head.channels as c_int, head.streams as c_int, head.coupled as c_int, head.mapping.as_ptr(), &mut err))
+                Raw::Multi(opus_multistream_decoder_create(
+                    OPUS_RATE as i32,
+                    head.channels as c_int,
+                    head.streams as c_int,
+                    head.coupled as c_int,
+                    head.mapping.as_ptr(),
+                    &mut err,
+                ))
             }
         };
         let null = match raw {
@@ -168,9 +216,18 @@ impl OpusStream {
         };
         if err != 0 || null {
             // A failed create returns null: nothing to destroy.
-            return Err(ProcessError::Unsupported("Opus: não consegui iniciar o decodificador".into()));
+            return Err(ProcessError::Unsupported(
+                "Opus: could not initialize decoder".into(),
+            ));
         }
-        Ok(Self { raw, channels: head.channels, gain: head.gain(), skip: head.pre_skip, remaining: total_frames, buf: vec![0.0; MAX_FRAME * head.channels] })
+        Ok(Self {
+            raw,
+            channels: head.channels,
+            gain: head.gain(),
+            skip: head.pre_skip,
+            remaining: total_frames,
+            buf: vec![0.0; MAX_FRAME * head.channels],
+        })
     }
 
     pub fn channels(&self) -> usize {
@@ -188,8 +245,22 @@ impl OpusStream {
         // SAFETY: `buf` holds MAX_FRAME frames of `ch` channels, the most one packet can decode to.
         let n = unsafe {
             match self.raw {
-                Raw::Single(p) => opus_decode_float(p, packet.as_ptr(), packet.len() as i32, self.buf.as_mut_ptr(), MAX_FRAME as c_int, 0),
-                Raw::Multi(p) => opus_multistream_decode_float(p, packet.as_ptr(), packet.len() as i32, self.buf.as_mut_ptr(), MAX_FRAME as c_int, 0),
+                Raw::Single(p) => opus_decode_float(
+                    p,
+                    packet.as_ptr(),
+                    packet.len() as i32,
+                    self.buf.as_mut_ptr(),
+                    MAX_FRAME as c_int,
+                    0,
+                ),
+                Raw::Multi(p) => opus_multistream_decode_float(
+                    p,
+                    packet.as_ptr(),
+                    packet.len() as i32,
+                    self.buf.as_mut_ptr(),
+                    MAX_FRAME as c_int,
+                    0,
+                ),
             }
         };
         if n <= 0 {
@@ -229,11 +300,17 @@ mod tests {
     #[test]
     fn the_header_gives_channels_pre_skip_gain_and_mapping() {
         let h = OpusHead::parse(&head(2, 312, 256, 0, &[])).unwrap();
-        assert_eq!((h.channels, h.pre_skip, h.streams, h.coupled), (2, 312, 1, 1));
+        assert_eq!(
+            (h.channels, h.pre_skip, h.streams, h.coupled),
+            (2, 312, 1, 1)
+        );
         assert!((h.gain() - 10f32.powf(0.05)).abs() < 1e-6, "+1 dB");
         // 5.1 in the Vorbis order: 4 streams, 2 coupled.
         let h = OpusHead::parse(&head(6, 0, 0, 1, &[4, 2, 0, 4, 1, 2, 3, 5])).unwrap();
-        assert_eq!((h.channels, h.streams, h.coupled, h.mapping.len()), (6, 4, 2, 6));
+        assert_eq!(
+            (h.channels, h.streams, h.coupled, h.mapping.len()),
+            (6, 4, 2, 6)
+        );
         assert_eq!(h.gain(), 1.0);
     }
 
@@ -241,11 +318,26 @@ mod tests {
     fn what_cannot_be_decoded_is_refused_with_a_reason() {
         assert!(OpusHead::parse(b"OpusTags....................").is_err());
         assert!(OpusHead::parse(&head(0, 0, 0, 0, &[])).is_err());
-        assert!(OpusHead::parse(&head(3, 0, 0, 0, &[])).is_err(), "family 0 is mono or stereo");
-        assert!(OpusHead::parse(&head(4, 0, 0, 2, &[4, 0, 0, 1, 2, 3])).is_err(), "ambisonics");
-        assert!(OpusHead::parse(&head(9, 0, 0, 1, &[9, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8])).is_err(), "more than 8 channels");
-        assert!(OpusHead::parse(&head(6, 0, 0, 1, &[4, 2, 0])).is_err(), "truncated mapping");
-        assert!(OpusHead::parse(&head(2, 0, 0, 1, &[3, 4, 0, 1])).is_err(), "more coupled than streams");
+        assert!(
+            OpusHead::parse(&head(3, 0, 0, 0, &[])).is_err(),
+            "family 0 is mono or stereo"
+        );
+        assert!(
+            OpusHead::parse(&head(4, 0, 0, 2, &[4, 0, 0, 1, 2, 3])).is_err(),
+            "ambisonics"
+        );
+        assert!(
+            OpusHead::parse(&head(9, 0, 0, 1, &[9, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8])).is_err(),
+            "more than 8 channels"
+        );
+        assert!(
+            OpusHead::parse(&head(6, 0, 0, 1, &[4, 2, 0])).is_err(),
+            "truncated mapping"
+        );
+        assert!(
+            OpusHead::parse(&head(2, 0, 0, 1, &[3, 4, 0, 1])).is_err(),
+            "more coupled than streams"
+        );
     }
 
     #[test]
@@ -253,13 +345,22 @@ mod tests {
         // A TOC byte for a 20 ms CELT-only stereo frame with no payload is a valid "silent" packet
         // (a 2-byte frame is the smallest real one); either it decodes to 960 frames or libopus
         // says no, but it must never crash.
-        let mut s = OpusStream::new(&OpusHead::parse(&head(2, 0, 0, 0, &[])).unwrap(), None).unwrap();
+        let mut s =
+            OpusStream::new(&OpusHead::parse(&head(2, 0, 0, 0, &[])).unwrap(), None).unwrap();
         if let Some(pcm) = s.decode(&[0xFC, 0xFF, 0xFE], 0) {
             assert_eq!(pcm.len() % 2, 0);
         }
         assert!(s.decode(&[], 0).is_none());
         // A bad multistream layout is refused by libopus itself.
-        let bad = OpusHead { channels: 2, pre_skip: 0, gain_q8: 0, family: 1, streams: 1, coupled: 1, mapping: vec![0, 7] };
+        let bad = OpusHead {
+            channels: 2,
+            pre_skip: 0,
+            gain_q8: 0,
+            family: 1,
+            streams: 1,
+            coupled: 1,
+            mapping: vec![0, 7],
+        };
         assert!(OpusStream::new(&bad, None).is_err());
     }
 }

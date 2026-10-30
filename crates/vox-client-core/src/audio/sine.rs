@@ -13,13 +13,23 @@ pub struct SineGenerator {
 
 impl SineGenerator {
     pub fn new(sample_rate: u32, freq_l: f64, freq_r: f64, amplitude: f64) -> Self {
-        Self { sample_rate: sample_rate as f64, freq_l, freq_r, phase_l: 0.0, phase_r: 0.0, amplitude }
+        Self {
+            sample_rate: sample_rate as f64,
+            freq_l,
+            freq_r,
+            phase_l: 0.0,
+            phase_r: 0.0,
+            amplitude,
+        }
     }
 
     /// Fill `out` (interleaved stereo) with the next `out.len() / 2` frames.
     pub fn fill_stereo(&mut self, out: &mut [i16]) {
         use std::f64::consts::TAU;
-        let (dl, dr) = (TAU * self.freq_l / self.sample_rate, TAU * self.freq_r / self.sample_rate);
+        let (dl, dr) = (
+            TAU * self.freq_l / self.sample_rate,
+            TAU * self.freq_r / self.sample_rate,
+        );
         let amp = self.amplitude * i16::MAX as f64;
         for frame in out.as_chunks_mut::<2>().0 {
             frame[0] = (self.phase_l.sin() * amp) as i16;

@@ -23,12 +23,15 @@ use livekit::webrtc::video_source::{RtcVideoSource, VideoResolution};
 use parking_lot::Mutex;
 use tracing::{info, warn};
 use vox_capture::{
-    CameraAdjust, CameraCapture, CameraConfig, CameraControlId, CameraError, CameraFault, CameraFormat, CameraMode,
-    CameraTransform, EncoderBackend, FrameCallback,
+    CameraAdjust, CameraCapture, CameraConfig, CameraControlId, CameraError, CameraFault,
+    CameraFormat, CameraMode, CameraTransform, EncoderBackend, FrameCallback,
 };
 
 use super::encoders;
-use super::publish::{EncHandle, EncStage, EncodedSink, EncoderChoice, RawHandle, RawStage, Stage, TestHooks, TimingSlot, VideoPath};
+use super::publish::{
+    EncHandle, EncStage, EncodedSink, EncoderChoice, RawHandle, RawStage, Stage, TestHooks,
+    TimingSlot, VideoPath,
+};
 use crate::stats::{EncodedFeedback, EncoderReport, StreamCounters};
 
 /// Camera quality presets (the Settings combo). All at 30 fps.
@@ -42,7 +45,12 @@ pub enum CameraQuality {
 }
 
 impl CameraQuality {
-    pub const ALL: [CameraQuality; 4] = [CameraQuality::P360, CameraQuality::P540, CameraQuality::P720, CameraQuality::P1080];
+    pub const ALL: [CameraQuality; 4] = [
+        CameraQuality::P360,
+        CameraQuality::P540,
+        CameraQuality::P720,
+        CameraQuality::P1080,
+    ];
 
     /// (width, height, fps)
     pub fn dims(self) -> (u32, u32, u32) {
@@ -132,14 +140,28 @@ pub struct CameraOptions {
 
 impl Default for CameraOptions {
     fn default() -> Self {
-        Self { device: String::new(), width: 1280, height: 720, fps: 30, max_bitrate: None, encoder: EncoderChoice::Auto, setup: CameraSetup::default() }
+        Self {
+            device: String::new(),
+            width: 1280,
+            height: 720,
+            fps: 30,
+            max_bitrate: None,
+            encoder: EncoderChoice::Auto,
+            setup: CameraSetup::default(),
+        }
     }
 }
 
 impl CameraOptions {
     pub fn with_quality(device: impl Into<String>, q: CameraQuality) -> Self {
         let (width, height, fps) = q.dims();
-        Self { device: device.into(), width, height, fps, ..Default::default() }
+        Self {
+            device: device.into(),
+            width,
+            height,
+            fps,
+            ..Default::default()
+        }
     }
 
     /// Add the saved setup. A chosen native mode also sets the frame rate we publish at.
@@ -152,7 +174,8 @@ impl CameraOptions {
     }
 
     pub fn bitrate(&self) -> u64 {
-        self.max_bitrate.unwrap_or_else(|| camera_bitrate(self.width, self.height, self.fps))
+        self.max_bitrate
+            .unwrap_or_else(|| camera_bitrate(self.width, self.height, self.fps))
     }
 }
 
@@ -164,21 +187,21 @@ pub fn camera_bitrate(width: u32, height: u32, fps: u32) -> u64 {
     ((1_200_000.0 * px.powf(0.75) * fps) as u64).clamp(250_000, 4_000_000)
 }
 
-/// Portuguese text for a camera that failed to start or stopped.
+/// English text for a camera that failed to start or stopped.
 pub fn camera_failure_pt(e: &CameraError) -> String {
     if cfg!(target_os = "macos") && e.fault == CameraFault::AccessDenied {
-        return "O macOS não deixou o concord usar a câmera. Ligue o concord em Ajustes do Sistema > Privacidade e Segurança > Câmera.".into();
+        return "macOS did not allow concord to use the camera. Enable concord in System Settings > Privacy & Security > Camera.".into();
     }
     match e.fault {
-        CameraFault::NotFound => "Nenhuma câmera encontrada. Conecte uma câmera ou escolha outra em Configurações.".into(),
-        CameraFault::InUse => "A câmera está sendo usada por outro programa. Feche o outro programa e tente de novo.".into(),
+        CameraFault::NotFound => "No cameras found. Connect a camera or choose another in Settings.".into(),
+        CameraFault::InUse => "The camera is in use by another program. Close that program and try again.".into(),
         CameraFault::AccessDenied => {
-            "O Windows bloqueou o acesso à câmera. Ative em Configurações do Windows > Privacidade e segurança > Câmera (inclusive \"Permitir que aplicativos da área de trabalho acessem a câmera\").".into()
+            "Windows blocked camera access. Enable it in Windows Settings > Privacy & security > Camera (including \"Let desktop apps access your camera\").".into()
         }
-        CameraFault::Disconnected => "A câmera foi desconectada.".into(),
-        CameraFault::NoFrames => "A câmera não enviou imagem. Ela pode estar em uso por outro programa ou com defeito.".into(),
-        CameraFault::Unsupported => "Esta câmera não pode ser usada neste computador (formato ou vídeo não suportado).".into(),
-        CameraFault::Other => format!("Não foi possível usar a câmera ({}).", e.detail),
+        CameraFault::Disconnected => "The camera was disconnected.".into(),
+        CameraFault::NoFrames => "The camera did not send an image. It may be in use by another program or faulty.".into(),
+        CameraFault::Unsupported => "This camera cannot be used on this computer (unsupported format or video).".into(),
+        CameraFault::Other => format!("Could not use the camera ({}).", e.detail),
     }
 }
 
@@ -198,13 +221,24 @@ struct CameraTrack {
 }
 
 impl CameraTrack {
-    async fn publish(room: &Room, path: VideoPath, source: NativeVideoSource, fps: u32, max_bitrate: u64, encoder: VideoEncoderBackend) -> Result<Self> {
-        let track = LocalVideoTrack::create_video_track("camera", RtcVideoSource::Native(source.clone()));
+    async fn publish(
+        room: &Room,
+        path: VideoPath,
+        source: NativeVideoSource,
+        fps: u32,
+        max_bitrate: u64,
+        encoder: VideoEncoderBackend,
+    ) -> Result<Self> {
+        let track =
+            LocalVideoTrack::create_video_track("camera", RtcVideoSource::Native(source.clone()));
         let opts = TrackPublishOptions {
             source: TrackSource::Camera,
             video_codec: VideoCodec::H264,
             simulcast: false,
-            video_encoding: Some(VideoEncoding { max_bitrate, max_framerate: fps as f64 }),
+            video_encoding: Some(VideoEncoding {
+                max_bitrate,
+                max_framerate: fps as f64,
+            }),
             video_encoder: encoder,
             ..Default::default()
         };
@@ -213,12 +247,29 @@ impl CameraTrack {
             .publish_track(LocalTrack::Video(track.clone()), opts)
             .await
             .map_err(|e| anyhow!("publish camera ({path:?} path): {e}"))?;
-        info!(?path, fps, max_kbps = max_bitrate / 1000, "camera video published");
-        Ok(Self { path, source, track, publication, fps, max_bitrate, encoder })
+        info!(
+            ?path,
+            fps,
+            max_kbps = max_bitrate / 1000,
+            "camera video published"
+        );
+        Ok(Self {
+            path,
+            source,
+            track,
+            publication,
+            fps,
+            max_bitrate,
+            encoder,
+        })
     }
 
     async fn unpublish(self, room: &Room) {
-        if let Err(e) = room.local_participant().unpublish_track(&self.publication.sid()).await {
+        if let Err(e) = room
+            .local_participant()
+            .unpublish_track(&self.publication.sid())
+            .await
+        {
             warn!(error = %e, path = ?self.path, "unpublish camera");
         }
     }
@@ -241,10 +292,25 @@ impl CameraPublication {
 
     /// Republish when the encoding settings changed (the old sender stays allocated until leave:
     /// SDK limitation, see `SharePublication`).
-    async fn drop_incompatible(&mut self, room: &Room, path: VideoPath, fps: u32, max_bitrate: u64, encoder: VideoEncoderBackend) {
+    async fn drop_incompatible(
+        &mut self,
+        room: &Room,
+        path: VideoPath,
+        fps: u32,
+        max_bitrate: u64,
+        encoder: VideoEncoderBackend,
+    ) {
         let slot = self.slot(path);
-        if slot.as_ref().is_some_and(|t| t.fps != fps || t.max_bitrate != max_bitrate || t.encoder != encoder) {
-            info!(?path, fps, max_kbps = max_bitrate / 1000, "camera settings changed; republishing the camera track");
+        if slot
+            .as_ref()
+            .is_some_and(|t| t.fps != fps || t.max_bitrate != max_bitrate || t.encoder != encoder)
+        {
+            info!(
+                ?path,
+                fps,
+                max_kbps = max_bitrate / 1000,
+                "camera settings changed; republishing the camera track"
+            );
             if let Some(old) = slot.take() {
                 old.unpublish(room).await;
             }
@@ -266,7 +332,14 @@ impl CameraPublication {
 }
 
 /// A capture that started: (capture, path, video source, frame stage, feedback, timing slot).
-type Started = (vox_capture::CameraCapture, VideoPath, NativeVideoSource, Stage2, Option<Arc<EncodedFeedback>>, TimingSlot);
+type Started = (
+    vox_capture::CameraCapture,
+    VideoPath,
+    NativeVideoSource,
+    Stage2,
+    Option<Arc<EncodedFeedback>>,
+    TimingSlot,
+);
 
 #[allow(dead_code)] // the stages are held so the capture callbacks' targets outlive the capture
 enum Stage2 {
@@ -292,7 +365,7 @@ pub struct ActiveCamera {
 /// Failed camera start: the (muted) publications come back for reuse.
 pub struct CameraStartError {
     pub error: anyhow::Error,
-    /// Portuguese, ready to show.
+    /// English, ready to show.
     pub message: String,
     pub publication: CameraPublication,
 }
@@ -334,41 +407,82 @@ impl ActiveCamera {
         };
         let fail = |error: anyhow::Error, message: String, pubs: CameraPublication| {
             pubs.mute();
-            Box::new(CameraStartError { error, message, publication: pubs })
+            Box::new(CameraStartError {
+                error,
+                message,
+                publication: pubs,
+            })
         };
 
         // 1. Capture first: a camera that cannot start never shows viewers a dead track.
         let make_preview = || preview.as_ref().map(|f| f());
         let mut started: Option<Started> = None;
         let mut last_err: Option<CameraError> = None;
-        let mut used = plan.last().cloned().expect("the plan ends with the processor");
+        let mut used = plan
+            .last()
+            .cloned()
+            .expect("the plan ends with the processor");
         // Hardware encoders in plan order; an encoder that cannot start on its GPU hands over to
         // the next (camera trouble, like a camera in use, ends the start instead).
-        for attempt in plan.iter().filter(|a| !a.is_software() && !encoders::in_libwebrtc(a)) {
-            let cfg = CameraConfig { backend: attempt.backend.unwrap_or(EncoderBackend::Auto), adapter_luid: attempt.luid, ..cfg };
+        for attempt in plan
+            .iter()
+            .filter(|a| !a.is_software() && !encoders::in_libwebrtc(a))
+        {
+            let cfg = CameraConfig {
+                backend: attempt.backend.unwrap_or(EncoderBackend::Auto),
+                adapter_luid: attempt.luid,
+                ..cfg
+            };
             let video_source = match &pubs.encoded {
                 Some(t) => t.source.clone(),
-                None => NativeVideoSource::new_encoded(VideoResolution { width: opts.width, height: opts.height }),
+                None => NativeVideoSource::new_encoded(VideoResolution {
+                    width: opts.width,
+                    height: opts.height,
+                }),
             };
             let feedback = Arc::new(EncodedFeedback::default());
             let timing: TimingSlot = Arc::new(Mutex::new(None));
             let control = Arc::new(OnceLock::new());
-            let mut sink = EncodedSink::new(video_source.clone(), counters.clone(), feedback.clone(), control.clone(), max_bitrate);
+            let mut sink = EncodedSink::new(
+                video_source.clone(),
+                counters.clone(),
+                feedback.clone(),
+                control.clone(),
+                max_bitrate,
+            );
             sink.test = Arc::new(TestHooks::default());
             sink.timing = timing.clone();
-            let stage: EncHandle = Arc::new(Mutex::new(EncStage { stage: Stage::new(false), sink }));
+            let stage: EncHandle = Arc::new(Mutex::new(EncStage {
+                stage: Stage::new(false),
+                sink,
+            }));
             let cb = stage.clone();
             let device = opts.device.clone();
             let pv = make_preview();
             let res = tokio::task::spawn_blocking(move || {
-                vox_capture::start_camera_encoded(&device, cfg, Box::new(move |f| cb.lock().on_frame(f)), pv)
+                vox_capture::start_camera_encoded(
+                    &device,
+                    cfg,
+                    Box::new(move |f| cb.lock().on_frame(f)),
+                    pv,
+                )
             })
             .await
-            .map_err(|e| CameraError { fault: CameraFault::Other, detail: format!("camera start task: {e}") });
+            .map_err(|e| CameraError {
+                fault: CameraFault::Other,
+                detail: format!("camera start task: {e}"),
+            });
             match res.and_then(|r| r) {
                 Ok(cap) => {
                     let _ = control.set(cap.control());
-                    started = Some((cap, VideoPath::Encoded, video_source, Stage2::Encoded(stage), Some(feedback), timing));
+                    started = Some((
+                        cap,
+                        VideoPath::Encoded,
+                        video_source,
+                        Stage2::Encoded(stage),
+                        Some(feedback),
+                        timing,
+                    ));
                     used = attempt.clone();
                     break;
                 }
@@ -386,18 +500,45 @@ impl ActiveCamera {
         if started.is_none() && last_err.is_none() {
             let video_source = match &pubs.raw {
                 Some(t) => t.source.clone(),
-                None => NativeVideoSource::new(VideoResolution { width: opts.width, height: opts.height }, true),
+                None => NativeVideoSource::new(
+                    VideoResolution {
+                        width: opts.width,
+                        height: opts.height,
+                    },
+                    true,
+                ),
             };
-            let stage: RawHandle = Arc::new(Mutex::new(RawStage { stage: Stage::new(false), source: video_source.clone(), counters: counters.clone() }));
+            let stage: RawHandle = Arc::new(Mutex::new(RawStage {
+                stage: Stage::new(false),
+                source: video_source.clone(),
+                counters: counters.clone(),
+            }));
             let cb = stage.clone();
             let device = opts.device.clone();
             let pv = make_preview();
-            let res = tokio::task::spawn_blocking(move || vox_capture::start_camera_raw(&device, cfg, Box::new(move |f| cb.lock().on_frame(f)), pv))
-                .await
-                .map_err(|e| CameraError { fault: CameraFault::Other, detail: format!("camera start task: {e}") });
+            let res = tokio::task::spawn_blocking(move || {
+                vox_capture::start_camera_raw(
+                    &device,
+                    cfg,
+                    Box::new(move |f| cb.lock().on_frame(f)),
+                    pv,
+                )
+            })
+            .await
+            .map_err(|e| CameraError {
+                fault: CameraFault::Other,
+                detail: format!("camera start task: {e}"),
+            });
             match res.and_then(|r| r) {
                 Ok(cap) => {
-                    started = Some((cap, VideoPath::Raw, video_source, Stage2::Raw(stage), None, Arc::new(Mutex::new(None))));
+                    started = Some((
+                        cap,
+                        VideoPath::Raw,
+                        video_source,
+                        Stage2::Raw(stage),
+                        None,
+                        Arc::new(Mutex::new(None)),
+                    ));
                     if let Some(a) = raw_hw {
                         used = a;
                     }
@@ -406,12 +547,19 @@ impl ActiveCamera {
             }
         }
         let Some((capture, path, video_source, stage, feedback, timing)) = started else {
-            let e = last_err.unwrap_or(CameraError { fault: CameraFault::Other, detail: "camera did not start".into() });
+            let e = last_err.unwrap_or(CameraError {
+                fault: CameraFault::Other,
+                detail: "camera did not start".into(),
+            });
             let message = camera_failure_pt(&e);
             return Err(fail(anyhow!("camera start failed: {e}"), message, pubs));
         };
         let format = capture.format();
-        let backend = if path == VideoPath::Raw && encoders::in_libwebrtc(&used) { "videotoolbox" } else { backend_name(capture.backend()) };
+        let backend = if path == VideoPath::Raw && encoders::in_libwebrtc(&used) {
+            "videotoolbox"
+        } else {
+            backend_name(capture.backend())
+        };
         // The user's image settings, as soon as the device is open.
         capture.apply_controls(&opts.setup.controls);
 
@@ -420,13 +568,20 @@ impl ActiveCamera {
             VideoPath::Raw => raw_encoder,
             VideoPath::Encoded => VideoEncoderBackend::PreEncoded,
         };
-        pubs.drop_incompatible(room, path, opts.fps, max_bitrate, encoder).await;
+        pubs.drop_incompatible(room, path, opts.fps, max_bitrate, encoder)
+            .await;
         if pubs.slot(path).is_none() {
-            match CameraTrack::publish(room, path, video_source, opts.fps, max_bitrate, encoder).await {
+            match CameraTrack::publish(room, path, video_source, opts.fps, max_bitrate, encoder)
+                .await
+            {
                 Ok(t) => *pubs.slot(path) = Some(t),
                 Err(e) => {
                     drop(capture);
-                    return Err(fail(e, "Não foi possível publicar a câmera na sala.".into(), pubs));
+                    return Err(fail(
+                        e,
+                        "Could not publish the camera to the room.".into(),
+                        pubs,
+                    ));
                 }
             }
         }
@@ -487,7 +642,17 @@ impl ActiveCamera {
 
     /// `"nvenc"` / `"mf"` (pre-encoded), `"videotoolbox"` (macOS, inside libwebrtc) or `"software"`.
     pub fn backend(&self) -> String {
-        self.encoder.as_ref().map(|(b, _)| b.clone()).unwrap_or_else(|| if encoders::in_libwebrtc(&self.attempt) { "videotoolbox" } else { "software" }.into())
+        self.encoder
+            .as_ref()
+            .map(|(b, _)| b.clone())
+            .unwrap_or_else(|| {
+                if encoders::in_libwebrtc(&self.attempt) {
+                    "videotoolbox"
+                } else {
+                    "software"
+                }
+                .into()
+            })
     }
 
     /// The encoder in use.
@@ -508,7 +673,11 @@ impl ActiveCamera {
     pub fn encoder_report(&self) -> Option<EncoderReport> {
         let (backend, feedback) = self.encoder.as_ref()?;
         let hw = self.capture.as_ref().map(|c| c.stats().encoded);
-        Some(EncoderReport { backend: backend.clone(), feedback: feedback.clone(), hw })
+        Some(EncoderReport {
+            backend: backend.clone(),
+            feedback: feedback.clone(),
+            hw,
+        })
     }
 
     pub fn capture_stats(&self) -> Option<vox_capture::CameraStats> {
@@ -520,9 +689,15 @@ impl ActiveCamera {
     pub fn stop(mut self) -> CameraPublication {
         let t0 = std::time::Instant::now();
         self.capture.take();
-        let publication = self.publication.take().expect("publication present while the camera runs");
+        let publication = self
+            .publication
+            .take()
+            .expect("publication present while the camera runs");
         publication.mute();
-        info!(release_ms = t0.elapsed().as_millis() as u64, "camera off (device released, track muted for reuse)");
+        info!(
+            release_ms = t0.elapsed().as_millis() as u64,
+            "camera off (device released, track muted for reuse)"
+        );
         publication
     }
 }
@@ -532,26 +707,49 @@ pub const PREVIEW_KEY: &str = "cam:preview";
 
 /// The camera picker's preview: the camera with no encoder, its small frames in the viewer tile
 /// [`PREVIEW_KEY`] (shown once the app attaches a host for it; the capture mirrors them itself
-/// when "Espelhar minha prévia" is on). Dropping it releases the camera and closes the tile.
+/// when "Mirror my preview" is on). Dropping it releases the camera and closes the tile.
 pub struct CameraPreview {
     capture: Option<vox_capture::CameraCapture>,
 }
 
 impl CameraPreview {
-    /// Blocks while the camera opens (call it off the async runtime). The error is Portuguese.
-    pub fn start(device: &str, quality: CameraQuality) -> std::result::Result<CameraPreview, String> {
+    /// Blocks while the camera opens (call it off the async runtime). The error is English.
+    pub fn start(
+        device: &str,
+        quality: CameraQuality,
+    ) -> std::result::Result<CameraPreview, String> {
         Self::start_with(device, quality, &CameraSetup::default())
     }
 
     /// [`CameraPreview::start`] with the saved native mode, picture processing and image controls.
-    pub fn start_with(device: &str, quality: CameraQuality, setup: &CameraSetup) -> std::result::Result<CameraPreview, String> {
+    pub fn start_with(
+        device: &str,
+        quality: CameraQuality,
+        setup: &CameraSetup,
+    ) -> std::result::Result<CameraPreview, String> {
         let stream = match super::Viewer::get() {
-            Ok(v) if v.is_native() => v.open_tile(PREVIEW_KEY, super::TileStyle { mirror: false, fill: true }, tokio::sync::mpsc::unbounded_channel().0),
+            Ok(v) if v.is_native() => v.open_tile(
+                PREVIEW_KEY,
+                super::TileStyle {
+                    mirror: false,
+                    fill: true,
+                },
+                tokio::sync::mpsc::unbounded_channel().0,
+            ),
             _ => super::ViewerStream::null(),
         };
         let (width, height, fps) = quality.dims();
-        let fps = setup.mode.map_or(fps, |m| ((m.fps() + 0.5) as u32).clamp(1, 60));
-        let cfg = CameraConfig { width, height, fps, mode: setup.mode, transform: setup.transform, ..Default::default() };
+        let fps = setup
+            .mode
+            .map_or(fps, |m| ((m.fps() + 0.5) as u32).clamp(1, 60));
+        let cfg = CameraConfig {
+            width,
+            height,
+            fps,
+            mode: setup.mode,
+            transform: setup.transform,
+            ..Default::default()
+        };
         let cb: FrameCallback = Box::new(move |f| {
             stream.submit_nv12(f);
         });
@@ -579,7 +777,10 @@ impl CameraPreview {
     }
 
     pub fn failure(&self) -> Option<String> {
-        self.capture.as_ref().and_then(|c| c.failure()).map(|e| camera_failure_pt(&e))
+        self.capture
+            .as_ref()
+            .and_then(|c| c.failure())
+            .map(|e| camera_failure_pt(&e))
     }
 }
 
@@ -644,7 +845,8 @@ impl CameraProbe {
 }
 
 /// Per camera: the frame size and the corner samples of the last frames.
-type ProbeMap = std::collections::HashMap<String, ((u32, u32), std::collections::VecDeque<[u8; 4]>)>;
+type ProbeMap =
+    std::collections::HashMap<String, ((u32, u32), std::collections::VecDeque<[u8; 4]>)>;
 
 fn probes() -> &'static Mutex<ProbeMap> {
     static P: OnceLock<Mutex<ProbeMap>> = OnceLock::new();
@@ -678,7 +880,12 @@ pub(crate) fn probe_frame(identity: &str, buf: &dyn livekit::webrtc::video_frame
         }
         (s / 64) as u8
     };
-    let s = [mean(14, 14), mean(w - 22, 14), mean(14, h - 22), mean(w - 22, h - 22)];
+    let s = [
+        mean(14, 14),
+        mean(w - 22, 14),
+        mean(14, h - 22),
+        mean(w - 22, h - 22),
+    ];
     let mut map = probes().lock();
     let (size, ring) = map.entry(identity.to_string()).or_default();
     if *size != (w as u32, h as u32) {
@@ -704,12 +911,19 @@ pub fn camera_probe(identity: &str) -> Option<CameraProbe> {
             dark[i] = dark[i].min(s[i]);
         }
     }
-    Some(CameraProbe { width: *w, height: *h, dark, frames: ring.len() })
+    Some(CameraProbe {
+        width: *w,
+        height: *h,
+        dark,
+        frames: ring.len(),
+    })
 }
 
 /// Copy one self-view frame into a decoded-frame box for the viewer (two plane copies; the
 /// frames are small, 640x360 at most by default).
-pub(crate) fn preview_frame(f: &vox_capture::Nv12Frame<'_>) -> Option<livekit::webrtc::video_frame::BoxVideoFrame> {
+pub(crate) fn preview_frame(
+    f: &vox_capture::Nv12Frame<'_>,
+) -> Option<livekit::webrtc::video_frame::BoxVideoFrame> {
     use livekit::webrtc::video_frame::{NV12Buffer, VideoFrame, VideoRotation};
     let (w, h) = (f.width, f.height);
     if w < 2 || h < 2 {
@@ -719,12 +933,20 @@ pub(crate) fn preview_frame(f: &vox_capture::Nv12Frame<'_>) -> Option<livekit::w
     if !fill_nv12(&mut buf, f) {
         return None;
     }
-    Some(VideoFrame { rotation: VideoRotation::VideoRotation0, timestamp_us: f.timestamp_us, frame_metadata: None, buffer: Box::new(buf) })
+    Some(VideoFrame {
+        rotation: VideoRotation::VideoRotation0,
+        timestamp_us: f.timestamp_us,
+        frame_metadata: None,
+        buffer: Box::new(buf),
+    })
 }
 
 /// Copy a captured NV12 frame into `buf` (same size), plane by plane. `false` when the frame is
 /// malformed or does not fit.
-pub(crate) fn fill_nv12(buf: &mut livekit::webrtc::video_frame::NV12Buffer, f: &vox_capture::Nv12Frame<'_>) -> bool {
+pub(crate) fn fill_nv12(
+    buf: &mut livekit::webrtc::video_frame::NV12Buffer,
+    f: &vox_capture::Nv12Frame<'_>,
+) -> bool {
     use livekit::webrtc::video_frame::VideoBuffer;
     let (w, h) = (f.width, f.height);
     if w < 2 || h < 2 || buf.width() != w || buf.height() != h {
@@ -733,8 +955,21 @@ pub(crate) fn fill_nv12(buf: &mut livekit::webrtc::video_frame::NV12Buffer, f: &
     let (dsy, dsuv) = buf.strides();
     let (dy, duv) = buf.data_mut();
     let uv_row = (w.div_ceil(2) * 2) as usize;
-    super::publish::copy_plane(f.y, f.y_stride as usize, dy, dsy as usize, w as usize, h as usize)
-        && super::publish::copy_plane(f.uv, f.uv_stride as usize, duv, dsuv as usize, uv_row, h.div_ceil(2) as usize)
+    super::publish::copy_plane(
+        f.y,
+        f.y_stride as usize,
+        dy,
+        dsy as usize,
+        w as usize,
+        h as usize,
+    ) && super::publish::copy_plane(
+        f.uv,
+        f.uv_stride as usize,
+        duv,
+        dsuv as usize,
+        uv_row,
+        h.div_ceil(2) as usize,
+    )
 }
 
 #[cfg(test)]
@@ -749,7 +984,10 @@ mod tests {
         let b1080 = camera_bitrate(1920, 1080, 30);
         assert!((2_100_000..=2_300_000).contains(&b1080), "{b1080}");
         assert!(camera_bitrate(160, 90, 5) >= 250_000);
-        assert_eq!(CameraOptions::with_quality("", CameraQuality::P540).bitrate(), camera_bitrate(960, 540, 30));
+        assert_eq!(
+            CameraOptions::with_quality("", CameraQuality::P540).bitrate(),
+            camera_bitrate(960, 540, 30)
+        );
     }
 
     #[test]
@@ -757,7 +995,10 @@ mod tests {
         use vox_capture::{CameraRotation, CameraSubtype};
         let adj = |id, value, auto| CameraAdjust { id, value, auto };
         let old = CameraSetup {
-            controls: vec![adj(CameraControlId::Brightness, 100, false), adj(CameraControlId::Exposure, -5, false)],
+            controls: vec![
+                adj(CameraControlId::Brightness, 100, false),
+                adj(CameraControlId::Exposure, -5, false),
+            ],
             ..Default::default()
         };
         assert!(setup_delta(&old, &old).is_empty());
@@ -765,7 +1006,11 @@ mod tests {
         // One slider moved; one control back to its default; the zoom changed.
         let new = CameraSetup {
             controls: vec![adj(CameraControlId::Brightness, 120, false)],
-            transform: CameraTransform { zoom_pct: 150, rotation: CameraRotation::Cw90, ..Default::default() },
+            transform: CameraTransform {
+                zoom_pct: 150,
+                rotation: CameraRotation::Cw90,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let d = setup_delta(&old, &new);
@@ -775,34 +1020,78 @@ mod tests {
         assert!(!d.restart);
 
         // A new native mode needs a restart; nothing else does.
-        let mode = CameraMode { width: 1280, height: 720, fps_milli: 30_000, subtype: CameraSubtype::Mjpg };
-        let d = setup_delta(&old, &CameraSetup { mode: Some(mode), ..old.clone() });
+        let mode = CameraMode {
+            width: 1280,
+            height: 720,
+            fps_milli: 30_000,
+            subtype: CameraSubtype::Mjpg,
+        };
+        let d = setup_delta(
+            &old,
+            &CameraSetup {
+                mode: Some(mode),
+                ..old.clone()
+            },
+        );
         assert!(d.restart && d.set.is_empty() && d.reset.is_empty() && d.transform.is_none());
 
         // A chosen mode sets the published frame rate.
-        let o = CameraOptions::with_quality("", CameraQuality::P720).with_setup(CameraSetup { mode: Some(CameraMode { fps_milli: 15_000, ..mode }), ..Default::default() });
+        let o = CameraOptions::with_quality("", CameraQuality::P720).with_setup(CameraSetup {
+            mode: Some(CameraMode {
+                fps_milli: 15_000,
+                ..mode
+            }),
+            ..Default::default()
+        });
         assert_eq!(o.fps, 15);
         assert!(o.bitrate() < camera_bitrate(1280, 720, 30));
     }
 
     #[test]
     fn probe_names_the_marker_corner() {
-        let p = |w, h, dark| CameraProbe { width: w, height: h, dark, frames: PROBE_WINDOW };
+        let p = |w, h, dark| CameraProbe {
+            width: w,
+            height: h,
+            dark,
+            frames: PROBE_WINDOW,
+        };
         assert_eq!(p(1280, 720, [16, 90, 150, 150]).label(), "L-TL");
         assert_eq!(p(720, 1280, [90, 16, 150, 150]).label(), "P-TR");
         assert_eq!(p(1280, 720, [90, 90, 150, 150]).label(), "L-none");
         // Two dark corners = a window that straddles a change: not settled.
         assert!(!p(1280, 720, [16, 16, 150, 150]).settled());
         assert!(p(1280, 720, [90, 90, 150, 150]).settled());
-        assert!(!CameraProbe { frames: 5, ..p(1280, 720, [90, 90, 150, 150]) }.settled());
+        assert!(!CameraProbe {
+            frames: 5,
+            ..p(1280, 720, [90, 90, 150, 150])
+        }
+        .settled());
     }
 
     #[test]
-    fn failures_have_portuguese_text() {
-        for fault in [CameraFault::NotFound, CameraFault::InUse, CameraFault::AccessDenied, CameraFault::Disconnected, CameraFault::NoFrames, CameraFault::Unsupported, CameraFault::Other] {
-            let t = camera_failure_pt(&CameraError { fault, detail: "x".into() });
-            assert!(t.contains("câmera") || t.contains("Câmera"), "{fault:?}: {t}");
+    fn failures_have_english_text() {
+        for fault in [
+            CameraFault::NotFound,
+            CameraFault::InUse,
+            CameraFault::AccessDenied,
+            CameraFault::Disconnected,
+            CameraFault::NoFrames,
+            CameraFault::Unsupported,
+            CameraFault::Other,
+        ] {
+            let t = camera_failure_pt(&CameraError {
+                fault,
+                detail: "x".into(),
+            });
+            assert!(
+                t.contains("camera") || t.contains("Camera"),
+                "{fault:?}: {t}"
+            );
         }
-        assert!(camera_failure_pt(&CameraError { fault: CameraFault::AccessDenied, detail: String::new() }).contains("Privacidade"));
+        assert!(camera_failure_pt(&CameraError {
+            fault: CameraFault::AccessDenied,
+            detail: String::new()
+        })
+        .contains("Privacy"));
     }
 }

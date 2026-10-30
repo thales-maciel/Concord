@@ -106,7 +106,10 @@ impl Drop for SlotInner {
 
 impl Slots {
     pub fn new(limits: Limits) -> Self {
-        Slots { limits: Arc::new(limits), counts: Arc::default() }
+        Slots {
+            limits: Arc::new(limits),
+            counts: Arc::default(),
+        }
     }
 
     /// A slot for a new connection from `ip`, or `None` when a cap is reached.
@@ -119,7 +122,10 @@ impl Slots {
         }
         c.total += 1;
         *c.per_ip.entry(ip).or_default() += 1;
-        Some(ConnSlot(Arc::new(SlotInner { ip, counts: self.counts.clone() })))
+        Some(ConnSlot(Arc::new(SlotInner {
+            ip,
+            counts: self.counts.clone(),
+        })))
     }
 
     /// Connections open right now (tests).
@@ -131,7 +137,11 @@ impl Slots {
 /// Request timeout middleware (see [`Limits`]).
 pub async fn timeout_layer(limits: Arc<Limits>, req: Request, next: Next) -> Response {
     let path = req.uri().path();
-    let limit = if path == "/api/login" || path == "/api/health" { limits.login_timeout } else { limits.request_timeout };
+    let limit = if path == "/api/login" || path == "/api/health" {
+        limits.login_timeout
+    } else {
+        limits.request_timeout
+    };
     match tokio::time::timeout(limit, next.run(req)).await {
         Ok(r) => r,
         Err(_) => (StatusCode::REQUEST_TIMEOUT, "request timed out").into_response(),
@@ -139,7 +149,12 @@ pub async fn timeout_layer(limits: Arc<Limits>, req: Request, next: Next) -> Res
 }
 
 /// Accept and serve connections until `shutdown`; then let the open ones finish (bounded).
-pub async fn serve(listener: TcpListener, app: Router, slots: Slots, mut shutdown: watch::Receiver<bool>) {
+pub async fn serve(
+    listener: TcpListener,
+    app: Router,
+    slots: Slots,
+    mut shutdown: watch::Receiver<bool>,
+) {
     let limits = slots.limits.clone();
     // Every connection task holds a sender; all of them gone = all connections closed.
     let (alive_tx, mut alive_rx) = mpsc::channel::<Infallible>(1);
@@ -172,18 +187,22 @@ pub async fn serve(listener: TcpListener, app: Router, slots: Slots, mut shutdow
         tokio::spawn(async move {
             let _alive = alive;
             let svc_slot = slot.clone();
-            let svc = hyper::service::service_fn(move |mut req: hyper::Request<hyper::body::Incoming>| {
-                req.extensions_mut().insert(ConnectInfo(peer));
-                req.extensions_mut().insert(svc_slot.clone());
-                app.clone().oneshot(req.map(axum::body::Body::new))
-            });
+            let svc = hyper::service::service_fn(
+                move |mut req: hyper::Request<hyper::body::Incoming>| {
+                    req.extensions_mut().insert(ConnectInfo(peer));
+                    req.extensions_mut().insert(svc_slot.clone());
+                    app.clone().oneshot(req.map(axum::body::Body::new))
+                },
+            );
             let mut builder = hyper::server::conn::http1::Builder::new();
             builder
                 .timer(TokioTimer::new())
                 .header_read_timeout(limits.header_read_timeout)
                 .max_buf_size(limits.max_buf.max(8192))
                 .keep_alive(true);
-            let conn = builder.serve_connection(TokioIo::new(stream), svc).with_upgrades();
+            let conn = builder
+                .serve_connection(TokioIo::new(stream), svc)
+                .with_upgrades();
             tokio::pin!(conn);
             tokio::select! {
                 r = conn.as_mut() => {

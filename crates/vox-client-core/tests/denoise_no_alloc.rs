@@ -78,7 +78,11 @@ fn denoiser_does_not_allocate_in_steady_state_or_when_switching() {
         }
         d.process(&mut chunk);
     }
-    assert_eq!(allocations() - before, 0, "the denoiser allocated in the audio path");
+    assert_eq!(
+        allocations() - before,
+        0,
+        "the denoiser allocated in the audio path"
+    );
     // The counter itself works.
     let v = std::hint::black_box(vec![1u8; 64]);
     assert!(allocations() > before && v.len() == 64);
@@ -90,7 +94,7 @@ fn ai_max_does_not_allocate_in_the_audio_path() {
     let mut d = Denoiser::new(ctl.clone());
     let mut chunk = [0i16; FRAME];
     let mut x = 7u32;
-    // Warm-up at IA leve (RNNoise sets up its tables lazily, once per process), then Padrão.
+    // Warm-up at Light AI (RNNoise sets up its tables lazily, once per process), then Default.
     for k in 0..20 {
         fill(&mut chunk, k, &mut x);
         d.process(&mut chunk);
@@ -114,7 +118,12 @@ fn ai_max_does_not_allocate_in_the_audio_path() {
         }
         allocated += process_counted(&mut d, &mut chunk);
     }
-    assert!(d.dfn_frames > 250, "DeepFilterNet ran ({} frames, level {:?})", d.dfn_frames, ctl.level());
+    assert!(
+        d.dfn_frames > 250,
+        "DeepFilterNet ran ({} frames, level {:?})",
+        d.dfn_frames,
+        ctl.level()
+    );
     // Real time (late frames replaced by the input, the hand-off growing): still nothing.
     d.set_offline(false);
     for k in 500..600 {
@@ -122,7 +131,10 @@ fn ai_max_does_not_allocate_in_the_audio_path() {
         allocated += process_counted(&mut d, &mut chunk);
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    assert_eq!(allocated, 0, "the denoiser allocated in the audio path at IA máxima");
+    assert_eq!(
+        allocated, 0,
+        "the denoiser allocated in the audio path at Maximum AI"
+    );
 }
 
 #[test]
@@ -134,16 +146,22 @@ fn voice_changer_does_not_allocate_in_the_audio_path() {
     let mut allocated = 0;
     let before = allocations();
     // Every effect in turn (each switch crossfades and primes the pitch shifter), the intensity
-    // moving all the time, a mute in the middle of an effect, odd chunk sizes, back to Desligado.
+    // moving all the time, a mute in the middle of an effect, odd chunk sizes, back to Off.
     let effects = VoiceEffect::ALL;
     for k in 0..1_200 {
         fill(&mut chunk, k, &mut x);
         if k % 60 == 0 {
             let effect = effects[(k / 60) % effects.len()];
-            ctl.voice_fx().set(VoiceFxConfig { effect, intensity_pct: (k as u32 * 7) % 101 });
+            ctl.voice_fx().set(VoiceFxConfig {
+                effect,
+                intensity_pct: (k as u32 * 7) % 101,
+            });
         } else if k % 7 == 0 {
             let effect = ctl.voice_fx().effect();
-            ctl.voice_fx().set(VoiceFxConfig { effect, intensity_pct: (k as u32 * 13) % 101 });
+            ctl.voice_fx().set(VoiceFxConfig {
+                effect,
+                intensity_pct: (k as u32 * 13) % 101,
+            });
         }
         if k == 700 {
             fx.reset();
@@ -159,6 +177,9 @@ fn voice_changer_does_not_allocate_in_the_audio_path() {
         allocated += allocations() - b;
     }
     assert!(fx.blocks > 900, "the effects ran ({} blocks)", fx.blocks);
-    assert_eq!(allocated, 0, "the voice changer allocated in the audio path");
+    assert_eq!(
+        allocated, 0,
+        "the voice changer allocated in the audio path"
+    );
     assert_eq!(allocations() - before, 0);
 }

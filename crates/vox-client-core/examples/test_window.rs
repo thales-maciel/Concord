@@ -26,7 +26,11 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::{Window, WindowId};
 
-type Win = (Rc<Window>, softbuffer::Surface<Rc<Window>, Rc<Window>>, softbuffer::Context<Rc<Window>>);
+type Win = (
+    Rc<Window>,
+    softbuffer::Surface<Rc<Window>, Rc<Window>>,
+    softbuffer::Context<Rc<Window>>,
+);
 
 struct App {
     physical: Option<(u32, u32)>,
@@ -50,7 +54,10 @@ impl ApplicationHandler for App {
         }
         // A test target only: it never takes the user's foreground (shown without activation, then
         // `WS_EX_NOACTIVATE` at the bottom of the z-order; WGC captures it all the same).
-        let mut attrs = Window::default_attributes().with_title("vox test window").with_inner_size(LogicalSize::new(1280.0, 720.0)).with_active(false);
+        let mut attrs = Window::default_attributes()
+            .with_title("vox test window")
+            .with_inner_size(LogicalSize::new(1280.0, 720.0))
+            .with_active(false);
         if let Some((w, h)) = self.physical {
             attrs = attrs.with_inner_size(winit::dpi::PhysicalSize::new(w, h));
         }
@@ -92,7 +99,11 @@ impl ApplicationHandler for App {
             if now.duration_since(self.last_resize) >= every {
                 self.last_resize = now;
                 self.big = !self.big;
-                let size = if self.big { LogicalSize::new(1280.0, 720.0) } else { LogicalSize::new(960.0, 600.0) };
+                let size = if self.big {
+                    LogicalSize::new(1280.0, 720.0)
+                } else {
+                    LogicalSize::new(960.0, 600.0)
+                };
                 let _ = w.request_inner_size(size);
                 println!("resized to {}x{} (logical)", size.width, size.height);
             }
@@ -119,13 +130,20 @@ impl App {
         if self.still && self.frame >= 10 {
             return; // nothing new to show: no present, so the window's content stays unchanged
         }
-        let Some((w, surface, _)) = self.win.as_mut() else { return };
+        let Some((w, surface, _)) = self.win.as_mut() else {
+            return;
+        };
         let size = w.inner_size();
-        let (Some(ww), Some(wh)) = (NonZeroU32::new(size.width), NonZeroU32::new(size.height)) else { return };
+        let (Some(ww), Some(wh)) = (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
+        else {
+            return;
+        };
         if surface.resize(ww, wh).is_err() {
             return;
         }
-        let Ok(mut buf) = surface.buffer_mut() else { return };
+        let Ok(mut buf) = surface.buffer_mut() else {
+            return;
+        };
         let (ww, wh) = (ww.get() as usize, wh.get() as usize);
         let t = self.frame as usize;
         // Colour gradient that scrolls, plus a moving white bar: cheap and clearly animated.
@@ -149,7 +167,10 @@ impl App {
 }
 
 fn arg(args: &[String], name: &str) -> Option<f64> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok())
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse().ok())
 }
 
 fn main() {
@@ -158,8 +179,18 @@ fn main() {
     let mut app = App {
         fps: arg(&args, "--fps").unwrap_or(60.0) as u32,
         still: args.iter().any(|a| a == "--still"),
-        pos: args.iter().position(|a| a == "--pos").and_then(|i| args.get(i + 1)).and_then(|v| v.split_once(',')).and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?))),
-        physical: args.iter().position(|a| a == "--physical-size").and_then(|i| args.get(i + 1)).and_then(|v| v.split_once('x')).and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))),
+        pos: args
+            .iter()
+            .position(|a| a == "--pos")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|v| v.split_once(','))
+            .and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?))),
+        physical: args
+            .iter()
+            .position(|a| a == "--physical-size")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|v| v.split_once('x'))
+            .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))),
         resize_every: arg(&args, "--resize-every").map(Duration::from_secs_f64),
         close_after: arg(&args, "--close-after").map(Duration::from_secs_f64),
         start: Instant::now(),

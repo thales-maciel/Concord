@@ -44,13 +44,15 @@ use windows_core::PCWSTR;
 
 use super::camctl::{Controls, CtlQueue};
 use super::encode::{self, mf_startup, EncParams, EncShared, EncoderSink, Tuning};
-use super::video::{self, Converter, Pace, Pacer, Readback, Shared, Sink, SinkCtx, Xform, YuvSpace};
+use super::video::{
+    self, Converter, Pace, Pacer, Readback, Shared, Sink, SinkCtx, Xform, YuvSpace,
+};
 use super::{monotonic_now_us, ComInit, Event, OwnedHandle};
 use crate::{
-    camera_geometry, CameraAdjust, CameraConfig, CameraControl, CameraControlId, CameraError, CameraFault,
-    CameraFormat, CameraGeometry, CameraInfo, CameraMode, CameraRotation, CameraStats, CameraSubtype,
-    CameraTransform, CaptureError, DegradationPreference, EncodedCallback, EncoderBackend, EncoderControl,
-    FrameCallback, LowLightDetector, Result, SYNTHETIC_CAMERA_ID,
+    camera_geometry, CameraAdjust, CameraConfig, CameraControl, CameraControlId, CameraError,
+    CameraFault, CameraFormat, CameraGeometry, CameraInfo, CameraMode, CameraRotation, CameraStats,
+    CameraSubtype, CameraTransform, CaptureError, DegradationPreference, EncodedCallback,
+    EncoderBackend, EncoderControl, FrameCallback, LowLightDetector, Result, SYNTHETIC_CAMERA_ID,
 };
 
 const FIRST_VIDEO: u32 = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
@@ -75,7 +77,10 @@ pub enum CameraOutput {
 // ---------------------------------------------------------------------------------------------
 
 fn cam_err(fault: CameraFault, detail: impl Into<String>) -> CameraError {
-    CameraError { fault, detail: detail.into() }
+    CameraError {
+        fault,
+        detail: detail.into(),
+    }
 }
 
 /// Map a Media Foundation / Win32 failure to what the user can act on.
@@ -156,7 +161,9 @@ fn enum_devices() -> std::result::Result<Vec<(IMFActivate, CameraInfo)>, CameraE
 
 /// [`enum_devices`] through another device interface category (`KSCATEGORY_VIDEO_CAMERA` is
 /// Windows' default).
-fn enum_devices_in(category: Option<&GUID>) -> std::result::Result<Vec<(IMFActivate, CameraInfo)>, CameraError> {
+fn enum_devices_in(
+    category: Option<&GUID>,
+) -> std::result::Result<Vec<(IMFActivate, CameraInfo)>, CameraError> {
     mf_startup().map_err(cap_err)?;
     unsafe {
         let mut attrs: Option<IMFAttributes> = None;
@@ -169,7 +176,9 @@ fn enum_devices_in(category: Option<&GUID>) -> std::result::Result<Vec<(IMFActiv
             )
             .map_err(|e| mf_err("SetGUID(SOURCE_TYPE)", e))?;
         if let Some(c) = category {
-            attrs.SetGUID(&MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_CATEGORY, c).map_err(|e| mf_err("SetGUID(VIDCAP_CATEGORY)", e))?;
+            attrs
+                .SetGUID(&MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_CATEGORY, c)
+                .map_err(|e| mf_err("SetGUID(VIDCAP_CATEGORY)", e))?;
         }
         let mut list: *mut Option<IMFActivate> = std::ptr::null_mut();
         let mut count = 0u32;
@@ -180,9 +189,12 @@ fn enum_devices_in(category: Option<&GUID>) -> std::result::Result<Vec<(IMFActiv
             for slot in std::slice::from_raw_parts_mut(list, count as usize) {
                 if let Some(a) = slot.take() {
                     let name = allocated_string(&a, &MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME)
-                        .unwrap_or_else(|| "Câmera".into());
-                    let id = allocated_string(&a, &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK)
-                        .unwrap_or_else(|| name.clone());
+                        .unwrap_or_else(|| "Camera".into());
+                    let id = allocated_string(
+                        &a,
+                        &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK,
+                    )
+                    .unwrap_or_else(|| name.clone());
                     out.push((a, CameraInfo { id, name }));
                 }
             }
@@ -193,9 +205,10 @@ fn enum_devices_in(category: Option<&GUID>) -> std::result::Result<Vec<(IMFActiv
 }
 
 pub fn list_cameras() -> Result<Vec<CameraInfo>> {
-    let devices = on_mta_thread(|| enum_devices().map(|v| v.into_iter().map(|(_, i)| i).collect::<Vec<_>>()))
-        .ok_or_else(|| CaptureError::Os("camera enumeration thread failed".into()))?
-        .map_err(CaptureError::from)?;
+    let devices =
+        on_mta_thread(|| enum_devices().map(|v| v.into_iter().map(|(_, i)| i).collect::<Vec<_>>()))
+            .ok_or_else(|| CaptureError::Os("camera enumeration thread failed".into()))?
+            .map_err(CaptureError::from)?;
     let mut out = Vec::with_capacity(devices.len() + 1);
     if fake_camera_env() {
         out.push(synthetic_info());
@@ -205,12 +218,20 @@ pub fn list_cameras() -> Result<Vec<CameraInfo>> {
 }
 
 fn synthetic_info() -> CameraInfo {
-    CameraInfo { id: SYNTHETIC_CAMERA_ID.into(), name: "Câmera de teste (sintética)".into() }
+    CameraInfo {
+        id: SYNTHETIC_CAMERA_ID.into(),
+        name: "Test camera (synthetic)".into(),
+    }
 }
 
 /// The modes the synthetic camera pretends to have.
 fn synthetic_modes() -> Vec<CameraMode> {
-    let m = |width: u32, height: u32, fps: u32, subtype| CameraMode { width, height, fps_milli: fps * 1000, subtype };
+    let m = |width: u32, height: u32, fps: u32, subtype| CameraMode {
+        width,
+        height,
+        fps_milli: fps * 1000,
+        subtype,
+    };
     let mut v = vec![
         m(1920, 1080, 15, CameraSubtype::Nv12),
         m(1280, 720, 30, CameraSubtype::Nv12),
@@ -237,9 +258,12 @@ fn device_lock() -> std::sync::MutexGuard<'static, ()> {
 /// When Windows hands the camera out shared (another app holds it, or Windows shares it between
 /// apps), it lists only the one format it streams, already converted (e.g. a single
 /// "NV12 1920x1080 @ 30"): logged, since the format menu then has one entry.
-unsafe fn activate_source(activate: &IMFActivate) -> std::result::Result<IMFMediaSource, CameraError> {
-    let source: IMFMediaSource =
-        activate.ActivateObject().map_err(|e| mf_err("IMFActivate::ActivateObject(camera)", e))?;
+unsafe fn activate_source(
+    activate: &IMFActivate,
+) -> std::result::Result<IMFMediaSource, CameraError> {
+    let source: IMFMediaSource = activate
+        .ActivateObject()
+        .map_err(|e| mf_err("IMFActivate::ActivateObject(camera)", e))?;
     if native_type_count(&source) == 1 {
         tracing::info!("camera lists a single native type (Windows is sharing or converting it): only that format can be chosen");
     }
@@ -248,14 +272,21 @@ unsafe fn activate_source(activate: &IMFActivate) -> std::result::Result<IMFMedi
 
 /// Video media types of the source's first video stream (any subtype).
 unsafe fn native_type_count(source: &IMFMediaSource) -> u32 {
-    let Ok(pd) = source.CreatePresentationDescriptor() else { return 0 };
+    let Ok(pd) = source.CreatePresentationDescriptor() else {
+        return 0;
+    };
     for i in 0..pd.GetStreamDescriptorCount().unwrap_or(0) {
         let mut selected = windows_core::BOOL(0);
         let mut sd: Option<IMFStreamDescriptor> = None;
-        if pd.GetStreamDescriptorByIndex(i, &mut selected, &mut sd).is_err() {
+        if pd
+            .GetStreamDescriptorByIndex(i, &mut selected, &mut sd)
+            .is_err()
+        {
             continue;
         }
-        let Some(handler) = sd.and_then(|sd| sd.GetMediaTypeHandler().ok()) else { continue };
+        let Some(handler) = sd.and_then(|sd| sd.GetMediaTypeHandler().ok()) else {
+            continue;
+        };
         if handler.GetMajorType().ok() == Some(MFMediaType_Video) {
             return handler.GetMediaTypeCount().unwrap_or(0);
         }
@@ -278,29 +309,51 @@ unsafe fn source_modes(source: &IMFMediaSource) -> std::result::Result<Vec<Mode>
     let pd = source
         .CreatePresentationDescriptor()
         .map_err(|e| mf_err("CreatePresentationDescriptor", e))?;
-    let count = pd.GetStreamDescriptorCount().map_err(|e| mf_err("GetStreamDescriptorCount", e))?;
+    let count = pd
+        .GetStreamDescriptorCount()
+        .map_err(|e| mf_err("GetStreamDescriptorCount", e))?;
     let mut out = Vec::new();
     for i in 0..count {
         let mut selected = windows_core::BOOL(0);
         let mut sd: Option<IMFStreamDescriptor> = None;
-        if pd.GetStreamDescriptorByIndex(i, &mut selected, &mut sd).is_err() {
+        if pd
+            .GetStreamDescriptorByIndex(i, &mut selected, &mut sd)
+            .is_err()
+        {
             continue;
         }
         let Some(sd) = sd else { continue };
-        let Ok(handler) = sd.GetMediaTypeHandler() else { continue };
+        let Ok(handler) = sd.GetMediaTypeHandler() else {
+            continue;
+        };
         if handler.GetMajorType().ok() != Some(MFMediaType_Video) {
             continue;
         }
         let n = handler.GetMediaTypeCount().unwrap_or(0);
         for j in 0..n.min(512) {
-            let Ok(t) = handler.GetMediaTypeByIndex(j) else { continue };
+            let Ok(t) = handler.GetMediaTypeByIndex(j) else {
+                continue;
+            };
             tracing::trace!(index = j, subtype = ?t.GetGUID(&MF_MT_SUBTYPE).ok(), size = ?frame_size(&t), fps = frame_rate(&t), "camera media type");
-            let Some(fmt) = t.GetGUID(&MF_MT_SUBTYPE).ok().and_then(|g| Fmt::from_subtype(&g)) else { continue };
-            let Some((w, h)) = frame_size(&t) else { continue };
+            let Some(fmt) = t
+                .GetGUID(&MF_MT_SUBTYPE)
+                .ok()
+                .and_then(|g| Fmt::from_subtype(&g))
+            else {
+                continue;
+            };
+            let Some((w, h)) = frame_size(&t) else {
+                continue;
+            };
             if w < 32 || h < 32 {
                 continue;
             }
-            out.push(Mode { fmt, width: w, height: h, fps: frame_rate(&t) });
+            out.push(Mode {
+                fmt,
+                width: w,
+                height: h,
+                fps: frame_rate(&t),
+            });
         }
     }
     Ok(out)
@@ -313,7 +366,9 @@ pub fn list_camera_formats(device: &str) -> std::result::Result<Vec<CameraMode>,
     let device = device.to_string();
     let res = on_mta_thread(move || {
         mf_startup().map_err(cap_err)?;
-        let Device::Mf { activate, .. } = resolve(&device)? else { return Ok(synthetic_modes()) };
+        let Device::Mf { activate, .. } = resolve(&device)? else {
+            return Ok(synthetic_modes());
+        };
         let _lock = device_lock();
         let source = unsafe { activate_source(&activate) }?;
         let modes = unsafe { source_modes(&source) };
@@ -355,15 +410,29 @@ pub fn camera_diagnostics(device: &str) -> std::result::Result<String, CameraErr
                 for i in 0..pd.GetStreamDescriptorCount().unwrap_or(0) {
                     let mut selected = windows_core::BOOL(0);
                     let mut sd: Option<IMFStreamDescriptor> = None;
-                    if pd.GetStreamDescriptorByIndex(i, &mut selected, &mut sd).is_err() {
+                    if pd
+                        .GetStreamDescriptorByIndex(i, &mut selected, &mut sd)
+                        .is_err()
+                    {
                         continue;
                     }
-                    let Some(handler) = sd.and_then(|sd| sd.GetMediaTypeHandler().ok()) else { continue };
+                    let Some(handler) = sd.and_then(|sd| sd.GetMediaTypeHandler().ok()) else {
+                        continue;
+                    };
                     let n = handler.GetMediaTypeCount().unwrap_or(0);
-                    let _ = writeln!(out, "stream {i}: {n} native types (selected={})", selected.as_bool());
+                    let _ = writeln!(
+                        out,
+                        "stream {i}: {n} native types (selected={})",
+                        selected.as_bool()
+                    );
                     for j in 0..n.min(512) {
-                        let Ok(t) = handler.GetMediaTypeByIndex(j) else { continue };
-                        let sub = t.GetGUID(&MF_MT_SUBTYPE).map(|g| subtype_text(&g)).unwrap_or_default();
+                        let Ok(t) = handler.GetMediaTypeByIndex(j) else {
+                            continue;
+                        };
+                        let sub = t
+                            .GetGUID(&MF_MT_SUBTYPE)
+                            .map(|g| subtype_text(&g))
+                            .unwrap_or_default();
                         let (w, h) = frame_size(&t).unwrap_or((0, 0));
                         let _ = writeln!(out, "  {sub} {w}x{h} @ {:.2}", frame_rate(&t));
                     }
@@ -374,14 +443,27 @@ pub fn camera_diagnostics(device: &str) -> std::result::Result<String, CameraErr
             let _ = source.Shutdown();
             let _ = activate.ShutdownObject();
             use windows::Win32::Media::KernelStreaming::{KSCATEGORY_CAPTURE, KSCATEGORY_VIDEO};
-            for (label, cat) in [("KSCATEGORY_VIDEO", KSCATEGORY_VIDEO), ("KSCATEGORY_CAPTURE", KSCATEGORY_CAPTURE)] {
+            for (label, cat) in [
+                ("KSCATEGORY_VIDEO", KSCATEGORY_VIDEO),
+                ("KSCATEGORY_CAPTURE", KSCATEGORY_CAPTURE),
+            ] {
                 match enum_devices_in(Some(&cat)) {
-                    Ok(list) => match list.into_iter().find(|(_, i)| super::dshow::device_instance_key(&i.id) == key) {
+                    Ok(list) => match list
+                        .into_iter()
+                        .find(|(_, i)| super::dshow::device_instance_key(&i.id) == key)
+                    {
                         Some((a, i)) => match a.ActivateObject::<IMFMediaSource>() {
                             Ok(src) => {
                                 let modes = source_modes(&src).unwrap_or_default();
-                                let _ = writeln!(out, "via {label} ({}): {} native types, {} usable", i.id, native_type_count(&src), modes.len());
-                                let mut v: Vec<CameraMode> = modes.iter().map(to_camera_mode).collect();
+                                let _ = writeln!(
+                                    out,
+                                    "via {label} ({}): {} native types, {} usable",
+                                    i.id,
+                                    native_type_count(&src),
+                                    modes.len()
+                                );
+                                let mut v: Vec<CameraMode> =
+                                    modes.iter().map(to_camera_mode).collect();
                                 sort_modes(&mut v);
                                 for m in crate::camera_mode_menu(&v).iter().take(6) {
                                     let _ = writeln!(out, "  {}", m.label());
@@ -409,7 +491,12 @@ pub fn camera_diagnostics(device: &str) -> std::result::Result<String, CameraErr
                 let _ = writeln!(
                     out,
                     "  {}[{}..{}/{} def {} now {}{}{}]",
-                    c.id.key(), c.min, c.max, c.step, c.default, c.value,
+                    c.id.key(),
+                    c.min,
+                    c.max,
+                    c.step,
+                    c.default,
+                    c.value,
                     if c.can_auto { " can-auto" } else { "" },
                     if c.auto { " auto" } else { "" },
                 );
@@ -419,12 +506,20 @@ pub fn camera_diagnostics(device: &str) -> std::result::Result<String, CameraErr
         }
         Ok(out)
     })
-    .unwrap_or_else(|| Err(cam_err(CameraFault::Other, "camera diagnostics thread failed")))
+    .unwrap_or_else(|| {
+        Err(cam_err(
+            CameraFault::Other,
+            "camera diagnostics thread failed",
+        ))
+    })
 }
 
 enum Device {
     Synthetic,
-    Mf { activate: IMFActivate, info: CameraInfo },
+    Mf {
+        activate: IMFActivate,
+        info: CameraInfo,
+    },
 }
 
 /// `device`: id, friendly name, or empty for the default.
@@ -442,7 +537,11 @@ fn resolve(device: &str) -> std::result::Result<Device, CameraError> {
         devices
             .iter()
             .position(|(_, i)| i.id == device)
-            .or_else(|| devices.iter().position(|(_, i)| i.name.eq_ignore_ascii_case(device)))
+            .or_else(|| {
+                devices
+                    .iter()
+                    .position(|(_, i)| i.name.eq_ignore_ascii_case(device))
+            })
             .ok_or_else(|| cam_err(CameraFault::NotFound, format!("no camera {device:?}")))?
     };
     let (activate, info) = devices.swap_remove(i);
@@ -512,7 +611,11 @@ fn mode_cost(m: &Mode, want_w: u32, want_h: u32, want_fps: u32) -> (u32, u32, u3
         10_000 + (want_h - m.height) * 4
     };
     let aspect = |w: u32, h: u32| w as f32 / h.max(1) as f32;
-    let aspect_miss = if (aspect(m.width, m.height) - aspect(want_w, want_h)).abs() > 0.05 { 500 } else { 0 };
+    let aspect_miss = if (aspect(m.width, m.height) - aspect(want_w, want_h)).abs() > 0.05 {
+        500
+    } else {
+        0
+    };
     let too_fast = (m.fps > want_fps as f32 * 1.5) as u32;
     (fps_short, size + aspect_miss, too_fast, m.fmt.rank())
 }
@@ -530,7 +633,12 @@ fn subtype_of(f: Fmt) -> CameraSubtype {
 }
 
 fn to_camera_mode(m: &Mode) -> CameraMode {
-    CameraMode { width: m.width, height: m.height, fps_milli: (m.fps * 1000.0).round() as u32, subtype: subtype_of(m.fmt) }
+    CameraMode {
+        width: m.width,
+        height: m.height,
+        fps_milli: (m.fps * 1000.0).round() as u32,
+        subtype: subtype_of(m.fmt),
+    }
 }
 
 /// The native mode the user chose, if this camera still offers it.
@@ -635,7 +743,11 @@ impl IMFSourceReaderCallback_Impl for ReaderCallback_Impl {
         Ok(())
     }
 
-    fn OnEvent(&self, _stream: u32, _event: windows_core::Ref<IMFMediaEvent>) -> windows_core::Result<()> {
+    fn OnEvent(
+        &self,
+        _stream: u32,
+        _event: windows_core::Ref<IMFMediaEvent>,
+    ) -> windows_core::Result<()> {
         Ok(())
     }
 }
@@ -708,9 +820,11 @@ impl MfCamera {
     ) -> std::result::Result<Self, CameraError> {
         let mut token = 0u32;
         let mut mgr: Option<IMFDXGIDeviceManager> = None;
-        MFCreateDXGIDeviceManager(&mut token, &mut mgr).map_err(|e| mf_err("MFCreateDXGIDeviceManager", e))?;
+        MFCreateDXGIDeviceManager(&mut token, &mut mgr)
+            .map_err(|e| mf_err("MFCreateDXGIDeviceManager", e))?;
         let mgr = mgr.ok_or_else(|| cam_err(CameraFault::Other, "device manager null"))?;
-        mgr.ResetDevice(device, token).map_err(|e| mf_err("IMFDXGIDeviceManager::ResetDevice", e))?;
+        mgr.ResetDevice(device, token)
+            .map_err(|e| mf_err("IMFDXGIDeviceManager::ResetDevice", e))?;
 
         let slot = Arc::new(SampleSlot {
             state: Mutex::new(SlotState::default()),
@@ -722,11 +836,26 @@ impl MfCamera {
         MFCreateAttributes(&mut attrs, 5).map_err(|e| mf_err("MFCreateAttributes", e))?;
         let attrs = attrs.ok_or_else(|| cam_err(CameraFault::Other, "MFCreateAttributes null"))?;
         let set = |r: windows_core::Result<()>, what: &str| r.map_err(|e| mf_err(what, e));
-        set(attrs.SetUnknown(&MF_SOURCE_READER_ASYNC_CALLBACK, &cb), "SetUnknown(ASYNC_CALLBACK)")?;
-        set(attrs.SetUnknown(&MF_SOURCE_READER_D3D_MANAGER, &mgr), "SetUnknown(D3D_MANAGER)")?;
-        set(attrs.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1), "SetUINT32(HW_TRANSFORMS)")?;
-        set(attrs.SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1), "SetUINT32(ADVANCED_VP)")?;
-        set(attrs.SetUINT32(&MF_LOW_LATENCY, 1), "SetUINT32(LOW_LATENCY)")?;
+        set(
+            attrs.SetUnknown(&MF_SOURCE_READER_ASYNC_CALLBACK, &cb),
+            "SetUnknown(ASYNC_CALLBACK)",
+        )?;
+        set(
+            attrs.SetUnknown(&MF_SOURCE_READER_D3D_MANAGER, &mgr),
+            "SetUnknown(D3D_MANAGER)",
+        )?;
+        set(
+            attrs.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1),
+            "SetUINT32(HW_TRANSFORMS)",
+        )?;
+        set(
+            attrs.SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1),
+            "SetUINT32(ADVANCED_VP)",
+        )?;
+        set(
+            attrs.SetUINT32(&MF_LOW_LATENCY, 1),
+            "SetUINT32(LOW_LATENCY)",
+        )?;
         let reader = MFCreateSourceReaderFromMediaSource(&source, &attrs)
             .map_err(|e| mf_err("MFCreateSourceReaderFromMediaSource", e))?;
         let _ = reader.SetStreamSelection(ALL_STREAMS, false);
@@ -738,13 +867,28 @@ impl MfCamera {
         let mut modes = Vec::new();
         let mut types = Vec::new();
         for i in 0..512u32 {
-            let Ok(t) = reader.GetNativeMediaType(FIRST_VIDEO, i) else { break };
-            let Some(fmt) = t.GetGUID(&MF_MT_SUBTYPE).ok().and_then(|g| Fmt::from_subtype(&g)) else { continue };
-            let Some((w, h)) = frame_size(&t) else { continue };
+            let Ok(t) = reader.GetNativeMediaType(FIRST_VIDEO, i) else {
+                break;
+            };
+            let Some(fmt) = t
+                .GetGUID(&MF_MT_SUBTYPE)
+                .ok()
+                .and_then(|g| Fmt::from_subtype(&g))
+            else {
+                continue;
+            };
+            let Some((w, h)) = frame_size(&t) else {
+                continue;
+            };
             if w < 32 || h < 32 {
                 continue;
             }
-            modes.push(Mode { fmt, width: w, height: h, fps: frame_rate(&t) });
+            modes.push(Mode {
+                fmt,
+                width: w,
+                height: h,
+                fps: frame_rate(&t),
+            });
             types.push(t);
         }
         let wanted = cfg.mode.and_then(|m| {
@@ -754,7 +898,8 @@ impl MfCamera {
             }
             i
         });
-        let Some(pick) = wanted.or_else(|| pick_mode(&modes, cfg.width, cfg.height, cfg.fps)) else {
+        let Some(pick) = wanted.or_else(|| pick_mode(&modes, cfg.width, cfg.height, cfg.fps))
+        else {
             return Err(cam_err(
                 CameraFault::Unsupported,
                 "the camera offers no NV12, YUY2 or MJPEG mode",
@@ -778,10 +923,16 @@ impl MfCamera {
             let mut last = None;
             for sub in [MFVideoFormat_NV12, MFVideoFormat_YUY2] {
                 let t = MFCreateMediaType().map_err(|e| mf_err("MFCreateMediaType", e))?;
-                set(t.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video), "SetGUID(MAJOR)")?;
+                set(
+                    t.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video),
+                    "SetGUID(MAJOR)",
+                )?;
                 set(t.SetGUID(&MF_MT_SUBTYPE, &sub), "SetGUID(SUBTYPE)")?;
                 set(
-                    t.SetUINT64(&MF_MT_FRAME_SIZE, ((native.width as u64) << 32) | native.height as u64),
+                    t.SetUINT64(
+                        &MF_MT_FRAME_SIZE,
+                        ((native.width as u64) << 32) | native.height as u64,
+                    ),
                     "SetUINT64(FRAME_SIZE)",
                 )?;
                 match reader.SetCurrentMediaType(FIRST_VIDEO, None, &t) {
@@ -813,11 +964,16 @@ impl MfCamera {
         })
     }
 
-    unsafe fn read_out_type(reader: &IMFSourceReader, native: Fmt) -> std::result::Result<OutType, CameraError> {
+    unsafe fn read_out_type(
+        reader: &IMFSourceReader,
+        native: Fmt,
+    ) -> std::result::Result<OutType, CameraError> {
         let t = reader
             .GetCurrentMediaType(FIRST_VIDEO)
             .map_err(|e| mf_err("GetCurrentMediaType", e))?;
-        let sub = t.GetGUID(&MF_MT_SUBTYPE).map_err(|e| mf_err("GetGUID(SUBTYPE)", e))?;
+        let sub = t
+            .GetGUID(&MF_MT_SUBTYPE)
+            .map_err(|e| mf_err("GetGUID(SUBTYPE)", e))?;
         let fmt = match Fmt::from_subtype(&sub) {
             Some(Fmt::Nv12) => DXGI_FORMAT_NV12,
             Some(Fmt::Yuy2) => DXGI_FORMAT_YUY2,
@@ -828,20 +984,28 @@ impl MfCamera {
                 ))
             }
         };
-        let (width, height) = frame_size(&t).ok_or_else(|| cam_err(CameraFault::Unsupported, "no frame size"))?;
+        let (width, height) =
+            frame_size(&t).ok_or_else(|| cam_err(CameraFault::Unsupported, "no frame size"))?;
         // UVC cameras send BT.601 limited range unless they say otherwise; decoded JPEG is
         // BT.601 full range.
-        let bt709 = t.GetUINT32(&MF_MT_YUV_MATRIX).ok() == Some(MFVideoTransferMatrix_BT709.0 as u32);
+        let bt709 =
+            t.GetUINT32(&MF_MT_YUV_MATRIX).ok() == Some(MFVideoTransferMatrix_BT709.0 as u32);
         let full_range = match t.GetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE) {
             Ok(v) => v == MFNominalRange_0_255.0 as u32,
             Err(_) => native == Fmt::Mjpg,
         };
-        Ok(OutType { fmt, width: width & !1, height: height & !1, space: YuvSpace { bt709, full_range } })
+        Ok(OutType {
+            fmt,
+            width: width & !1,
+            height: height & !1,
+            space: YuvSpace { bt709, full_range },
+        })
     }
 
     fn request(&self) -> std::result::Result<(), CameraError> {
         let Some(r) = &self.reader else { return Ok(()) };
-        unsafe { r.ReadSample(FIRST_VIDEO, 0, None, None, None, None) }.map_err(|e| mf_err("ReadSample", e))
+        unsafe { r.ReadSample(FIRST_VIDEO, 0, None, None, None, None) }
+            .map_err(|e| mf_err("ReadSample", e))
     }
 
     /// Flush, release the reader and shut the device down (camera light off).
@@ -850,7 +1014,10 @@ impl MfCamera {
             self.slot.flushed.reset();
             if unsafe { r.Flush(ALL_STREAMS) }.is_ok() {
                 unsafe {
-                    windows::Win32::System::Threading::WaitForSingleObject(self.slot.flushed.raw(), 1000);
+                    windows::Win32::System::Threading::WaitForSingleObject(
+                        self.slot.flushed.raw(),
+                        1000,
+                    );
                 }
             }
             drop(r);
@@ -898,7 +1065,10 @@ fn texture(
         MipLevels: 1,
         ArraySize: 1,
         Format: fmt,
-        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
         Usage: usage,
         BindFlags: bind,
         CPUAccessFlags: cpu,
@@ -913,15 +1083,60 @@ impl Uploader {
     fn new(device: &ID3D11Device, fmt: DXGI_FORMAT, width: u32, height: u32) -> Result<Self> {
         let os = |e| super::os("CreateTexture2D(camera upload)", e);
         // Video-processor input views need a render-target (or decoder) bindable surface.
-        let tex = texture(device, fmt, width, height, D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET.0 as u32, 0)
-            .or_else(|_| texture(device, fmt, width, height, D3D11_USAGE_DEFAULT, D3D11_BIND_DECODER.0 as u32, 0))
-            .or_else(|_| texture(device, fmt, width, height, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE.0 as u32, 0))
-            .map_err(os)?;
+        let tex = texture(
+            device,
+            fmt,
+            width,
+            height,
+            D3D11_USAGE_DEFAULT,
+            D3D11_BIND_RENDER_TARGET.0 as u32,
+            0,
+        )
+        .or_else(|_| {
+            texture(
+                device,
+                fmt,
+                width,
+                height,
+                D3D11_USAGE_DEFAULT,
+                D3D11_BIND_DECODER.0 as u32,
+                0,
+            )
+        })
+        .or_else(|_| {
+            texture(
+                device,
+                fmt,
+                width,
+                height,
+                D3D11_USAGE_DEFAULT,
+                D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                0,
+            )
+        })
+        .map_err(os)?;
         let staging = (0..STAGING_RING)
-            .map(|_| texture(device, fmt, width, height, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_WRITE.0 as u32))
+            .map(|_| {
+                texture(
+                    device,
+                    fmt,
+                    width,
+                    height,
+                    D3D11_USAGE_STAGING,
+                    0,
+                    D3D11_CPU_ACCESS_WRITE.0 as u32,
+                )
+            })
             .collect::<windows_core::Result<Vec<_>>>()
             .map_err(os)?;
-        Ok(Self { fmt, width, height, staging, next: 0, tex })
+        Ok(Self {
+            fmt,
+            width,
+            height,
+            staging,
+            next: 0,
+            tex,
+        })
     }
 
     fn matches(&self, fmt: DXGI_FORMAT, w: u32, h: u32) -> bool {
@@ -930,7 +1145,11 @@ impl Uploader {
 
     /// `write(dst, pitch)` fills the mapped staging texture (NV12: the UV plane starts at
     /// `pitch * height`). Then the GPU copies it into the upload texture.
-    fn upload(&mut self, ctx: &ID3D11DeviceContext, write: impl FnOnce(*mut u8, usize)) -> Result<&ID3D11Texture2D> {
+    fn upload(
+        &mut self,
+        ctx: &ID3D11DeviceContext,
+        write: impl FnOnce(*mut u8, usize),
+    ) -> Result<&ID3D11Texture2D> {
         let st = &self.staging[self.next];
         self.next = (self.next + 1) % self.staging.len();
         unsafe {
@@ -951,7 +1170,16 @@ impl Uploader {
 /// `src` holds the frame at `src_pitch` (NV12: UV plane at `uv_offset`); `dst` is a mapped
 /// staging texture of the same format and size with row pitch `dst_pitch`.
 #[allow(clippy::too_many_arguments)]
-unsafe fn copy_frame(fmt: DXGI_FORMAT, src: *const u8, src_pitch: usize, uv_offset: usize, dst: *mut u8, dst_pitch: usize, w: usize, h: usize) {
+unsafe fn copy_frame(
+    fmt: DXGI_FORMAT,
+    src: *const u8,
+    src_pitch: usize,
+    uv_offset: usize,
+    dst: *mut u8,
+    dst_pitch: usize,
+    w: usize,
+    h: usize,
+) {
     let rows = |s: *const u8, d: *mut u8, row: usize, n: usize| {
         for r in 0..n {
             std::ptr::copy_nonoverlapping(s.add(r * src_pitch), d.add(r * dst_pitch), row);
@@ -986,15 +1214,28 @@ struct Synthetic {
 impl Synthetic {
     fn new(width: u32, height: u32, fps: u32) -> Result<Self> {
         let timer = unsafe {
-            CreateWaitableTimerExW(None, PCWSTR::null(), CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS.0)
-                .or_else(|_| CreateWaitableTimerExW(None, PCWSTR::null(), 0, TIMER_ALL_ACCESS.0))
-                .map_err(|e| super::os("CreateWaitableTimerExW", e))?
+            CreateWaitableTimerExW(
+                None,
+                PCWSTR::null(),
+                CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                TIMER_ALL_ACCESS.0,
+            )
+            .or_else(|_| CreateWaitableTimerExW(None, PCWSTR::null(), 0, TIMER_ALL_ACCESS.0))
+            .map_err(|e| super::os("CreateWaitableTimerExW", e))?
         };
         Self::arm(timer, fps)?;
         let yuy2 = std::env::var("VOX_FAKE_CAMERA_FORMAT")
             .is_ok_and(|v| v.eq_ignore_ascii_case("yuy2"))
             .then(|| vec![0u8; width as usize * height as usize * 3 / 2]);
-        Ok(Self { width, height, fps, timer: OwnedHandle(timer), index: 0, slow: false, yuy2 })
+        Ok(Self {
+            width,
+            height,
+            fps,
+            timer: OwnedHandle(timer),
+            index: 0,
+            slow: false,
+            yuy2,
+        })
     }
 
     fn arm(timer: HANDLE, fps: u32) -> Result<()> {
@@ -1006,10 +1247,15 @@ impl Synthetic {
 
     /// Dim-room simulation (see the field); a no-op without the environment variable.
     fn set_slow(&mut self, on: bool) {
-        let want = on && std::env::var("VOX_FAKE_CAMERA_LOWLIGHT").is_ok_and(|v| !v.is_empty() && v != "0");
+        let want = on
+            && std::env::var("VOX_FAKE_CAMERA_LOWLIGHT").is_ok_and(|v| !v.is_empty() && v != "0");
         if want != self.slow {
             self.slow = want;
-            let fps = if want { (self.fps / 3).max(1) } else { self.fps };
+            let fps = if want {
+                (self.fps / 3).max(1)
+            } else {
+                self.fps
+            };
             let _ = Self::arm(self.timer.0, fps);
             tracing::info!(slow = want, fps, "synthetic camera rate");
         }
@@ -1070,7 +1316,10 @@ impl Synthetic {
         let span = |dy: isize| ((rad * rad - dy * dy).max(0) as f32).sqrt() as isize;
         for r in (cy - rad).max(0)..(cy + rad).min(h as isize) {
             let s = span(r - cy);
-            let (x0, x1) = ((cx - s).max(0) as usize, ((cx + s).min(w as isize)).max(0) as usize);
+            let (x0, x1) = (
+                (cx - s).max(0) as usize,
+                ((cx + s).min(w as isize)).max(0) as usize,
+            );
             if x1 > x0 {
                 row(r as usize)[x0..x1].fill(185);
             }
@@ -1094,7 +1343,10 @@ impl Synthetic {
             let dy = r as isize * 2 - cy;
             let s = span(dy);
             if dy.abs() < rad && s > 0 {
-                let (x0, x1) = (((cx - s).max(0) as usize) & !1, ((cx + s).min(w as isize).max(0) as usize) & !1);
+                let (x0, x1) = (
+                    ((cx - s).max(0) as usize) & !1,
+                    ((cx + s).min(w as isize).max(0) as usize) & !1,
+                );
                 for px in u[x0..x1.max(x0)].as_chunks_mut::<2>().0 {
                     px[0] = 108;
                     px[1] = 152;
@@ -1223,16 +1475,21 @@ impl CameraInner {
     }
 
     pub fn format(&self) -> CameraFormat {
-        self.cs.format.lock().unwrap_or_else(|p| p.into_inner()).clone().unwrap_or(CameraFormat {
-            device: String::new(),
-            native_width: 0,
-            native_height: 0,
-            native_fps: 0.0,
-            subtype: String::new(),
-            gpu_frames: false,
-            width: 0,
-            height: 0,
-        })
+        self.cs
+            .format
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+            .unwrap_or(CameraFormat {
+                device: String::new(),
+                native_width: 0,
+                native_height: 0,
+                native_fps: 0.0,
+                subtype: String::new(),
+                gpu_frames: false,
+                width: 0,
+                height: 0,
+            })
     }
 
     pub fn stats(&self) -> CameraStats {
@@ -1246,7 +1503,11 @@ impl CameraInner {
     }
 
     pub fn controls(&self) -> Vec<CameraControl> {
-        self.cs.controls.lock().unwrap_or_else(|p| p.into_inner()).clone()
+        self.cs
+            .controls
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
     }
 
     pub fn set_controls(&self, adjust: &[CameraAdjust]) {
@@ -1263,17 +1524,29 @@ impl CameraInner {
     }
 
     pub fn reset_controls(&self, id: Option<CameraControlId>) {
-        self.cs.ctl_queue.lock().unwrap_or_else(|p| p.into_inner()).push_reset(id);
+        self.cs
+            .ctl_queue
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push_reset(id);
         self.cs.ctl_ev.set();
     }
 
     pub fn refresh_controls(&self) {
-        self.cs.ctl_queue.lock().unwrap_or_else(|p| p.into_inner()).push_refresh();
+        self.cs
+            .ctl_queue
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push_refresh();
         self.cs.ctl_ev.set();
     }
 
     pub fn native_modes(&self) -> Vec<CameraMode> {
-        self.cs.modes.lock().unwrap_or_else(|p| p.into_inner()).clone()
+        self.cs
+            .modes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
     }
 
     pub fn set_transform(&self, t: CameraTransform) {
@@ -1296,7 +1569,11 @@ impl CameraInner {
     }
 
     pub fn failure(&self) -> Option<CameraError> {
-        self.cs.failure.lock().unwrap_or_else(|p| p.into_inner()).clone()
+        self.cs
+            .failure
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
     }
 
     pub fn set_preview(&self, on: bool) {
@@ -1317,10 +1594,12 @@ impl Drop for CameraInner {
 
 /// The adapter that drives the primary monitor (where the hardware encoder lives).
 fn primary_adapter() -> Option<windows::Win32::Graphics::Dxgi::IDXGIAdapter> {
-    let hmon = super::enumerate::monitors_with_handles().ok().and_then(|m| {
-        let primary = m.iter().position(|(_, i)| i.primary).unwrap_or(0);
-        m.into_iter().nth(primary).map(|(h, _)| h)
-    });
+    let hmon = super::enumerate::monitors_with_handles()
+        .ok()
+        .and_then(|m| {
+            let primary = m.iter().position(|(_, i)| i.primary).unwrap_or(0);
+            m.into_iter().nth(primary).map(|(h, _)| h)
+        });
     hmon.and_then(super::enumerate::adapter_for_monitor)
 }
 
@@ -1347,7 +1626,13 @@ pub fn start_camera(
     let (tx, rx) = mpsc::sync_channel::<std::result::Result<(), CameraError>>(1);
     let device = device.to_string();
     let thread = {
-        let (stop, shared, es, control, cs) = (stop.clone(), shared.clone(), es.clone(), control.clone(), cs.clone());
+        let (stop, shared, es, control, cs) = (
+            stop.clone(),
+            shared.clone(),
+            es.clone(),
+            control.clone(),
+            cs.clone(),
+        );
         std::thread::Builder::new()
             .name("vox-camera".into())
             .spawn(move || {
@@ -1355,7 +1640,17 @@ pub fn start_camera(
                 let opened = (|| {
                     mf_startup().map_err(cap_err)?;
                     let dev = resolve(&device)?;
-                    CameraLoop::open(dev, cfg, output, on_preview, shared.clone(), es, control, cs.clone(), &stop)
+                    CameraLoop::open(
+                        dev,
+                        cfg,
+                        output,
+                        on_preview,
+                        shared.clone(),
+                        es,
+                        control,
+                        cs.clone(),
+                        &stop,
+                    )
                 })();
                 match opened {
                     Ok(mut l) => {
@@ -1375,7 +1670,14 @@ pub fn start_camera(
             .map_err(|e| cam_err(CameraFault::Other, format!("spawn camera thread: {e}")))?
     };
     match rx.recv() {
-        Ok(Ok(())) => Ok(CameraInner { stop, thread: Some(thread), shared, es, control, cs }),
+        Ok(Ok(())) => Ok(CameraInner {
+            stop,
+            thread: Some(thread),
+            shared,
+            es,
+            control,
+            cs,
+        }),
         Ok(Err(e)) => {
             let _ = thread.join();
             tracing::warn!(fault = ?e.fault, detail = %e.detail, "camera start failed");
@@ -1383,7 +1685,10 @@ pub fn start_camera(
         }
         Err(_) => {
             let _ = thread.join();
-            Err(cam_err(CameraFault::Other, "camera thread exited during setup"))
+            Err(cam_err(
+                CameraFault::Other,
+                "camera thread exited during setup",
+            ))
         }
     }
 }
@@ -1406,15 +1711,25 @@ impl CameraLoop {
         // uploaded / decoded on whichever GPU this device is on).
         let adapter = match cfg.adapter_luid {
             Some(l) => Some(super::adapters::adapter_by_luid(l).ok_or_else(|| {
-                cam_err(CameraFault::Unsupported, format!("adapter {l:#x} not found"))
+                cam_err(
+                    CameraFault::Unsupported,
+                    format!("adapter {l:#x} not found"),
+                )
             })?),
             None => primary_adapter(),
         };
-        let (device, ctx, adapter_info) = video::create_device(adapter.as_ref()).map_err(cap_err)?;
-        if cfg.adapter_luid.is_some_and(|l| l != super::adapters::luid_u64(adapter_info.luid)) {
+        let (device, ctx, adapter_info) =
+            video::create_device(adapter.as_ref()).map_err(cap_err)?;
+        if cfg
+            .adapter_luid
+            .is_some_and(|l| l != super::adapters::luid_u64(adapter_info.luid))
+        {
             return Err(cam_err(
                 CameraFault::Unsupported,
-                format!("no D3D11 device on the encoder's adapter (got '{}')", adapter_info.name),
+                format!(
+                    "no D3D11 device on the encoder's adapter (got '{}')",
+                    adapter_info.name
+                ),
             ));
         }
         unsafe {
@@ -1428,7 +1743,11 @@ impl CameraLoop {
             Device::Synthetic => {
                 // A chosen fake mode sets the size and rate; otherwise 720p scaled to fit.
                 let (w, h, fps) = match cfg.mode {
-                    Some(m) => (m.width & !1, m.height & !1, ((m.fps() + 0.5) as u32).clamp(1, 60)),
+                    Some(m) => (
+                        m.width & !1,
+                        m.height & !1,
+                        ((m.fps() + 0.5) as u32).clamp(1, 60),
+                    ),
                     None => {
                         let (w, h) = video::fit(1280, 720, cfg.width, cfg.height);
                         (w, h, cfg.fps)
@@ -1436,21 +1755,54 @@ impl CameraLoop {
                 };
                 let s = Synthetic::new(w, h, fps).map_err(cap_err)?;
                 let fmt = s.format();
-                let native = Mode { fmt: if fmt == DXGI_FORMAT_YUY2 { Fmt::Yuy2 } else { Fmt::Nv12 }, width: w, height: h, fps: fps as f32 };
-                let space = YuvSpace { bt709: false, full_range: false };
-                (Source::Synthetic(s), native, fmt, (w, h), space, "synthetic".to_string())
+                let native = Mode {
+                    fmt: if fmt == DXGI_FORMAT_YUY2 {
+                        Fmt::Yuy2
+                    } else {
+                        Fmt::Nv12
+                    },
+                    width: w,
+                    height: h,
+                    fps: fps as f32,
+                };
+                let space = YuvSpace {
+                    bt709: false,
+                    full_range: false,
+                };
+                (
+                    Source::Synthetic(s),
+                    native,
+                    fmt,
+                    (w, h),
+                    space,
+                    "synthetic".to_string(),
+                )
             }
             Device::Mf { activate, info } => {
                 let c = MfCamera::open(activate, &info, &device, &cfg)?;
                 let (native, out, name) = (c.native, c.out, c.name.clone());
                 native_modes = c.modes.iter().map(to_camera_mode).collect();
                 sort_modes(&mut native_modes);
-                (Source::Mf(c), native, out.fmt, (out.width, out.height), out.space, name)
+                (
+                    Source::Mf(c),
+                    native,
+                    out.fmt,
+                    (out.width, out.height),
+                    out.space,
+                    name,
+                )
             }
         };
-        let out_size = camera_geometry(out_wh.0, out_wh.1, &cfg.transform, cfg.width, cfg.height).out;
-        let preview_size =
-            camera_geometry(out_wh.0, out_wh.1, &cfg.transform, cfg.preview_max_width, cfg.preview_max_height).out;
+        let out_size =
+            camera_geometry(out_wh.0, out_wh.1, &cfg.transform, cfg.width, cfg.height).out;
+        let preview_size = camera_geometry(
+            out_wh.0,
+            out_wh.1,
+            &cfg.transform,
+            cfg.preview_max_width,
+            cfg.preview_max_height,
+        )
+        .out;
         // A quarter turn swaps width and height: the encoder is sized for either orientation.
         let enc_side = cfg.width.max(cfg.height) & !1;
 
@@ -1480,15 +1832,32 @@ impl CameraLoop {
                         capture_cursor: false,
                     },
                 };
-                let enc = encode::create_encoder(cfg.backend, &sc, p, &ev).map_err(|e| match e {
-                    CaptureError::Unsupported(m) => cam_err(CameraFault::Unsupported, format!("no hardware encoder: {m}")),
-                    other => cam_err(CameraFault::Unsupported, format!("hardware encoder failed: {other}")),
-                })?;
+                let enc =
+                    encode::create_encoder(cfg.backend, &sc, p, &ev).map_err(|e| match e {
+                        CaptureError::Unsupported(m) => cam_err(
+                            CameraFault::Unsupported,
+                            format!("no hardware encoder: {m}"),
+                        ),
+                        other => cam_err(
+                            CameraFault::Unsupported,
+                            format!("hardware encoder failed: {other}"),
+                        ),
+                    })?;
                 *cs.backend.lock().unwrap_or_else(|p| p.into_inner()) = Some(enc.backend());
                 // A webcam keeps its frame rate under congestion (softer frames instead).
-                Some(Box::new(EncoderSink::new(enc, ev, control, cb, es, p, DegradationPreference::Smoothness)))
+                Some(Box::new(EncoderSink::new(
+                    enc,
+                    ev,
+                    control,
+                    cb,
+                    es,
+                    p,
+                    DegradationPreference::Smoothness,
+                )))
             }
-            CameraOutput::Raw(cb) => Some(Box::new(Readback::new(&device, &ctx, cb).map_err(cap_err)?)),
+            CameraOutput::Raw(cb) => {
+                Some(Box::new(Readback::new(&device, &ctx, cb).map_err(cap_err)?))
+            }
             CameraOutput::None => None,
         };
         let preview = match on_preview {
@@ -1533,7 +1902,9 @@ impl CameraLoop {
         if let Some(Source::Mf(c)) = &l.source {
             c.request()?;
             let handles = [stop.raw(), c.slot.ev.raw()];
-            let r = unsafe { WaitForMultipleObjects(&handles, false, FIRST_FRAME_TIMEOUT.as_millis() as u32) };
+            let r = unsafe {
+                WaitForMultipleObjects(&handles, false, FIRST_FRAME_TIMEOUT.as_millis() as u32)
+            };
             if r == WAIT_OBJECT_0 {
                 return Err(cam_err(CameraFault::Other, "stopped while starting"));
             }
@@ -1568,7 +1939,17 @@ impl CameraLoop {
                 .ctl
                 .list()
                 .iter()
-                .map(|c| format!("{}[{}..{}/{} def {}{}]", c.id.key(), c.min, c.max, c.step, c.default, if c.can_auto { " auto" } else { "" }))
+                .map(|c| {
+                    format!(
+                        "{}[{}..{}/{} def {}{}]",
+                        c.id.key(),
+                        c.min,
+                        c.max,
+                        c.step,
+                        c.default,
+                        if c.can_auto { " auto" } else { "" }
+                    )
+                })
                 .collect();
             tracing::info!(controls = %list.join(" "), query_ms = ctl_t0.elapsed().as_millis() as u64, "camera controls");
         }
@@ -1577,7 +1958,11 @@ impl CameraLoop {
             native_width: native.width,
             native_height: native.height,
             native_fps: native.fps,
-            subtype: if matches!(l.source, Some(Source::Synthetic(_))) { "synthetic".into() } else { native.fmt.name().into() },
+            subtype: if matches!(l.source, Some(Source::Synthetic(_))) {
+                "synthetic".into()
+            } else {
+                native.fmt.name().into()
+            },
             gpu_frames: false,
             width: out_size.0,
             height: out_size.1,
@@ -1655,7 +2040,9 @@ impl CameraLoop {
     fn publish_controls(&mut self) {
         *self.cs.controls.lock().unwrap_or_else(|p| p.into_inner()) = self.ctl.list().to_vec();
         let slows = self.ctl.may_slow_down();
-        self.cs.exposure_auto.store(slows.unwrap_or(false), Ordering::Relaxed);
+        self.cs
+            .exposure_auto
+            .store(slows.unwrap_or(false), Ordering::Relaxed);
         if let Some(Source::Synthetic(s)) = self.source.as_mut() {
             s.set_slow(slows == Some(true));
         }
@@ -1663,7 +2050,12 @@ impl CameraLoop {
 
     /// Apply queued control changes (only when someone asked: never per frame).
     fn on_controls(&mut self) -> std::result::Result<(), CameraError> {
-        let ops = self.cs.ctl_queue.lock().unwrap_or_else(|p| p.into_inner()).take();
+        let ops = self
+            .cs
+            .ctl_queue
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
         if !ops.is_empty() {
             self.ctl.apply(&ops);
             self.publish_controls();
@@ -1682,18 +2074,26 @@ impl CameraLoop {
         let secs = el.as_secs_f32();
         let fps = (c - self.fps_win.1) as f32 / secs;
         self.fps_win = (Instant::now(), c);
-        self.cs.fps_milli.store((fps * 1000.0) as u32, Ordering::Relaxed);
+        self.cs
+            .fps_milli
+            .store((fps * 1000.0) as u32, Ordering::Relaxed);
         let auto = self.cs.exposure_auto.load(Ordering::Relaxed);
         let was = self.cs.low_light.load(Ordering::Relaxed);
         let low = self.lowlight.update(secs, fps, self.requested_fps, auto);
         if low != was {
-            tracing::info!(low_light = low, fps = format!("{fps:.1}"), requested = self.requested_fps, "camera low-light state");
+            tracing::info!(
+                low_light = low,
+                fps = format!("{fps:.1}"),
+                requested = self.requested_fps,
+                "camera low-light state"
+            );
         }
         self.cs.low_light.store(low, Ordering::Relaxed);
     }
 
     fn handle_error(&mut self, e: CameraError) -> Option<CameraError> {
-        if e.fault != CameraFault::Other || unsafe { self.device.GetDeviceRemovedReason() }.is_err() {
+        if e.fault != CameraFault::Other || unsafe { self.device.GetDeviceRemovedReason() }.is_err()
+        {
             return Some(e);
         }
         self.shared.drop_frames(1);
@@ -1727,7 +2127,10 @@ impl CameraLoop {
                     self.upload = Some(Uploader::new(&self.device, fmt, w, h).map_err(cap_err)?);
                 }
                 let up = self.upload.as_mut().expect("made above");
-                let tex = up.upload(&self.ctx, |dst, pitch| unsafe { s.render_to(dst, pitch) }).map_err(cap_err)?.clone();
+                let tex = up
+                    .upload(&self.ctx, |dst, pitch| unsafe { s.render_to(dst, pitch) })
+                    .map_err(cap_err)?
+                    .clone();
                 self.frame(&tex, 0, w, h, monotonic_now_us())
             }
             Source::Mf(c) => {
@@ -1739,14 +2142,21 @@ impl CameraLoop {
                     return Err(hr_err("ReadSample", hr));
                 }
                 if st.eos {
-                    return Err(cam_err(CameraFault::Disconnected, "camera stream ended (unplugged?)"));
+                    return Err(cam_err(
+                        CameraFault::Disconnected,
+                        "camera stream ended (unplugged?)",
+                    ));
                 }
                 if st.type_changed {
                     let reader = c.reader.clone().expect("reader while running");
                     c.out = unsafe { MfCamera::read_out_type(&reader, c.native.fmt) }?;
                     self.conv.set_input_yuv(c.out.space);
                     self.pconv.set_input_yuv(c.out.space);
-                    tracing::info!(w = c.out.width, h = c.out.height, "camera output type changed");
+                    tracing::info!(
+                        w = c.out.width,
+                        h = c.out.height,
+                        "camera output type changed"
+                    );
                 }
                 if st.replaced > 0 {
                     self.shared.drop_frames(st.replaced);
@@ -1754,24 +2164,39 @@ impl CameraLoop {
                 }
                 // Keep exactly one read in flight.
                 c.request()?;
-                let Some((sample, ts)) = st.sample else { return Ok(()) };
+                let Some((sample, ts)) = st.sample else {
+                    return Ok(());
+                };
                 let out = c.out;
                 self.mf_sample(&sample, out, ts)
             }
         }
     }
 
-    fn mf_sample(&mut self, sample: &IMFSample, out: OutType, ts: i64) -> std::result::Result<(), CameraError> {
-        let buf = unsafe { sample.GetBufferByIndex(0) }.map_err(|e| mf_err("GetBufferByIndex", e))?;
+    fn mf_sample(
+        &mut self,
+        sample: &IMFSample,
+        out: OutType,
+        ts: i64,
+    ) -> std::result::Result<(), CameraError> {
+        let buf =
+            unsafe { sample.GetBufferByIndex(0) }.map_err(|e| mf_err("GetBufferByIndex", e))?;
         if let Ok(dx) = buf.cast::<IMFDXGIBuffer>() {
             let mut p: *mut core::ffi::c_void = std::ptr::null_mut();
-            unsafe { dx.GetResource(&ID3D11Texture2D::IID, &mut p) }.map_err(|e| mf_err("IMFDXGIBuffer::GetResource", e))?;
+            unsafe { dx.GetResource(&ID3D11Texture2D::IID, &mut p) }
+                .map_err(|e| mf_err("IMFDXGIBuffer::GetResource", e))?;
             // SAFETY: GetResource returned an AddRef'ed ID3D11Texture2D.
             let tex = unsafe { ID3D11Texture2D::from_raw(p) };
             let slice = unsafe { dx.GetSubresourceIndex() }.unwrap_or(0);
             if !self.gpu_frames {
                 self.gpu_frames = true;
-                if let Some(f) = self.cs.format.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+                if let Some(f) = self
+                    .cs
+                    .format
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .as_mut()
+                {
                     f.gpu_frames = true;
                 }
                 tracing::info!(slice, "camera frames arrive as GPU textures");
@@ -1779,40 +2204,62 @@ impl CameraLoop {
             return self.frame(&tex, slice, out.width, out.height, ts);
         }
         // System memory: one staging upload.
-        if !self.upload.as_ref().is_some_and(|u| u.matches(out.fmt, out.width, out.height)) {
-            self.upload = Some(Uploader::new(&self.device, out.fmt, out.width, out.height).map_err(cap_err)?);
+        if !self
+            .upload
+            .as_ref()
+            .is_some_and(|u| u.matches(out.fmt, out.width, out.height))
+        {
+            self.upload =
+                Some(Uploader::new(&self.device, out.fmt, out.width, out.height).map_err(cap_err)?);
         }
         let (w, h) = (out.width as usize, out.height as usize);
-        let row_bytes = if out.fmt == DXGI_FORMAT_YUY2 { w * 2 } else { w };
+        let row_bytes = if out.fmt == DXGI_FORMAT_YUY2 {
+            w * 2
+        } else {
+            w
+        };
         let up = self.upload.as_mut().expect("made above");
         let tex = unsafe {
             if let Ok(b2) = buf.cast::<IMF2DBuffer>() {
                 let mut p: *mut u8 = std::ptr::null_mut();
                 let mut pitch = 0i32;
-                b2.Lock2D(&mut p, &mut pitch).map_err(|e| mf_err("IMF2DBuffer::Lock2D", e))?;
+                b2.Lock2D(&mut p, &mut pitch)
+                    .map_err(|e| mf_err("IMF2DBuffer::Lock2D", e))?;
                 let pitch = pitch.unsigned_abs() as usize;
                 let len = buf.GetCurrentLength().unwrap_or(0) as usize;
                 let uv = nv12_uv_offset(pitch, h, len);
                 let r = if pitch < row_bytes {
                     Err(cam_err(CameraFault::Other, "camera buffer pitch too small"))
                 } else {
-                    up.upload(&self.ctx, |dst, dpitch| copy_frame(out.fmt, p, pitch, uv, dst, dpitch, w, h))
-                        .cloned()
-                        .map_err(cap_err)
+                    up.upload(&self.ctx, |dst, dpitch| {
+                        copy_frame(out.fmt, p, pitch, uv, dst, dpitch, w, h)
+                    })
+                    .cloned()
+                    .map_err(cap_err)
                 };
                 let _ = b2.Unlock2D();
                 r?
             } else {
                 let mut p: *mut u8 = std::ptr::null_mut();
                 let mut len = 0u32;
-                buf.Lock(&mut p, None, Some(&mut len)).map_err(|e| mf_err("IMFMediaBuffer::Lock", e))?;
-                let need = if out.fmt == DXGI_FORMAT_YUY2 { row_bytes * h } else { w * h * 3 / 2 };
-                let r = if (len as usize) < need {
-                    Err(cam_err(CameraFault::Other, format!("camera buffer too small ({len} < {need})")))
+                buf.Lock(&mut p, None, Some(&mut len))
+                    .map_err(|e| mf_err("IMFMediaBuffer::Lock", e))?;
+                let need = if out.fmt == DXGI_FORMAT_YUY2 {
+                    row_bytes * h
                 } else {
-                    up.upload(&self.ctx, |dst, dpitch| copy_frame(out.fmt, p, row_bytes, w * h, dst, dpitch, w, h))
-                        .cloned()
-                        .map_err(cap_err)
+                    w * h * 3 / 2
+                };
+                let r = if (len as usize) < need {
+                    Err(cam_err(
+                        CameraFault::Other,
+                        format!("camera buffer too small ({len} < {need})"),
+                    ))
+                } else {
+                    up.upload(&self.ctx, |dst, dpitch| {
+                        copy_frame(out.fmt, p, row_bytes, w * h, dst, dpitch, w, h)
+                    })
+                    .cloned()
+                    .map_err(cap_err)
                 };
                 let _ = buf.Unlock();
                 r?
@@ -1822,7 +2269,14 @@ impl CameraLoop {
     }
 
     /// Convert and hand one camera frame to the sinks (each only if it can take one now).
-    fn frame(&mut self, tex: &ID3D11Texture2D, slice: u32, w: u32, h: u32, ts: i64) -> std::result::Result<(), CameraError> {
+    fn frame(
+        &mut self,
+        tex: &ID3D11Texture2D,
+        slice: u32,
+        w: u32,
+        h: u32,
+        ts: i64,
+    ) -> std::result::Result<(), CameraError> {
         self.cs.captured.fetch_add(1, Ordering::Relaxed);
         self.last_frame = Instant::now();
         let mut desc = D3D11_TEXTURE2D_DESC::default();
@@ -1830,14 +2284,29 @@ impl CameraLoop {
         let (src_w, src_h) = (w.min(desc.Width), h.min(desc.Height));
         let tf = unpack_transform(self.cs.transform.load(Ordering::Relaxed));
         if let Some(main) = self.main.as_mut() {
-            let cap = main.fps_cap().unwrap_or(self.cfg.fps).clamp(1, self.cfg.fps);
+            let cap = main
+                .fps_cap()
+                .unwrap_or(self.cfg.fps)
+                .clamp(1, self.cfg.fps);
             self.pacer.set_fps(cap);
             let due = matches!(self.pacer.check(ts), Pace::Accept);
             if due && main.has_free() {
-                let geo = prepare(&mut self.conv, &self.device, &desc, (src_w, src_h), &tf, tf.mirror_others, (self.cfg.width, self.cfg.height))?;
+                let geo = prepare(
+                    &mut self.conv,
+                    &self.device,
+                    &desc,
+                    (src_w, src_h),
+                    &tf,
+                    tf.mirror_others,
+                    (self.cfg.width, self.cfg.height),
+                )?;
                 let (ow, oh) = geo.out;
                 self.out_size = (ow, oh);
-                let out = self.conv.convert_slice_rect(tex, slice, geo.src).map_err(cap_err)?.clone();
+                let out = self
+                    .conv
+                    .convert_slice_rect(tex, slice, geo.src)
+                    .map_err(cap_err)?
+                    .clone();
                 main.submit(&self.ctx, &out, ow, oh, ts).map_err(sink_err)?;
             } else {
                 self.shared.drop_frames(1);
@@ -1847,10 +2316,22 @@ impl CameraLoop {
             if let Some(p) = self.preview.as_mut() {
                 if matches!(self.ppacer.check(ts), Pace::Accept) && Sink::has_free(p) {
                     let max = (self.cfg.preview_max_width, self.cfg.preview_max_height);
-                    let geo = prepare(&mut self.pconv, &self.device, &desc, (src_w, src_h), &tf, tf.mirror_preview, max)?;
+                    let geo = prepare(
+                        &mut self.pconv,
+                        &self.device,
+                        &desc,
+                        (src_w, src_h),
+                        &tf,
+                        tf.mirror_preview,
+                        max,
+                    )?;
                     let (pw, ph) = geo.out;
                     self.preview_size = (pw, ph);
-                    let out = self.pconv.convert_slice_rect(tex, slice, geo.src).map_err(cap_err)?.clone();
+                    let out = self
+                        .pconv
+                        .convert_slice_rect(tex, slice, geo.src)
+                        .map_err(cap_err)?
+                        .clone();
                     Sink::submit(p, &self.ctx, &out, pw, ph, ts).map_err(sink_err)?;
                 }
             }
@@ -1903,14 +2384,19 @@ fn prepare(
 ) -> std::result::Result<CameraGeometry, CameraError> {
     let mut t = *t;
     let mut geo = camera_geometry(src.0, src.1, &t, max.0, max.1);
-    conv.ensure(device, desc.Width, desc.Height, geo.out.0, geo.out.1).map_err(cap_err)?;
+    conv.ensure(device, desc.Width, desc.Height, geo.out.0, geo.out.1)
+        .map_err(cap_err)?;
     if !conv.transform_supported() && t.rotation != CameraRotation::None {
         t.rotation = CameraRotation::None;
         geo = camera_geometry(src.0, src.1, &t, max.0, max.1);
-        conv.ensure(device, desc.Width, desc.Height, geo.out.0, geo.out.1).map_err(cap_err)?;
+        conv.ensure(device, desc.Width, desc.Height, geo.out.0, geo.out.1)
+            .map_err(cap_err)?;
     }
     let ok = conv.transform_supported();
-    conv.set_transform(Xform { mirror: mirror && ok, rot: if ok { t.rotation.degrees() } else { 0 } });
+    conv.set_transform(Xform {
+        mirror: mirror && ok,
+        rot: if ok { t.rotation.degrees() } else { 0 },
+    });
     Ok(geo)
 }
 
@@ -1956,7 +2442,12 @@ mod tests {
     use super::*;
 
     fn m(fmt: Fmt, w: u32, h: u32, fps: f32) -> Mode {
-        Mode { fmt, width: w, height: h, fps }
+        Mode {
+            fmt,
+            width: w,
+            height: h,
+            fps,
+        }
     }
 
     #[test]
@@ -1981,7 +2472,11 @@ mod tests {
 
     #[test]
     fn prefers_uncompressed_at_equal_size_and_rate() {
-        let modes = [m(Fmt::Mjpg, 1280, 720, 30.0), m(Fmt::Nv12, 1280, 720, 30.0), m(Fmt::Yuy2, 1280, 720, 30.0)];
+        let modes = [
+            m(Fmt::Mjpg, 1280, 720, 30.0),
+            m(Fmt::Nv12, 1280, 720, 30.0),
+            m(Fmt::Yuy2, 1280, 720, 30.0),
+        ];
         assert_eq!(pick_mode(&modes, 1280, 720, 30), Some(1));
     }
 
@@ -1994,29 +2489,68 @@ mod tests {
         let modes = [m(Fmt::Yuy2, 320, 240, 30.0), m(Fmt::Yuy2, 640, 480, 30.0)];
         assert_eq!(pick_mode(&modes, 1280, 720, 30), Some(1));
         // 29.97 counts as 30; 60 fps only when nothing else.
-        let modes = [m(Fmt::Nv12, 1280, 720, 60.0), m(Fmt::Mjpg, 1280, 720, 29.97)];
+        let modes = [
+            m(Fmt::Nv12, 1280, 720, 60.0),
+            m(Fmt::Mjpg, 1280, 720, 29.97),
+        ];
         assert_eq!(pick_mode(&modes, 1280, 720, 30), Some(1));
         assert_eq!(pick_mode(&[], 1280, 720, 30), None);
     }
 
     #[test]
     fn hresults_map_to_faults() {
-        assert_eq!(fault_of(HRESULT(0x8007_0005_u32 as i32)), CameraFault::AccessDenied);
-        assert_eq!(fault_of(HRESULT(0xC00D_3704_u32 as i32)), CameraFault::InUse);
-        assert_eq!(fault_of(HRESULT(0xC00D_3EA2_u32 as i32)), CameraFault::Disconnected);
-        assert_eq!(fault_of(HRESULT(0x8000_4005_u32 as i32)), CameraFault::Other);
+        assert_eq!(
+            fault_of(HRESULT(0x8007_0005_u32 as i32)),
+            CameraFault::AccessDenied
+        );
+        assert_eq!(
+            fault_of(HRESULT(0xC00D_3704_u32 as i32)),
+            CameraFault::InUse
+        );
+        assert_eq!(
+            fault_of(HRESULT(0xC00D_3EA2_u32 as i32)),
+            CameraFault::Disconnected
+        );
+        assert_eq!(
+            fault_of(HRESULT(0x8000_4005_u32 as i32)),
+            CameraFault::Other
+        );
     }
 
     #[test]
     fn chosen_mode_is_found_or_not() {
-        let modes = [m(Fmt::Yuy2, 1280, 720, 10.0), m(Fmt::Mjpg, 1280, 720, 30.0), m(Fmt::Mjpg, 1920, 1080, 29.97)];
-        let want = |w, h, fps, subtype| CameraMode { width: w, height: h, fps_milli: fps, subtype };
-        assert_eq!(find_mode(&modes, &want(1280, 720, 30_000, CameraSubtype::Mjpg)), Some(1));
-        assert_eq!(find_mode(&modes, &want(1280, 720, 10_000, CameraSubtype::Yuy2)), Some(0));
+        let modes = [
+            m(Fmt::Yuy2, 1280, 720, 10.0),
+            m(Fmt::Mjpg, 1280, 720, 30.0),
+            m(Fmt::Mjpg, 1920, 1080, 29.97),
+        ];
+        let want = |w, h, fps, subtype| CameraMode {
+            width: w,
+            height: h,
+            fps_milli: fps,
+            subtype,
+        };
+        assert_eq!(
+            find_mode(&modes, &want(1280, 720, 30_000, CameraSubtype::Mjpg)),
+            Some(1)
+        );
+        assert_eq!(
+            find_mode(&modes, &want(1280, 720, 10_000, CameraSubtype::Yuy2)),
+            Some(0)
+        );
         // 29.97 and 30 are the same mode; another format or size is not.
-        assert_eq!(find_mode(&modes, &want(1920, 1080, 30_000, CameraSubtype::Mjpg)), Some(2));
-        assert_eq!(find_mode(&modes, &want(1280, 720, 30_000, CameraSubtype::Yuy2)), None);
-        assert_eq!(find_mode(&modes, &want(640, 480, 30_000, CameraSubtype::Mjpg)), None);
+        assert_eq!(
+            find_mode(&modes, &want(1920, 1080, 30_000, CameraSubtype::Mjpg)),
+            Some(2)
+        );
+        assert_eq!(
+            find_mode(&modes, &want(1280, 720, 30_000, CameraSubtype::Yuy2)),
+            None
+        );
+        assert_eq!(
+            find_mode(&modes, &want(640, 480, 30_000, CameraSubtype::Mjpg)),
+            None
+        );
     }
 
     #[test]
@@ -2026,18 +2560,35 @@ mod tests {
         sort_modes(&mut v);
         assert_eq!(v.len(), synthetic_modes().len(), "duplicates dropped");
         assert_eq!((v[0].width, v[0].height), (1920, 1080));
-        let pos = |w, s| v.iter().position(|m| m.width == w && m.subtype == s).unwrap();
+        let pos = |w, s| {
+            v.iter()
+                .position(|m| m.width == w && m.subtype == s)
+                .unwrap()
+        };
         assert!(pos(1280, CameraSubtype::Nv12) < pos(1280, CameraSubtype::Yuy2));
         assert_eq!(v.last().map(|m| m.width), Some(640));
     }
 
     #[test]
     fn transform_packs_into_one_word() {
-        for (mp, mo, rot, zoom) in [(true, false, 0, 100), (false, true, 90, 150), (true, true, 180, 200), (false, false, 270, 133)] {
-            let t = CameraTransform { mirror_preview: mp, mirror_others: mo, rotation: CameraRotation::from_degrees(rot), zoom_pct: zoom };
+        for (mp, mo, rot, zoom) in [
+            (true, false, 0, 100),
+            (false, true, 90, 150),
+            (true, true, 180, 200),
+            (false, false, 270, 133),
+        ] {
+            let t = CameraTransform {
+                mirror_preview: mp,
+                mirror_others: mo,
+                rotation: CameraRotation::from_degrees(rot),
+                zoom_pct: zoom,
+            };
             assert_eq!(unpack_transform(pack_transform(&t)), t);
         }
-        assert_eq!(unpack_transform(pack_transform(&CameraTransform::default())), CameraTransform::default());
+        assert_eq!(
+            unpack_transform(pack_transform(&CameraTransform::default())),
+            CameraTransform::default()
+        );
     }
 
     #[test]

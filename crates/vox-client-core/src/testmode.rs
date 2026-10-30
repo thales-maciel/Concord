@@ -26,7 +26,9 @@ pub fn background() -> bool {
 #[cfg(windows)]
 pub fn keep_behind(hwnd: isize, taskbar: bool) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_BOTTOM, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
+        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_BOTTOM,
+        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_EX_APPWINDOW,
+        WS_EX_NOACTIVATE,
     };
     if hwnd == 0 {
         return;
@@ -36,21 +38,40 @@ pub fn keep_behind(hwnd: isize, taskbar: bool) {
     unsafe {
         let ex = GetWindowLongPtrW(hwnd as _, GWL_EXSTYLE);
         SetWindowLongPtrW(hwnd as _, GWL_EXSTYLE, ex | extra as isize);
-        SetWindowPos(hwnd as _, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
+        SetWindowPos(
+            hwnd as _,
+            HWND_BOTTOM,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED,
+        );
     }
 }
 
 /// Show a top-level window without activating it, behind the others.
 #[cfg(windows)]
 pub fn show_behind(hwnd: isize) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, ShowWindow, HWND_BOTTOM, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_SHOWNOACTIVATE};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, ShowWindow, HWND_BOTTOM, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        SW_SHOWNOACTIVATE,
+    };
     if hwnd == 0 {
         return;
     }
     // SAFETY: show / z-order of a window of this process, without activation.
     unsafe {
         ShowWindow(hwnd as _, SW_SHOWNOACTIVATE);
-        SetWindowPos(hwnd as _, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE);
+        SetWindowPos(
+            hwnd as _,
+            HWND_BOTTOM,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+        );
     }
 }
 
@@ -61,9 +82,12 @@ pub fn show_behind(hwnd: isize) {
 pub fn fullscreen_behind(hwnd: isize, on: bool) {
     use std::sync::Mutex;
     use windows_sys::Win32::Foundation::RECT;
-    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongPtrW, GetWindowRect, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, HWND_BOTTOM, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOOWNERZORDER, WS_OVERLAPPEDWINDOW, WS_POPUP,
+        GetWindowLongPtrW, GetWindowRect, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, HWND_BOTTOM,
+        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOOWNERZORDER, WS_OVERLAPPEDWINDOW, WS_POPUP,
     };
     /// The window, its style and its rectangle (left, top, right, bottom) before fullscreen.
     type Saved = (isize, isize, (i32, i32, i32, i32));
@@ -79,17 +103,39 @@ pub fn fullscreen_behind(hwnd: isize, on: bool) {
             if saved.is_some() {
                 return;
             }
-            let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+            let mut r = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
             let mut mi: MONITORINFO = std::mem::zeroed();
             mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-            if GetWindowRect(hwnd as _, &mut r) == 0 || GetMonitorInfoW(MonitorFromWindow(hwnd as _, MONITOR_DEFAULTTONEAREST), &mut mi) == 0 {
+            if GetWindowRect(hwnd as _, &mut r) == 0
+                || GetMonitorInfoW(
+                    MonitorFromWindow(hwnd as _, MONITOR_DEFAULTTONEAREST),
+                    &mut mi,
+                ) == 0
+            {
                 return;
             }
             let style = GetWindowLongPtrW(hwnd as _, GWL_STYLE);
             *saved = Some((hwnd, style, (r.left, r.top, r.right, r.bottom)));
-            SetWindowLongPtrW(hwnd as _, GWL_STYLE, (style & !(WS_OVERLAPPEDWINDOW as isize)) | WS_POPUP as isize);
+            SetWindowLongPtrW(
+                hwnd as _,
+                GWL_STYLE,
+                (style & !(WS_OVERLAPPEDWINDOW as isize)) | WS_POPUP as isize,
+            );
             let m = mi.rcMonitor;
-            SetWindowPos(hwnd as _, HWND_BOTTOM, m.left, m.top, m.right - m.left, m.bottom - m.top, flags);
+            SetWindowPos(
+                hwnd as _,
+                HWND_BOTTOM,
+                m.left,
+                m.top,
+                m.right - m.left,
+                m.bottom - m.top,
+                flags,
+            );
         } else if let Some((h, style, (l, t, r, b))) = saved.take().filter(|s| s.0 == hwnd) {
             SetWindowLongPtrW(h as _, GWL_STYLE, style);
             SetWindowPos(h as _, HWND_BOTTOM, l, t, r - l, b - t, flags);

@@ -10,10 +10,12 @@ pub fn random_bytes<const N: usize>() -> [u8; N] {
 
 pub fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
-    bytes.iter().fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
-        s
-    })
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
 }
 
 pub fn random_hex<const N: usize>() -> String {
@@ -70,10 +72,16 @@ mod tests {
             started_tx.send(()).unwrap();
             go_rx.recv().unwrap();
         }));
-        tokio::task::spawn_blocking(move || started_rx.recv().unwrap()).await.unwrap();
+        tokio::task::spawn_blocking(move || started_rx.recv().unwrap())
+            .await
+            .unwrap();
         req.abort(); // the client went away
         let _ = req.await;
-        assert_eq!(sem.available_permits(), 0, "the work still runs: its slot is still taken");
+        assert_eq!(
+            sem.available_permits(),
+            0,
+            "the work still runs: its slot is still taken"
+        );
         go_tx.send(()).unwrap();
         for _ in 0..200 {
             if sem.available_permits() == 1 {

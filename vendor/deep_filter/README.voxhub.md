@@ -22,4 +22,4 @@ Changes from upstream:
   models (clean speech comes out with a negative SI-SDR), so do not bump it without re-running
   `denoise_eval`.
 
-Used by `vox-client-core::audio::dfn` (the "IA máxima" noise suppression level).
+Used by `vox-client-core::audio::dfn` (the "Maximum AI" noise suppression level).

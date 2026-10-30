@@ -9,15 +9,18 @@ use std::sync::Arc;
 
 use eframe::egui::{self, Color32, RichText};
 use vox_capture::{MonitorInfo, WindowInfo};
-use vox_client_core::golive::{DegradationPreference, EncoderChoice, ShareOptions, ShareSource, AUDIO_ONLY_HIGH_BPS, AUDIO_ONLY_NORMAL_BPS};
+use vox_client_core::golive::{
+    DegradationPreference, EncoderChoice, ShareOptions, ShareSource, AUDIO_ONLY_HIGH_BPS,
+    AUDIO_ONLY_NORMAL_BPS,
+};
 use vox_client_core::hub::HubEvent;
 use vox_client_core::{AlertKind, NoiseControl, VoiceEvent, VoiceGate};
 use vox_proto::{Channel, ChannelId, ChannelKind, Message, ServerEvent, User, UserId, VoiceMember};
 
 use crate::alerts::{self, AlertPolicy};
 use crate::autotest::Auto;
-use crate::call::{watch_allowed, watch_limit_text, CallUi, VideoUi, WATCH_PENDING_TIMEOUT};
 use crate::backend::{Backend, Cmd, Ev, Repaint, VoiceOpts};
+use crate::call::{watch_allowed, watch_limit_text, CallUi, VideoUi, WATCH_PENDING_TIMEOUT};
 use crate::meter::MeterWatch;
 use crate::previews::{self, PreviewStore};
 use crate::ptt::{self, PttHook, PttMsg};
@@ -37,31 +40,31 @@ pub mod notify;
 #[path = "chat_extras.rs"]
 pub mod chat_extras;
 
-/// Settings → Vídeo: hardware acceleration and the video encoder (v0.7).
+/// Settings → Video: hardware acceleration and the video encoder (v0.7).
 #[path = "encoder_cfg.rs"]
 mod encoder_cfg;
 
-/// The v1.0 main screen: the sidebar and the center (`layout.rs` has the rules).
-#[path = "shell.rs"]
-mod shell;
-#[path = "sidebar.rs"]
-mod sidebar;
 /// The v1.0 chat renderer (channels, the docked chat, DMs).
 #[path = "chat_view.rs"]
 pub mod chat_view;
 /// The v1.0 home screen.
 #[path = "home.rs"]
 mod home;
-/// Configurações (v1.0, phase 3a): the sections on the left, the chosen one on the right.
+/// Settings (v1.0, phase 3a): the sections on the left, the chosen one on the right.
 #[path = "settings_ui.rs"]
 pub mod settings_ui;
+/// The v1.0 main screen: the sidebar and the center (`layout.rs` has the rules).
+#[path = "shell.rs"]
+mod shell;
+#[path = "sidebar.rs"]
+mod sidebar;
 pub(crate) use settings_ui::{set_log_dir, SettingsPage};
-/// The Go Live source picker window (v1.0, phase 3a).
-#[path = "golive_ui.rs"]
-mod golive_ui;
 /// The Calladex easter egg (v1.0.1): `/calladex` in a chat input, or "calladex" typed on the home screen.
 #[path = "calladex.rs"]
 pub mod calladex;
+/// The Go Live source picker window (v1.0, phase 3a).
+#[path = "golive_ui.rs"]
+mod golive_ui;
 
 // Icons (Phosphor, `theme::ph`; v1.0).
 pub(crate) const ICON_MUTED: &str = ph::MICROPHONE_SLASH;
@@ -72,7 +75,8 @@ pub(crate) const ICON_VOICE: &str = ph::SPEAKER_HIGH;
 pub(crate) const ICON_SPEAKER_OFF: &str = ph::SPEAKER_SLASH;
 /// Autotests: the window counts as minimized without really being minimized (background test
 /// mode never minimizes or restores a window, `vox_client_core::testmode`).
-static SIMULATED_MINIMIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static SIMULATED_MINIMIZED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Autotests: count the window as minimized (or not) from now on.
 pub(crate) fn simulate_minimized(on: bool) {
@@ -83,41 +87,51 @@ pub(crate) fn simulate_minimized(on: bool) {
 /// machine's own device names (microphones, speakers, the video card) are replaced by generic
 /// ones, so no picture shows what the person's PC has.
 pub(crate) fn shot_privacy() -> bool {
-    static ON: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var_os("VOX_SHOT_PRIVACY").is_some_and(|v| v == "1"));
+    static ON: std::sync::LazyLock<bool> =
+        std::sync::LazyLock::new(|| std::env::var_os("VOX_SHOT_PRIVACY").is_some_and(|v| v == "1"));
     *ON
 }
 
 /// [`shot_privacy`]'s stand-in for a video card's encoder label ("<card> (NVENC)" becomes
-/// "Placa de vídeo (NVENC)"); the label itself otherwise.
+/// "Graphics card (NVENC)"); the label itself otherwise.
 pub(crate) fn shown_encoder_label(label: &str) -> String {
     if !shot_privacy() {
         return label.to_string();
     }
     match label.rfind(" (") {
-        Some(i) => format!("Placa de vídeo{}", &label[i..]),
-        None => "Placa de vídeo".to_string(),
+        Some(i) => format!("Graphics card{}", &label[i..]),
+        None => "Graphics card".to_string(),
     }
 }
 
 /// Is the main window minimized (nobody sees it)? Every "minimized" decision goes through here.
 pub(crate) fn window_minimized(ctx: &egui::Context) -> bool {
-    SIMULATED_MINIMIZED.load(std::sync::atomic::Ordering::Relaxed) || ctx.input(|i| i.viewport().minimized.unwrap_or(false))
+    SIMULATED_MINIMIZED.load(std::sync::atomic::Ordering::Relaxed)
+        || ctx.input(|i| i.viewport().minimized.unwrap_or(false))
 }
 
 /// A private channel's mark (v0.9), after its kind's icon.
 pub(crate) const ICON_PRIVATE: &str = ph::LOCK_SIMPLE;
-const PRIVATE_HOVER: &str = "Canal privado: só quem tem acesso vê";
+const PRIVATE_HOVER: &str = "Private channel: only visible to people with access";
 
 /// How a channel reads in the lists: "# geral", "🔊 Sala 1", with 🔒 when private.
 pub(crate) fn channel_label(c: &Channel, suffix: &str) -> String {
-    let icon = if c.kind == ChannelKind::Voice { ICON_VOICE } else { "#" };
-    let lock = if c.private.is_some() { format!("{ICON_PRIVATE} ") } else { String::new() };
+    let icon = if c.kind == ChannelKind::Voice {
+        ICON_VOICE
+    } else {
+        "#"
+    };
+    let lock = if c.private.is_some() {
+        format!("{ICON_PRIVATE} ")
+    } else {
+        String::new()
+    };
     format!("{icon} {lock}{}{suffix}", c.name)
 }
 pub(crate) const ICON_TV: &str = ph::MONITOR;
 pub(crate) const ICON_CAMERA: &str = ph::VIDEO_CAMERA;
 const ICON_WARN: &str = ph::WARNING;
-/// Marks an audio-only live ("Só áudio") next to "AO VIVO".
+/// Marks an audio-only live ("Audio only") next to "AO VIVO".
 pub(crate) const AUDIO_ONLY_ICON: &str = ph::MUSIC_NOTES;
 const ICON_VOL: &str = ph::SPEAKER_LOW;
 
@@ -126,7 +140,7 @@ pub(crate) fn camera_icon_on(hub_flag: bool, same_room: bool, room_says: bool) -
     hub_flag || (same_room && room_says)
 }
 
-/// Is a live audio-only ("Só áudio")? `hub_flag`: the hub says so (`VoiceMember::audio_only`,
+/// Is a live audio-only ("Audio only")? `hub_flag`: the hub says so (`VoiceMember::audio_only`,
 /// reported for everybody, in any room). Fallback for older hubs, which never send it: the voice
 /// room's reading of the LiveKit tracks (`room_says`), which only exists for people in the room
 /// we are in (`same_room`).
@@ -140,11 +154,12 @@ const JOIN_UI_LIMIT_SECS: u64 = 90;
 pub(crate) const RED: Color32 = crate::theme::AO_VIVO;
 const HISTORY_PAGE: usize = 50;
 const MAX_KEPT_MESSAGES: usize = 1000;
-/// "IA máxima" could not keep up in real time on this machine (see `NoiseControl`).
-const NOISE_FALLBACK_TEXT: &str = "A supressão \"IA máxima\" pesou demais neste computador e voltou para \"IA leve\".";
-/// `Settings::stream_focus_audio` (the stream audio menu and Configurações → Vídeo).
-pub(crate) const FOCUS_AUDIO_LABEL: &str = "Ouvir só as transmissões fixadas";
-pub(crate) const FOCUS_AUDIO_HOVER: &str = "Com várias transmissões abertas, só as fixadas (ou a que está em tela cheia) tocam som. Sem nenhuma fixada, todas tocam.";
+/// "Maximum AI" could not keep up in real time on this machine (see `NoiseControl`).
+const NOISE_FALLBACK_TEXT: &str =
+    "\"Maximum AI\" noise suppression was too demanding for this computer; switched back to \"Light AI\".";
+/// `Settings::stream_focus_audio` (the stream audio menu and Settings → Video).
+pub(crate) const FOCUS_AUDIO_LABEL: &str = "Only play pinned streams";
+pub(crate) const FOCUS_AUDIO_HOVER: &str = "With multiple streams open, only pinned streams (or the fullscreen stream) play audio. Without any pins, all streams play audio.";
 
 /// What the center area shows: a text channel's chat, or the call view of our voice channel.
 /// The call (and any stream we watch) keeps running while the chat is shown.
@@ -172,11 +187,11 @@ pub struct ConnectForm {
     /// Item 12: the name's personal password (shown once the hub asks for it).
     pub personal: String,
     pub need_personal: bool,
-    /// "Lembrar este computador" (a device token instead of typing the personal password).
+    /// "Lembrar this computer" (a device token instead of typing the personal password).
     pub remember_device: bool,
-    /// "Salvar na lista de servidores" (v0.9.1, on by default).
+    /// "Save to server list" (v0.9.1, on by default).
     pub save_server: bool,
-    /// v1.0.1: after "Este endereço não é o mesmo servidor que você salvou", the `server_key` of
+    /// v1.0.1: after "This address is not the server you saved", the `server_key` of
     /// that address and name: the next login there goes only with what is typed now (no saved
     /// password, no saved login token) and, when it works, saves this server as the one.
     pub manual: Option<String>,
@@ -220,7 +235,7 @@ pub enum CameraUi {
     },
 }
 
-/// The camera preview of "Configurar câmera".
+/// The camera preview of "Configure camera".
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum CameraPreviewUi {
     #[default]
@@ -240,22 +255,22 @@ pub struct VoiceUi {
     pub deafened: bool,
     pub share: Share,
     pub share_preset: Preset,
-    /// What the running Go Live captures, and whether it carries audio ("Trocar tela" starts from
+    /// What the running Go Live captures, and whether it carries audio ("Switch screen" starts from
     /// these).
     pub share_pick: Option<Pick>,
     pub share_audio: bool,
-    /// The running Go Live is "Só áudio" (no video, no preview), and at which quality.
+    /// The running Go Live is "Audio only" (no video, no preview), and at which quality.
     pub share_audio_only: bool,
     pub share_audio_high: bool,
     /// Streamers (identities) whose live is audio-only, as the voice room reports it. Only
     /// people in our own voice channel are known (see `VoiceEvent::ShareKind`).
     pub audio_only: HashSet<String>,
-    /// A "Trocar tela" request is in flight, towards this source.
+    /// A "Switch screen" request is in flight, towards this source.
     pub switching_to: Option<Pick>,
     /// Streams being watched (streamer identities), in the order they started (item 9: at
     /// most `MAX_WATCHED`).
     pub watching: Vec<String>,
-    /// "Assistir" pressed, the core has not confirmed yet (identity, when).
+    /// "Watch" pressed, the core has not confirmed yet (identity, when).
     pub watch_pending: Vec<(String, std::time::Instant)>,
     pub speaking: HashSet<String>,
     pub error: Option<String>,
@@ -267,7 +282,7 @@ pub struct VoiceUi {
     pub warning: Option<String>,
     /// Listen-only: the mic could not be used.
     pub no_mic: bool,
-    /// "Silenciar todos": every other participant is silenced locally (not saved).
+    /// "Mute everyone": every other participant is silenced locally (not saved).
     pub others_muted: bool,
     pub watch_started_count: u32,
     pub watch_ended_count: u32,
@@ -280,26 +295,26 @@ pub struct VoiceUi {
 pub enum Pick {
     Window(isize),
     Monitor(usize),
-    /// "Só áudio": one app (its process) as the source of the sound.
+    /// "Audio only": one app (its process) as the source of the sound.
     App(u32),
-    /// "Só áudio": all the PC's sound except the app's own.
+    /// "Audio only": all the PC's sound except the app's own.
     AllSound,
 }
 
 /// The Go Live dialog's mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ShareMode {
-    /// "Tela + áudio": a window or screen (video), with the app's sound.
+    /// "Screen + audio": a window or screen (video), with the app's sound.
     #[default]
     ScreenAudio,
-    /// "Só áudio": just an app's sound, e.g. to listen to music together.
+    /// "Audio only": just an app's sound, e.g. to listen to music together.
     AudioOnly,
 }
 
 #[derive(Default)]
 pub struct GoLive {
     pub open: bool,
-    /// The dialog is "Trocar tela" (live already running: only the source and its audio change).
+    /// The dialog is "Switch screen" (live already running: only the source and its audio change).
     pub switching: bool,
     pub loading: bool,
     pub windows: Vec<WindowInfo>,
@@ -307,18 +322,18 @@ pub struct GoLive {
     pub pick: Option<Pick>,
     pub preset: Preset,
     pub audio: bool,
-    /// "Tela + áudio" or "Só áudio"; kept while the app runs.
+    /// "Screen + audio" or "Audio only"; kept while the app runs.
     pub mode: ShareMode,
-    /// "Só áudio": Alta (256 kbps) instead of Normal (128 kbps).
+    /// "Audio only": Alta (256 kbps) instead of Normal (128 kbps).
     pub audio_high: bool,
-    /// "Priorizar fluidez" instead of "Priorizar nitidez".
+    /// "Prioritize smoothness" instead of "Prioritize sharpness".
     pub smooth: bool,
     pub error: Option<String>,
     /// Tabs, thumbnails and their cache (item 8c); released when the dialog closes.
     pub picker: crate::sources::Picker,
 }
 
-/// The "Testar microfone" button's state.
+/// The "Test microphone" button's state.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum MicTestUi {
     #[default]
@@ -341,12 +356,12 @@ pub struct SettingsUi {
     pub capturing_key: bool,
     pub cameras: Vec<vox_capture::CameraInfo>,
     pub cameras_error: Option<String>,
-    /// The camera preview of "Configurar câmera" (`camera_cfg.rs`).
+    /// The camera preview of "Configure camera" (`camera_cfg.rs`).
     pub camera_preview: CameraPreviewUi,
     /// Camera formats, image controls and the running camera's numbers (see `camera_cfg.rs`).
     pub cam: crate::camera_cfg::CamUi,
-    /// "IA máxima" was too heavy for this machine and fell back to "IA leve" (note shown under
-    /// "Supressão de ruído" until another level is picked).
+    /// "Maximum AI" was too heavy for this machine and fell back to "Light AI" (note shown under
+    /// "Noise suppression" until another level is picked).
     pub noise_fell_back: bool,
     /// The open section of the settings window (kept while the app runs).
     pub page: SettingsPage,
@@ -408,7 +423,7 @@ pub struct App {
     /// Gate + level meter of the voice session / of the mic test (two separate pipelines).
     pub gate_voice: Arc<VoiceGate>,
     pub gate_test: Arc<VoiceGate>,
-    /// "Supressão de ruído", shared by the voice session and the mic test.
+    /// "Noise suppression", shared by the voice session and the mic test.
     pub noise: Arc<NoiseControl>,
     /// Runs while any level meter is visible (see `meter.rs`).
     meter_watch: Option<MeterWatch>,
@@ -434,7 +449,7 @@ pub struct App {
     pub chatx: chat_extras::ChatUi,
     /// "Criar / abrir servidor": the server I host in this app, and the invite tools (`host.rs`).
     pub host: crate::host::HostUi,
-    /// "Seus servidores salvos" on the home screen (`servers.rs`, v0.9.1).
+    /// "Your servers salvos" on the home screen (`servers.rs`, v0.9.1).
     pub servers: crate::servers::ServersUi,
     /// The address of the server I am logged into (normalized; empty on the home screen).
     pub session_url: String,
@@ -457,7 +472,13 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(backend: Backend, repaint: Repaint, settings: Settings, persist: bool, auto: Option<Auto>) -> Self {
+    pub fn new(
+        backend: Backend,
+        repaint: Repaint,
+        settings: Settings,
+        persist: bool,
+        auto: Option<Auto>,
+    ) -> Self {
         let (ptt_tx, ptt_rx) = std_mpsc::channel();
         let mut form = ConnectForm {
             url: settings.server.clone(),
@@ -550,7 +571,7 @@ impl App {
         app.apply_gate_config();
         app.init_video_encoders();
         app.sync_ptt_hook();
-        // The camera list tells which camera "Padrão" is, so its saved setup is found even when
+        // The camera list tells which camera "Default" is, so its saved setup is found even when
         // the settings were never opened.
         app.backend.send(Cmd::ListCameras);
         app
@@ -568,17 +589,21 @@ impl App {
         if self.form.busy {
             return;
         }
-        let (url, user) = (self.form.url.trim().to_string(), self.form.user.trim().to_string());
+        let (url, user) = (
+            self.form.url.trim().to_string(),
+            self.form.user.trim().to_string(),
+        );
         if url.is_empty() {
-            self.form.error = Some("Informe o endereço do servidor.".into());
+            self.form.error = Some("Enter the server address.".into());
             return;
         }
         if user.chars().count() < 2 {
-            self.form.error = Some("Informe seu nome (pelo menos 2 letras).".into());
+            self.form.error = Some("Enter your name (at least 2 letters).".into());
             return;
         }
-        // v1.0.1: re-typing the credentials after "não é o mesmo servidor": only what is typed.
-        let manual = self.form.manual.as_deref() == Some(crate::servers::server_key(&url, &user).as_str());
+        // v1.0.1: re-typing credentials after a server-identity mismatch: only send typed values.
+        let manual =
+            self.form.manual.as_deref() == Some(crate::servers::server_key(&url, &user).as_str());
         if manual {
             self.servers.joining = None;
         }
@@ -594,8 +619,19 @@ impl App {
         // Item 12: a typed personal password wins; otherwise this computer's token for the name.
         let personal = Some(self.form.personal.clone()).filter(|p| !p.is_empty());
         let typed = crate::backend::normalize_url(&url);
-        let token_at = if manual { None } else { std::iter::once(typed.clone()).chain(urls.iter().cloned()).find_map(|u| self.settings.device_token(&u, &user).map(|t| (u, t))) };
-        let guard = self.saved_guard(&typed, &user, token_at.as_ref().map(|(u, _)| u.as_str()), manual);
+        let token_at = if manual {
+            None
+        } else {
+            std::iter::once(typed.clone())
+                .chain(urls.iter().cloned())
+                .find_map(|u| self.settings.device_token(&u, &user).map(|t| (u, t)))
+        };
+        let guard = self.saved_guard(
+            &typed,
+            &user,
+            token_at.as_ref().map(|(u, _)| u.as_str()),
+            manual,
+        );
         let device_token = token_at.map(|(_, t)| t);
         self.servers_login_started(device_token.is_some(), None);
         tracing::info!(url = %url, user = %user, personal = personal.is_some(), device_token = device_token.is_some(), saved_password = guard.password.is_some(), manual, addresses = urls.len().max(1), "connecting");
@@ -614,19 +650,61 @@ impl App {
     /// v1.0.1: what of this login was saved on this computer, and for which server (see
     /// `backend::Guard`). `typed`: the form's address, normalized; `token_at`: the address the
     /// login token about to be sent was saved under.
-    fn saved_guard(&self, typed: &str, user: &str, token_at: Option<&str>, manual: bool) -> crate::backend::Guard {
+    fn saved_guard(
+        &self,
+        typed: &str,
+        user: &str,
+        token_at: Option<&str>,
+        manual: bool,
+    ) -> crate::backend::Guard {
         use crate::backend::{Binding, Guard};
         // The entry being joined, else the one saved for this address and name.
         let key = crate::servers::server_key(typed, user);
-        let entry = self.servers.joining.and_then(|id| self.settings.server_entry(id)).or_else(|| self.settings.servers.servers.iter().find(|e| e.key() == key)).cloned();
+        let entry = self
+            .servers
+            .joining
+            .and_then(|id| self.settings.server_entry(id))
+            .or_else(|| {
+                self.settings
+                    .servers
+                    .servers
+                    .iter()
+                    .find(|e| e.key() == key)
+            })
+            .cloned();
         let entry_id = entry.as_ref().and_then(|e| e.server_id());
-        let token = token_at.map(|at| Binding { home: at.to_string(), server_id: self.settings.device_token_server(at, user).or_else(|| entry_id.clone()) });
+        let token = token_at.map(|at| Binding {
+            home: at.to_string(),
+            server_id: self
+                .settings
+                .device_token_server(at, user)
+                .or_else(|| entry_id.clone()),
+        });
         // The password in the form is a saved one when it is the entry's (or v0.9.0's single one).
         let pw = &self.form.password;
-        let legacy = self.settings.saved_password().filter(|_| crate::servers::server_key(&self.settings.server, &self.settings.username) == key);
-        let saved_pw = !manual && !pw.is_empty() && (entry.as_ref().and_then(|e| self.settings.server_password(e)).as_ref() == Some(pw) || legacy.as_ref() == Some(pw));
-        let password = saved_pw.then(|| Binding { home: entry.as_ref().map_or_else(|| typed.to_string(), |e| crate::backend::normalize_url(&e.url)), server_id: entry_id.clone() });
-        Guard { token, password, confirmed: Some(typed.to_string()) }
+        let legacy = self.settings.saved_password().filter(|_| {
+            crate::servers::server_key(&self.settings.server, &self.settings.username) == key
+        });
+        let saved_pw = !manual
+            && !pw.is_empty()
+            && (entry
+                .as_ref()
+                .and_then(|e| self.settings.server_password(e))
+                .as_ref()
+                == Some(pw)
+                || legacy.as_ref() == Some(pw));
+        let password = saved_pw.then(|| Binding {
+            home: entry.as_ref().map_or_else(
+                || typed.to_string(),
+                |e| crate::backend::normalize_url(&e.url),
+            ),
+            server_id: entry_id.clone(),
+        });
+        Guard {
+            token,
+            password,
+            confirmed: Some(typed.to_string()),
+        }
     }
 
     pub fn logout(&mut self) {
@@ -675,13 +753,18 @@ impl App {
         let log = self.logs.entry(id).or_default();
         if !log.requested {
             log.requested = true;
-            self.backend.send(Cmd::LoadHistory { channel: id, before: None });
+            self.backend.send(Cmd::LoadHistory {
+                channel: id,
+                before: None,
+            });
         }
     }
 
     /// Send the input to the channel whose chat is on screen (the center's, or the docked one).
     pub fn send_message(&mut self) {
-        let Some(channel) = self.chat_on_screen().or(self.selected) else { return };
+        let Some(channel) = self.chat_on_screen().or(self.selected) else {
+            return;
+        };
         self.send_message_to(channel);
     }
 
@@ -699,7 +782,11 @@ impl App {
         }
         let extras = self.take_send_extras(target, &text);
         self.input.clear();
-        self.backend.send(Cmd::SendMessage { channel, content: text, extras });
+        self.backend.send(Cmd::SendMessage {
+            channel,
+            content: text,
+            extras,
+        });
     }
 
     pub fn join_voice(&mut self, channel: ChannelId) {
@@ -753,7 +840,10 @@ impl App {
         if !self.settings.alerts.allows(kind) {
             return false;
         }
-        if !self.alert_policy.admit(std::time::Instant::now(), kind, who) {
+        if !self
+            .alert_policy
+            .admit(std::time::Instant::now(), kind, who)
+        {
             tracing::debug!(alert = kind.name(), who, "alert sound skipped (debounce)");
             return false;
         }
@@ -763,7 +853,7 @@ impl App {
 
     fn send_alert(&self, kind: AlertKind, standalone: bool) {
         if self.notifications_muted() {
-            tracing::debug!(alert = kind.name(), "alert sound skipped (Não perturbe)");
+            tracing::debug!(alert = kind.name(), "alert sound skipped (Do not disturb)");
             return;
         }
         tracing::debug!(alert = kind.name(), "alert sound requested");
@@ -775,10 +865,10 @@ impl App {
         });
     }
 
-    /// The "Testar" button of the settings dialog: ignores the category switches.
+    /// The "Test" button of the settings dialog: ignores the category switches.
     fn test_alert(&mut self) {
         if self.notifications_muted() {
-            self.toast("Não perturbe está ligado: os sons de alerta ficam em silêncio.");
+            self.toast("Do not disturb is on: alert sounds are muted.");
         } else if self.settings.alerts.enabled {
             self.send_alert(AlertKind::Join, false);
         }
@@ -786,8 +876,12 @@ impl App {
 
     fn voice_cleared(&mut self) {
         if !self.voice.watching.is_empty() {
-            let what = if self.voice.watching.len() > 1 { "Transmissões encerradas" } else { "Transmissão encerrada" };
-            self.toast(format!("{ICON_TV} {what} (você saiu da voz)."));
+            let what = if self.voice.watching.len() > 1 {
+                "Streams ended"
+            } else {
+                "Stream ended"
+            };
+            self.toast(format!("{ICON_TV} {what} (you left voice)."));
         }
         if self.center == Center::Call {
             self.center = Center::Chat;
@@ -846,7 +940,10 @@ impl App {
     fn meter_visible(&self) -> bool {
         let frame = self.repaint.ctx().map_or(0, |c| c.cumulative_frame_nr());
         let dock = self.call.meter_frame.is_some_and(|f| f + 1 >= frame);
-        let in_call = self.screen == Screen::Main && self.voice.channel.is_some() && !self.voice.no_mic && dock;
+        let in_call = self.screen == Screen::Main
+            && self.voice.channel.is_some()
+            && !self.voice.no_mic
+            && dock;
         in_call || self.settings_ui.mic_test != MicTestUi::Off
     }
 
@@ -859,7 +956,10 @@ impl App {
     fn sync_meter_watch(&mut self) {
         let want = self.meter_visible();
         if want && self.meter_watch.is_none() {
-            self.meter_watch = Some(MeterWatch::start(self.repaint.clone(), vec![self.gate_voice.clone(), self.gate_test.clone()]));
+            self.meter_watch = Some(MeterWatch::start(
+                self.repaint.clone(),
+                vec![self.gate_voice.clone(), self.gate_test.clone()],
+            ));
         } else if !want {
             self.meter_watch = None;
         }
@@ -879,7 +979,14 @@ impl App {
         let mute = !self.voice.muted;
         self.backend.send(Cmd::SetMuted(mute));
         if self.voice.channel.is_some() {
-            self.own_alert(if mute { AlertKind::Mute } else { AlertKind::Unmute }, false);
+            self.own_alert(
+                if mute {
+                    AlertKind::Mute
+                } else {
+                    AlertKind::Unmute
+                },
+                false,
+            );
         }
     }
 
@@ -887,7 +994,14 @@ impl App {
         let deafen = !self.voice.deafened;
         self.backend.send(Cmd::SetDeafened(deafen));
         if self.voice.channel.is_some() {
-            self.own_alert(if deafen { AlertKind::Deafen } else { AlertKind::Undeafen }, false);
+            self.own_alert(
+                if deafen {
+                    AlertKind::Deafen
+                } else {
+                    AlertKind::Undeafen
+                },
+                false,
+            );
         }
     }
 
@@ -910,7 +1024,9 @@ impl App {
         let source = match &pick {
             Pick::Window(h) => ShareSource::Window(*h),
             Pick::Monitor(i) => ShareSource::Monitor(*i),
-            Pick::App(_) | Pick::AllSound => return self.start_audio_share(pick, self.golive.audio_high),
+            Pick::App(_) | Pick::AllSound => {
+                return self.start_audio_share(pick, self.golive.audio_high)
+            }
         };
         let opts = ShareOptions {
             width,
@@ -921,9 +1037,17 @@ impl App {
             audio_bitrate: AUDIO_ONLY_NORMAL_BPS,
             capture_cursor: true,
             // Autotest only: VOX_SHARE_ENCODER=software|nvenc|mf|auto picks the encoder path.
-            encoder: (!self.persist).then(|| std::env::var("VOX_SHARE_ENCODER").ok()).flatten().and_then(|v| v.parse().ok()).unwrap_or(EncoderChoice::Auto),
+            encoder: (!self.persist)
+                .then(|| std::env::var("VOX_SHARE_ENCODER").ok())
+                .flatten()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(EncoderChoice::Auto),
             max_bitrate: Some(preset.bitrate()),
-            degradation: if smooth { DegradationPreference::Smoothness } else { DegradationPreference::Sharpness },
+            degradation: if smooth {
+                DegradationPreference::Smoothness
+            } else {
+                DegradationPreference::Sharpness
+            },
         };
         self.settings.preset = preset;
         self.settings.share_audio = audio;
@@ -953,10 +1077,19 @@ impl App {
     }
 
     /// [`App::start_audio_share`] for any audio-only source (the autotest uses a tone).
-    pub fn start_audio_share_source(&mut self, source: ShareSource, pick: Option<Pick>, high: bool) {
+    pub fn start_audio_share_source(
+        &mut self,
+        source: ShareSource,
+        pick: Option<Pick>,
+        high: bool,
+    ) {
         let opts = ShareOptions {
             audio: true,
-            audio_bitrate: if high { AUDIO_ONLY_HIGH_BPS } else { AUDIO_ONLY_NORMAL_BPS },
+            audio_bitrate: if high {
+                AUDIO_ONLY_HIGH_BPS
+            } else {
+                AUDIO_ONLY_NORMAL_BPS
+            },
             ..ShareOptions::default()
         };
         self.golive.audio_high = high;
@@ -971,14 +1104,18 @@ impl App {
         self.backend.send(Cmd::StartShare { source, opts });
     }
 
-    /// "Trocar tela": the same picker as Go Live, but choosing only changes what the running live
+    /// "Switch screen": the same picker as Go Live, but choosing only changes what the running live
     /// captures (quality, bitrate and the fluidez/nitidez choice stay as they were).
     pub fn open_golive_switch(&mut self) {
         self.open_golive();
         self.golive.switching = true;
         self.golive.audio = self.voice.share_audio;
         self.golive.pick = None;
-        self.golive.mode = if self.voice.share_audio_only { ShareMode::AudioOnly } else { ShareMode::ScreenAudio };
+        self.golive.mode = if self.voice.share_audio_only {
+            ShareMode::AudioOnly
+        } else {
+            ShareMode::ScreenAudio
+        };
         self.golive.audio_high = self.voice.share_audio_high;
         self.golive.picker.tab = match self.voice.share_pick {
             Some(Pick::Monitor(_)) => crate::sources::Tab::Screens,
@@ -1008,7 +1145,7 @@ impl App {
 
     // ------------------------------------------------------------ camera
 
-    /// The voice bar's "Câmera" button.
+    /// The voice bar's "Camera" button.
     pub fn toggle_camera(&mut self) {
         match self.voice.camera {
             CameraUi::Off => self.start_camera(),
@@ -1041,12 +1178,16 @@ impl App {
         matches!(self.voice.camera, CameraUi::On { .. })
     }
 
-    /// "Configurar câmera": start / stop the camera preview (with the chosen device and quality).
+    /// "Configure camera": start / stop the camera preview (with the chosen device and quality).
     pub fn set_camera_preview(&mut self, on: bool) {
         if on {
             self.settings_ui.camera_preview = CameraPreviewUi::Starting;
             self.send_camera_setup();
-            self.backend.send(Cmd::CameraPreview(Some((self.settings.camera_device.clone(), self.settings.camera_name.clone(), self.settings.camera_preset))));
+            self.backend.send(Cmd::CameraPreview(Some((
+                self.settings.camera_device.clone(),
+                self.settings.camera_name.clone(),
+                self.settings.camera_preset,
+            ))));
         } else if self.settings_ui.camera_preview != CameraPreviewUi::Off {
             self.settings_ui.camera_preview = CameraPreviewUi::Off;
             self.backend.send(Cmd::CameraPreview(None));
@@ -1058,9 +1199,12 @@ impl App {
     fn cameras_visible(&self, ctx: &egui::Context) -> bool {
         let minimized = crate::app::window_minimized(ctx);
         let call_shown = self.center == Center::Call && !self.call.fullscreen;
-        // ("Configurar câmera" shows our own camera while it is on.)
+        // ("Configure camera" shows our own camera while it is on.)
         let settings_self_view = self.camera_window_preview() && self.camera_on();
-        self.screen == Screen::Main && self.voice.channel.is_some() && !minimized && (call_shown || settings_self_view)
+        self.screen == Screen::Main
+            && self.voice.channel.is_some()
+            && !minimized
+            && (call_shown || settings_self_view)
     }
 
     /// Tell the backend when the camera tiles appear / disappear (subscriptions and self-view
@@ -1079,7 +1223,7 @@ impl App {
     }
 
     /// Is our own Go Live running (so our stream tile can show the preview)?
-    /// Is `m`'s live audio-only ("Só áudio")? Ours is known from what we started; the others' from
+    /// Is `m`'s live audio-only ("Audio only")? Ours is known from what we started; the others' from
     /// the hub's flag (everybody, in any room), or - for an older hub - from the tracks seen in
     /// the voice room we are in.
     pub fn stream_is_audio_only(&self, m: &VoiceMember) -> bool {
@@ -1087,17 +1231,29 @@ impl App {
             return self.voice.share_audio_only && !matches!(self.voice.share, Share::Off);
         }
         let same_room = m.channel_id.is_some() && m.channel_id == self.voice.channel;
-        audio_only_live_on(m.streaming && m.audio_only, same_room, self.voice.audio_only.contains(&m.user.id.to_string()))
+        audio_only_live_on(
+            m.streaming && m.audio_only,
+            same_room,
+            self.voice.audio_only.contains(&m.user.id.to_string()),
+        )
     }
 
     /// What the hub says about a streamer's `audio_only` (None: not a voice member we know).
     pub fn streamer_hub_audio_only(&self, identity: &str) -> Option<bool> {
-        identity.parse::<UserId>().ok().and_then(|id| self.voice_members.get(&id)).map(|m| m.streaming && m.audio_only)
+        identity
+            .parse::<UserId>()
+            .ok()
+            .and_then(|id| self.voice_members.get(&id))
+            .map(|m| m.streaming && m.audio_only)
     }
 
     /// The same by streamer identity (the watched streams are always in our own room).
     pub fn identity_is_audio_only(&self, identity: &str) -> bool {
-        match identity.parse::<UserId>().ok().and_then(|id| self.voice_members.get(&id)) {
+        match identity
+            .parse::<UserId>()
+            .ok()
+            .and_then(|id| self.voice_members.get(&id))
+        {
             Some(m) => self.stream_is_audio_only(m),
             None => self.voice.audio_only.contains(identity),
         }
@@ -1107,12 +1263,12 @@ impl App {
         matches!(self.voice.share, Share::Live { .. })
     }
 
-    /// Our live has a picture (so the tile can show the preview): not a "Só áudio" one.
+    /// Our live has a picture (so the tile can show the preview): not a "Audio only" one.
     pub fn my_preview_live(&self) -> bool {
         self.my_share_live() && !self.voice.share_audio_only && self.settings.show_self_preview
     }
 
-    /// "Ocultar prévia" / "Mostrar prévia" (my stream tile and my own menu): the same switch as
+    /// "Hide preview" / "Show preview" (my stream tile and my own menu): the same switch as
     /// Settings, saved.
     pub fn set_self_preview(&mut self, on: bool) {
         if self.settings.show_self_preview != on {
@@ -1133,19 +1289,38 @@ impl App {
         use vox_client_core::golive::SELF_SHARE_KEY;
         let rect = self.video.want.get(SELF_SHARE_KEY).copied();
         let minimized = crate::app::window_minimized(ctx);
-        let visible = self.my_preview_live() && self.screen == Screen::Main && !minimized && !covered.iter().any(|k| k == SELF_SHARE_KEY) && rect.is_some();
+        let visible = self.my_preview_live()
+            && self.screen == Screen::Main
+            && !minimized
+            && !covered.iter().any(|k| k == SELF_SHARE_KEY)
+            && rect.is_some();
         let last = self.share_preview_sent.unwrap_or_default();
         let want = match rect.filter(|_| visible) {
             Some(r) => {
                 let (_, _, w, _) = crate::call::to_px(r, ctx.pixels_per_point());
                 let (max_width, max_height) = crate::call::preview_size_for(w);
-                let fps = if self.self_preview_focused() { crate::call::PREVIEW_FPS_FOCUSED } else { crate::call::PREVIEW_FPS };
-                vox_capture::PreviewConfig { on: true, fps, max_width, max_height }
+                let fps = if self.self_preview_focused() {
+                    crate::call::PREVIEW_FPS_FOCUSED
+                } else {
+                    crate::call::PREVIEW_FPS
+                };
+                vox_capture::PreviewConfig {
+                    on: true,
+                    fps,
+                    max_width,
+                    max_height,
+                }
             }
             None => vox_capture::PreviewConfig { on: false, ..last },
         };
         if self.share_preview_sent != Some(want) {
-            tracing::info!(on = want.on, fps = want.fps, max = format!("{}x{}", want.max_width, want.max_height), focused = self.self_preview_focused(), "share preview request");
+            tracing::info!(
+                on = want.on,
+                fps = want.fps,
+                max = format!("{}x{}", want.max_width, want.max_height),
+                focused = self.self_preview_focused(),
+                "share preview request"
+            );
             self.share_preview_sent = Some(want);
             self.backend.send(Cmd::SharePreview(want));
         }
@@ -1154,7 +1329,9 @@ impl App {
     /// A minimized window runs no `ui()` pass, so the preview is switched off from `logic()`
     /// (which still runs); the next `ui()` pass after the restore turns it back on.
     fn pause_share_preview_when_minimized(&mut self, ctx: &egui::Context) {
-        let Some(sent) = self.share_preview_sent.filter(|c| c.on) else { return };
+        let Some(sent) = self.share_preview_sent.filter(|c| c.on) else {
+            return;
+        };
         if self.notify.hidden || crate::app::window_minimized(ctx) {
             let off = vox_capture::PreviewConfig { on: false, ..sent };
             tracing::info!("share preview request: off (window minimized)");
@@ -1168,14 +1345,16 @@ impl App {
         self.voice.watching.iter().any(|w| w == identity)
     }
 
-    /// "Assistir": start watching `identity` next to the streams already watched. Refused, with
+    /// "Watch": start watching `identity` next to the streams already watched. Refused, with
     /// a message, when `MAX_WATCHED` are already watched (or about to be). Returns whether the
     /// stream is watched or on its way.
     pub fn watch(&mut self, identity: &str) -> bool {
         if self.is_watching(identity) {
             return true;
         }
-        self.voice.watch_pending.retain(|(_, at)| at.elapsed() < WATCH_PENDING_TIMEOUT);
+        self.voice
+            .watch_pending
+            .retain(|(_, at)| at.elapsed() < WATCH_PENDING_TIMEOUT);
         if self.voice.watch_pending.iter().any(|(w, _)| w == identity) {
             return true;
         }
@@ -1184,12 +1363,14 @@ impl App {
             self.toast(watch_limit_text());
             return false;
         }
-        self.voice.watch_pending.push((identity.to_string(), std::time::Instant::now()));
+        self.voice
+            .watch_pending
+            .push((identity.to_string(), std::time::Instant::now()));
         self.backend.send(Cmd::Watch(identity.to_string()));
         true
     }
 
-    /// "Parar de assistir" one stream (the others keep playing).
+    /// "Stop watching" one stream (the others keep playing).
     pub fn unwatch(&mut self, identity: &str) {
         self.voice.watch_pending.retain(|(w, _)| w != identity);
         self.backend.send(Cmd::Unwatch(identity.to_string()));
@@ -1200,7 +1381,11 @@ impl App {
             .iter()
             .find(|u| u.id == id)
             .map(|u| u.shown_name().to_string())
-            .or_else(|| self.voice_members.get(&id).map(|m| m.user.shown_name().to_string()))
+            .or_else(|| {
+                self.voice_members
+                    .get(&id)
+                    .map(|m| m.user.shown_name().to_string())
+            })
             .unwrap_or_else(|| format!("#{id}"))
     }
 
@@ -1211,23 +1396,31 @@ impl App {
     /// Who is watching `streamer`'s live right now, by name (empty when they are not live).
     /// Only people in the streamer's own room count, whatever the hub said last.
     pub fn viewers_of(&self, streamer: UserId) -> Vec<String> {
-        let Some(s) = self.voice_members.get(&streamer).filter(|s| s.streaming && s.channel_id.is_some()) else {
+        let Some(s) = self
+            .voice_members
+            .get(&streamer)
+            .filter(|s| s.streaming && s.channel_id.is_some())
+        else {
             return Vec::new();
         };
         let mut names: Vec<String> = self
             .voice_members
             .values()
-            .filter(|m| m.user.id != streamer && m.channel_id == s.channel_id && m.watching.contains(&streamer))
+            .filter(|m| {
+                m.user.id != streamer
+                    && m.channel_id == s.channel_id
+                    && m.watching.contains(&streamer)
+            })
             .map(|m| m.user.shown_name().to_string())
             .collect();
         names.sort_by_key(|n| n.to_lowercase());
         names
     }
 
-    /// "Ana, Bruno" or "Ninguém assistindo ainda".
+    /// "Ana, Bruno" or "No viewers yet".
     pub fn viewers_text(names: &[String]) -> String {
         if names.is_empty() {
-            "Ninguém assistindo ainda".to_string()
+            "No viewers yet".to_string()
         } else {
             format!("Assistindo: {}", names.join(", "))
         }
@@ -1238,7 +1431,11 @@ impl App {
     /// room's is first-hand). Outside our room only the hub can tell.
     pub fn camera_flag_of(&self, m: &VoiceMember) -> bool {
         let same_room = self.voice.channel.is_some() && m.channel_id == self.voice.channel;
-        let room_says = if self.my_id() == Some(m.user.id) { self.camera_on() } else { self.voice.cameras.contains(&m.user.id.to_string()) };
+        let room_says = if self.my_id() == Some(m.user.id) {
+            self.camera_on()
+        } else {
+            self.voice.cameras.contains(&m.user.id.to_string())
+        };
         camera_icon_on(m.camera, same_room, room_says)
     }
 
@@ -1249,7 +1446,11 @@ impl App {
             return self.dms.call_members.iter().collect();
         }
         match self.voice.channel {
-            Some(ch) => self.voice_members.values().filter(|m| m.channel_id == Some(ch)).collect(),
+            Some(ch) => self
+                .voice_members
+                .values()
+                .filter(|m| m.channel_id == Some(ch))
+                .collect(),
             None => Vec::new(),
         }
     }
@@ -1261,7 +1462,7 @@ impl App {
             self.on_event(ev);
         }
         if self.noise.take_fallback_notice() {
-            // The mic chain could not run "IA máxima" in real time and already switched to IA leve.
+            // The mic chain could not run "Maximum AI" in real time and already switched to Light AI.
             self.settings.noise_suppression = self.noise.level();
             self.settings_ui.noise_fell_back = true;
             self.save_settings();
@@ -1292,12 +1493,16 @@ impl App {
                 self.form.busy = false;
                 self.form.error = Some(msg);
                 self.form.password.clear();
-                self.form.manual = Some(crate::servers::server_key(&self.form.url, &self.form.user));
+                self.form.manual =
+                    Some(crate::servers::server_key(&self.form.url, &self.form.user));
                 self.servers.joining = None;
                 self.servers_login_failed();
                 self.servers.focus_password = true;
             }
-            Ev::NeedPersonalPassword { message, forget_device } => {
+            Ev::NeedPersonalPassword {
+                message,
+                forget_device,
+            } => {
                 self.form.busy = false;
                 self.form.need_personal = true;
                 self.form.error = Some(message);
@@ -1333,11 +1538,25 @@ impl App {
                 self.screen = Screen::Main;
                 if let Some(t) = device_token {
                     // v1.0.1: a token belongs to the server that issued it.
-                    self.settings.set_device_token(&url, &user.username, Some(&t));
-                    self.settings.set_device_token_server(&url, &user.username, server_id.as_deref());
-                } else if pin && self.settings.device_token_server(&url, &user.username).is_none() {
+                    self.settings
+                        .set_device_token(&url, &user.username, Some(&t));
+                    self.settings.set_device_token_server(
+                        &url,
+                        &user.username,
+                        server_id.as_deref(),
+                    );
+                } else if pin
+                    && self
+                        .settings
+                        .device_token_server(&url, &user.username)
+                        .is_none()
+                {
                     // A token saved before v1.0.1, just accepted here: it is this server's.
-                    self.settings.set_device_token_server(&url, &user.username, server_id.as_deref());
+                    self.settings.set_device_token_server(
+                        &url,
+                        &user.username,
+                        server_id.as_deref(),
+                    );
                 }
                 let personal_typed = !self.form.personal.is_empty();
                 self.form.personal.clear();
@@ -1345,12 +1564,18 @@ impl App {
                 self.roles.prompt_later = false;
                 // v0.9.1: the saved server list (which also keeps v0.9.0's single-server fields).
                 let confirmed = server_id.as_deref().filter(|_| pin);
-                self.servers_logged_in(&url, &user.username, &self.server_name.clone(), personal_typed, confirmed);
+                self.servers_logged_in(
+                    &url,
+                    &user.username,
+                    &self.server_name.clone(),
+                    personal_typed,
+                    confirmed,
+                );
                 self.session_url = url;
                 self.session_server_id = server_id;
                 self.save_settings();
             }
-            // The answer to my own "Trocar de servidor": the app is already back home, and a login
+            // The answer to my own "Switch server": the app is already back home, and a login
             // started since (one click on the list) must not be disturbed.
             Ev::LoggedOut { reason: None } if self.logouts_pending > 0 => self.logouts_pending -= 1,
             Ev::LoggedOut { reason } => {
@@ -1363,7 +1588,11 @@ impl App {
             Ev::ViewersSupported(ok) => self.viewers_supported = ok,
             // The channel went while the page was on its way.
             Ev::History { channel, .. } if !self.channels.iter().any(|c| c.id == channel) => {}
-            Ev::History { channel, before, messages } => {
+            Ev::History {
+                channel,
+                before,
+                messages,
+            } => {
                 let log = self.logs.entry(channel).or_default();
                 log.loading_older = false;
                 let complete = messages.len() < HISTORY_PAGE;
@@ -1372,7 +1601,14 @@ impl App {
                 }
                 // The page is the hub's truth for what it covers: deleted meanwhile = gone here
                 // too, and an id an older hub gave to another message shows that message.
-                let out = chat_extras::merge_page(&mut log.msgs, messages, before, complete, |m| m.id, same_message);
+                let out = chat_extras::merge_page(
+                    &mut log.msgs,
+                    messages,
+                    before,
+                    complete,
+                    |m| m.id,
+                    same_message,
+                );
                 let target = chat_extras::Target::Channel(channel);
                 for m in out.deleted {
                     self.forget_message(target, m.id, &m.attachments);
@@ -1390,7 +1626,8 @@ impl App {
                 self.pump_images();
             }
             Ev::Preview { url, reply } => {
-                self.previews.on_preview(&url, reply, std::time::Instant::now());
+                self.previews
+                    .on_preview(&url, reply, std::time::Instant::now());
                 self.pump_previews();
             }
             Ev::PreviewImage { url, bytes } => {
@@ -1399,7 +1636,9 @@ impl App {
             }
             Ev::VoiceJoining(ch) => {
                 self.voice.joining = Some(ch);
-                self.voice.joining_since.get_or_insert_with(std::time::Instant::now);
+                self.voice
+                    .joining_since
+                    .get_or_insert_with(std::time::Instant::now);
             }
             Ev::VoiceJoined {
                 channel,
@@ -1438,7 +1677,11 @@ impl App {
                 self.voice.muted = muted;
                 self.voice.deafened = deafened;
             }
-            Ev::Sources { windows, monitors, error } => {
+            Ev::Sources {
+                windows,
+                monitors,
+                error,
+            } => {
                 self.golive.loading = false;
                 self.golive.windows = windows;
                 self.golive.monitors = monitors;
@@ -1447,13 +1690,20 @@ impl App {
                     // Pictures of every listed window and screen, in the background (item 8c).
                     let repaint = self.repaint.clone();
                     let audio = self.golive.mode == ShareMode::AudioOnly;
-                    self.golive.picker.sources_listed(&self.golive.windows, &self.golive.monitors, Arc::new(move || repaint.wake()), audio);
+                    self.golive.picker.sources_listed(
+                        &self.golive.windows,
+                        &self.golive.monitors,
+                        Arc::new(move || repaint.wake()),
+                        audio,
+                    );
                 }
                 // Drop a selection that no longer exists.
                 let still = match &self.golive.pick {
                     Some(Pick::Window(h)) => self.golive.windows.iter().any(|w| w.hwnd == *h),
                     Some(Pick::Monitor(i)) => self.golive.monitors.iter().any(|m| m.index == *i),
-                    Some(Pick::App(pid)) => self.golive.windows.iter().any(|w| w.process_id == *pid),
+                    Some(Pick::App(pid)) => {
+                        self.golive.windows.iter().any(|w| w.process_id == *pid)
+                    }
                     Some(Pick::AllSound) | None => true,
                 };
                 if !still {
@@ -1533,7 +1783,7 @@ impl App {
                 self.settings_ui.cameras = list;
                 self.settings_ui.cameras_error = error;
                 // The saved setup of the camera the settings refer to, and (only while
-                // "Configurar câmera" is open) its native formats.
+                // "Configure camera" is open) its native formats.
                 self.send_camera_setup();
                 if self.settings_ui.cam.window {
                     self.request_camera_formats();
@@ -1604,17 +1854,36 @@ impl App {
                     self.ready = true;
                     // Channels deleted while we were away: their state goes before anything reloads.
                     self.prune_channels();
-                    tracing::info!(channels = self.channels.len(), online = self.online.len(), "hub snapshot received");
+                    tracing::info!(
+                        channels = self.channels.len(),
+                        online = self.online.len(),
+                        "hub snapshot received"
+                    );
                     // After a reconnect, pick up what was said while we were away.
-                    let reload: Vec<ChannelId> = self.logs.iter().filter(|(_, l)| l.requested).map(|(id, _)| *id).collect();
+                    let reload: Vec<ChannelId> = self
+                        .logs
+                        .iter()
+                        .filter(|(_, l)| l.requested)
+                        .map(|(id, _)| *id)
+                        .collect();
                     for id in reload {
-                        self.backend.send(Cmd::LoadHistory { channel: id, before: None });
+                        self.backend.send(Cmd::LoadHistory {
+                            channel: id,
+                            before: None,
+                        });
                     }
-                    let selected_ok = self
-                        .selected
-                        .is_some_and(|s| self.channels.iter().any(|c| c.id == s && c.kind == ChannelKind::Text));
+                    let selected_ok = self.selected.is_some_and(|s| {
+                        self.channels
+                            .iter()
+                            .any(|c| c.id == s && c.kind == ChannelKind::Text)
+                    });
                     if !selected_ok {
-                        if let Some(first) = self.channels.iter().find(|c| c.kind == ChannelKind::Text).map(|c| c.id) {
+                        if let Some(first) = self
+                            .channels
+                            .iter()
+                            .find(|c| c.kind == ChannelKind::Text)
+                            .map(|c| c.id)
+                        {
                             self.select_text(first);
                         }
                     }
@@ -1650,7 +1919,13 @@ impl App {
                     let was_online = self.online.iter().any(|u| u.id == user_id);
                     // Voice membership is the hub's `VoiceStateChanged`, which it sends before a real
                     // disconnect's `UserOffline`: someone who merely went invisible stays in their room.
-                    if let Some(kind) = alerts::offline_alert(self.my_id(), self.voice.channel, user_id, was_online, None) {
+                    if let Some(kind) = alerts::offline_alert(
+                        self.my_id(),
+                        self.voice.channel,
+                        user_id,
+                        was_online,
+                        None,
+                    ) {
                         self.remote_alert(kind, user_id);
                     }
                     self.profile_on_offline(user_id);
@@ -1660,13 +1935,28 @@ impl App {
                 ServerEvent::VoiceStateChanged { member } => {
                     let prev = self.voice_members.get(&member.user.id).cloned();
                     let i_am_live = matches!(self.voice.share, Share::Live { .. });
-                    let kind = alerts::voice_alert(self.my_id(), self.voice.channel, prev.as_ref(), &member)
-                        .or_else(|| alerts::viewer_alert(self.my_id(), self.voice.channel, i_am_live, prev.as_ref(), &member));
+                    let kind = alerts::voice_alert(
+                        self.my_id(),
+                        self.voice.channel,
+                        prev.as_ref(),
+                        &member,
+                    )
+                    .or_else(|| {
+                        alerts::viewer_alert(
+                            self.my_id(),
+                            self.voice.channel,
+                            i_am_live,
+                            prev.as_ref(),
+                            &member,
+                        )
+                    });
                     if let Some(kind) = kind {
                         self.remote_alert(kind, member.user.id);
                     }
                     if member.channel_id.is_some() {
-                        if member.channel_id == self.voice.channel && self.my_id() != Some(member.user.id) {
+                        if member.channel_id == self.voice.channel
+                            && self.my_id() != Some(member.user.id)
+                        {
                             self.push_saved_audio(&member.user);
                         }
                         self.voice_members.insert(member.user.id, member);
@@ -1675,12 +1965,38 @@ impl App {
                     }
                     self.check_watched_alive();
                 }
-                ServerEvent::PresenceChanged { user_id, presence, status } => self.on_presence_changed(user_id, presence, status),
+                ServerEvent::PresenceChanged {
+                    user_id,
+                    presence,
+                    status,
+                } => self.on_presence_changed(user_id, presence, status),
                 // Reactions (v0.8): channels, and my DMs (the hub sends those only to the two people).
-                ServerEvent::ReactionChanged { channel_id, message_id, emoji, user_id, added } => {
-                    self.on_reaction(chat_extras::Target::Channel(channel_id), message_id, &emoji, user_id, added)
-                }
-                ServerEvent::DmReactionChanged { dm_id, message_id, emoji, user_id, added } => self.on_reaction(chat_extras::Target::Dm(dm_id), message_id, &emoji, user_id, added),
+                ServerEvent::ReactionChanged {
+                    channel_id,
+                    message_id,
+                    emoji,
+                    user_id,
+                    added,
+                } => self.on_reaction(
+                    chat_extras::Target::Channel(channel_id),
+                    message_id,
+                    &emoji,
+                    user_id,
+                    added,
+                ),
+                ServerEvent::DmReactionChanged {
+                    dm_id,
+                    message_id,
+                    emoji,
+                    user_id,
+                    added,
+                } => self.on_reaction(
+                    chat_extras::Target::Dm(dm_id),
+                    message_id,
+                    &emoji,
+                    user_id,
+                    added,
+                ),
                 // Direct messages and private calls (only ever about my own conversations).
                 ev @ (ServerEvent::DmMessageCreated { .. }
                 | ServerEvent::DmMessageDeleted { .. }
@@ -1690,7 +2006,9 @@ impl App {
                 | ServerEvent::CallDeclined { .. }
                 | ServerEvent::CallEnded { .. }) => self.on_dm_server_event(ev),
                 ServerEvent::Pong { .. } => {}
-                ServerEvent::Error { error } => self.notice = Some(crate::soundboard::server_error_text(&error)),
+                ServerEvent::Error { error } => {
+                    self.notice = Some(crate::soundboard::server_error_text(&error))
+                }
                 // The soundboard is handled by the backend, which reports it as `Ev::Sound`.
                 ServerEvent::SoundPlayed { .. } | ServerEvent::SoundsChanged { .. } => {}
                 // Item 12: deleted messages, channel changes, roles, moderation.
@@ -1705,7 +2023,9 @@ impl App {
     fn on_voice(&mut self, ev: VoiceEvent) {
         self.dm_on_voice(&ev);
         match ev {
-            VoiceEvent::ActiveSpeakers { identities } => self.voice.speaking = identities.into_iter().collect(),
+            VoiceEvent::ActiveSpeakers { identities } => {
+                self.voice.speaking = identities.into_iter().collect()
+            }
             VoiceEvent::Reconnecting => self.voice.link = Link::Reconnecting,
             VoiceEvent::Reconnected => self.voice.link = Link::Up,
             VoiceEvent::Disconnected { reason } => {
@@ -1715,14 +2035,15 @@ impl App {
                     self.own_alert(AlertKind::Leave, true);
                 }
                 self.voice.error = Some(format!(
-                    "Você foi desconectado da voz ({reason}). Clique no canal para entrar de novo."
+                    "You were disconnected from voice ({reason}). Click the channel to rejoin."
                 ));
             }
             VoiceEvent::LocalShareEnded { reason } => {
                 tracing::info!(%reason, "own Go Live ended");
                 self.voice.share = Share::Off;
                 self.voice.switching_to = None;
-                self.notice = Some("Sua transmissão terminou (a janela foi fechada ou a captura parou).".into());
+                self.notice =
+                    Some("Your stream ended (the window closed or capture stopped).".into());
             }
             VoiceEvent::WatchStarted { identity } => {
                 self.voice.watch_pending.retain(|(w, _)| *w != identity);
@@ -1740,14 +2061,23 @@ impl App {
                 if self.is_watching(&identity) {
                     self.voice.watching.retain(|w| *w != identity);
                     // Not for the user's own doing (button, leaving, closing the stream's window).
-                    if !matches!(reason.as_str(), "stopped" | "left room" | "viewer window closed") {
-                        let who = identity.parse::<UserId>().map(|id| self.name_of(id)).unwrap_or(identity.clone());
-                        self.toast(format!("{ICON_TV} A transmissão de {who} foi encerrada."));
+                    if !matches!(
+                        reason.as_str(),
+                        "stopped" | "left room" | "viewer window closed"
+                    ) {
+                        let who = identity
+                            .parse::<UserId>()
+                            .map(|id| self.name_of(id))
+                            .unwrap_or(identity.clone());
+                        self.toast(format!("{ICON_TV} {who}'s stream ended."));
                     }
                 }
                 self.voice.watch_ended_count += 1;
             }
-            VoiceEvent::ShareKind { identity, audio_only } => {
+            VoiceEvent::ShareKind {
+                identity,
+                audio_only,
+            } => {
                 if audio_only {
                     self.voice.audio_only.insert(identity);
                 } else {
@@ -1764,10 +2094,14 @@ impl App {
             VoiceEvent::LocalCameraEnded { reason } => {
                 tracing::info!(%reason, "own camera ended");
                 self.voice.camera = CameraUi::Off;
-                self.notice = Some(format!("{ICON_CAMERA} Sua câmera desligou: {reason}"));
+                self.notice = Some(format!("{ICON_CAMERA} Your camera turned off: {reason}"));
             }
             VoiceEvent::ServerMuted { muted } => self.roles.session_server_muted = muted,
-            VoiceEvent::EncoderSwitched { camera, label, backend } => {
+            VoiceEvent::EncoderSwitched {
+                camera,
+                label,
+                backend,
+            } => {
                 tracing::warn!(camera, %label, %backend, "own video switched encoder (unstable video)");
                 if camera {
                     if let CameraUi::On { encoder, .. } = &mut self.voice.camera {
@@ -1776,7 +2110,7 @@ impl App {
                 } else if let Share::Live { encoder } = &mut self.voice.share {
                     *encoder = backend;
                 }
-                self.notice = Some(format!("Vídeo instável: trocando para {label}"));
+                self.notice = Some(format!("Unstable video: switching to {label}"));
             }
             VoiceEvent::Connected { .. }
             | VoiceEvent::ParticipantJoined { .. }
@@ -1813,7 +2147,11 @@ impl App {
         } else if !want {
             self.ptt_hook = None;
         }
-        ptt::set_key(if self.ptt_active() { self.settings.ptt_vk } else { 0 });
+        ptt::set_key(if self.ptt_active() {
+            self.settings.ptt_vk
+        } else {
+            0
+        });
     }
 
     fn ptt_settings_changed(&mut self) {
@@ -1836,7 +2174,10 @@ impl App {
     /// user id), for the ones that differ from the defaults.
     fn saved_audio_for_known_users(&self) -> HashMap<String, vox_client_core::UserAudio> {
         let mut out = HashMap::new();
-        let known = self.online.iter().chain(self.voice_members.values().map(|m| &m.user));
+        let known = self
+            .online
+            .iter()
+            .chain(self.voice_members.values().map(|m| &m.user));
         for u in known {
             let pref = self.settings.user_audio(&u.username);
             if !pref.is_default() {
@@ -1850,7 +2191,10 @@ impl App {
     fn push_saved_audio(&self, user: &User) {
         let pref = self.settings.user_audio(&user.username);
         if !pref.is_default() {
-            self.backend.send(Cmd::SetUserAudio { identity: user.id.to_string(), audio: pref.to_core() });
+            self.backend.send(Cmd::SetUserAudio {
+                identity: user.id.to_string(),
+                audio: pref.to_core(),
+            });
         }
     }
 
@@ -1858,7 +2202,10 @@ impl App {
     /// sliders pass `false` while dragging and save once on release.
     pub fn set_user_pref(&mut self, user: &User, pref: UserAudioPref, save: bool) {
         self.settings.set_user_audio(&user.username, pref);
-        self.backend.send(Cmd::SetUserAudio { identity: user.id.to_string(), audio: pref.to_core() });
+        self.backend.send(Cmd::SetUserAudio {
+            identity: user.id.to_string(),
+            audio: pref.to_core(),
+        });
         if save {
             self.save_settings();
         }
@@ -1866,31 +2213,41 @@ impl App {
 
     pub fn toggle_others_muted(&mut self) {
         self.voice.others_muted = !self.voice.others_muted;
-        self.backend.send(Cmd::SetOthersMuted(self.voice.others_muted));
+        self.backend
+            .send(Cmd::SetOthersMuted(self.voice.others_muted));
     }
 
-    /// Button next to "Parar de assistir": volume and mute of the stream's audio.
+    /// Button next to "Stop watching": volume and mute of the stream's audio.
     pub(crate) fn stream_audio_menu(&mut self, ui: &mut egui::Ui, user: &User) {
         let before = self.settings.user_audio(&user.username);
         let mut pref = before;
-        let icon = if pref.stream_muted { ICON_SPEAKER_OFF } else { ICON_VOICE };
+        let icon = if pref.stream_muted {
+            ICON_SPEAKER_OFF
+        } else {
+            ICON_VOICE
+        };
         let mut slider_state = (false, false);
         let several = self.voice.watching.len() > 1;
         let mut focus_audio = self.settings.stream_focus_audio;
         ui.menu_button(RichText::new(icon).small(), |ui| {
             ui.set_min_width(230.0);
-            ui.label(RichText::new(format!("Áudio da transmissão de {}", user.shown_name())).strong());
-            let slider = ui.add(egui::Slider::new(&mut pref.stream_volume_pct, 0..=200).suffix("%").text("Volume"));
-            ui.checkbox(&mut pref.stream_muted, "Silenciar transmissão");
+            ui.label(RichText::new(format!("{}'s stream audio", user.shown_name())).strong());
+            let slider = ui.add(
+                egui::Slider::new(&mut pref.stream_volume_pct, 0..=200)
+                    .suffix("%")
+                    .text("Volume"),
+            );
+            ui.checkbox(&mut pref.stream_muted, "Mute stream");
             if several {
                 // Item 9: with several streams, optionally hear only the one shown big.
                 ui.separator();
-                ui.checkbox(&mut focus_audio, FOCUS_AUDIO_LABEL).on_hover_text(FOCUS_AUDIO_HOVER);
+                ui.checkbox(&mut focus_audio, FOCUS_AUDIO_LABEL)
+                    .on_hover_text(FOCUS_AUDIO_HOVER);
             }
             slider_state = (slider.dragged(), slider.drag_stopped());
         })
         .response
-        .on_hover_text("Volume da transmissão (separado do microfone)");
+        .on_hover_text("Stream volume (separate from the microphone)");
         if pref != before {
             self.set_user_pref(user, pref, !slider_state.0);
         }
@@ -2071,7 +2428,12 @@ pub(crate) fn local_offset_min() -> i32 {
     unsafe {
         let mut tz: TIME_ZONE_INFORMATION = std::mem::zeroed();
         let id = GetTimeZoneInformation(&mut tz);
-        let bias = tz.Bias + if id == 2 { tz.DaylightBias } else { tz.StandardBias };
+        let bias = tz.Bias
+            + if id == 2 {
+                tz.DaylightBias
+            } else {
+                tz.StandardBias
+            };
         -bias
     }
 }

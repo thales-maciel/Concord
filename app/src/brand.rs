@@ -1,12 +1,5 @@
-//! concord's name, logo and signature (v1.0.1, when voxhub became concord).
-//!
-//! - The logo is the owner's: a white speech-bubble face in a black circle (`assets/logo/`, PNGs
-//!   with a transparent background and `concord.ico`). It is the window, taskbar, tray and
-//!   notification icon (built here from the PNGs) and, through `build.rs`, the icon of the exe.
-//! - In the app it sits on a quiet circle so it reads on the night background ([`logo`]), next to
-//!   the wordmark "concord" in Bricolage ([`wordmark`]).
-//! - The signature ([`signature`]) is a quiet credit line with a mailto: link, the only link the app
-//!   opens that is not http(s) (`links::open_url`).
+//! Logo, wordmark, window icons and author credit.
+//! The credit's mailto link is the only non-HTTP(S) link allowed by `links::open_url`.
 
 use std::sync::Arc;
 
@@ -37,7 +30,11 @@ const LOGO_PNGS: [(u32, &[u8]); 8] = [
 
 /// The PNG drawn for `px` pixels: the smallest one at least that big (else the biggest).
 pub fn logo_png(px: u32) -> (u32, &'static [u8]) {
-    LOGO_PNGS.iter().copied().find(|(s, _)| *s >= px).unwrap_or(LOGO_PNGS[LOGO_PNGS.len() - 1])
+    LOGO_PNGS
+        .iter()
+        .copied()
+        .find(|(s, _)| *s >= px)
+        .unwrap_or(LOGO_PNGS[LOGO_PNGS.len() - 1])
 }
 
 /// The logo as `px` × `px` RGBA pixels (resized from the nearest bigger drawing when no PNG has
@@ -46,13 +43,21 @@ pub fn logo_rgba(px: u32) -> Option<image::RgbaImage> {
     let px = px.clamp(8, 512);
     let (size, bytes) = logo_png(px);
     let img = image::load_from_memory(bytes).ok()?.into_rgba8();
-    Some(if size == px { img } else { image::imageops::resize(&img, px, px, image::imageops::FilterType::Lanczos3) })
+    Some(if size == px {
+        img
+    } else {
+        image::imageops::resize(&img, px, px, image::imageops::FilterType::Lanczos3)
+    })
 }
 
 /// The window / taskbar icon for eframe.
 pub fn window_icon() -> Option<Arc<egui::IconData>> {
     let img = logo_rgba(256)?;
-    Some(Arc::new(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() }))
+    Some(Arc::new(egui::IconData {
+        width: img.width(),
+        height: img.height(),
+        rgba: img.into_raw(),
+    }))
 }
 
 // ---------------------------------------------------------------- in the app
@@ -64,8 +69,14 @@ fn logo_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
         return Some(t);
     }
     let img = logo_rgba(256)?;
-    let color = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
-    let opts = egui::TextureOptions { mipmap_mode: Some(egui::TextureFilter::Linear), ..egui::TextureOptions::LINEAR };
+    let color = egui::ColorImage::from_rgba_unmultiplied(
+        [img.width() as usize, img.height() as usize],
+        img.as_raw(),
+    );
+    let opts = egui::TextureOptions {
+        mipmap_mode: Some(egui::TextureFilter::Linear),
+        ..egui::TextureOptions::LINEAR
+    };
     let t = ctx.load_texture("concord-logo", color, opts);
     ctx.data_mut(|d| d.insert_temp(id, t.clone()));
     Some(t)
@@ -77,7 +88,12 @@ pub fn paint_logo(painter: &egui::Painter, ctx: &egui::Context, center: Pos2, si
     painter.circle_filled(center, side / 2.0 + side * 0.07, theme::RISCO);
     if let Some(t) = logo_texture(ctx) {
         let rect = Rect::from_center_size(center, Vec2::splat(side));
-        painter.image(t.id(), rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+        painter.image(
+            t.id(),
+            rect,
+            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+            Color32::WHITE,
+        );
     }
 }
 
@@ -91,12 +107,16 @@ pub fn logo(ui: &mut egui::Ui, side: f32) -> egui::Response {
     resp
 }
 
-/// The logo and the wordmark "concord" side by side (the home screen, Configurações → Sobre).
+/// The logo and the wordmark "concord" side by side (the home screen, Settings → About).
 pub fn wordmark(ui: &mut egui::Ui, logo_side: f32, text_size: f32) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = logo_side * 0.3;
         logo(ui, logo_side);
-        ui.label(RichText::new(APP_NAME).font(theme::display(text_size)).color(theme::GIZ));
+        ui.label(
+            RichText::new(APP_NAME)
+                .font(theme::display(text_size))
+                .color(theme::GIZ),
+        );
     });
 }
 
@@ -105,7 +125,11 @@ pub fn wordmark(ui: &mut egui::Ui, logo_side: f32, text_size: f32) {
 pub fn signature(ui: &mut egui::Ui, size: f32, color: Color32) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        ui.label(RichText::new(format!("Feito por {OWNER_NAME} · ")).font(theme::body(size)).color(color));
+        ui.label(
+            RichText::new(format!("Made by {OWNER_NAME} · "))
+                .font(theme::body(size))
+                .color(color),
+        );
         email_link(ui, size);
     });
 }
@@ -113,7 +137,11 @@ pub fn signature(ui: &mut egui::Ui, size: f32, color: Color32) {
 /// [`signature`] along the bottom of `area` (the home screen's left panel): one line when it fits,
 /// else the name over the address.
 pub fn signature_footer(ui: &mut egui::Ui, area: Rect, size: f32) {
-    let line = ui.painter().layout_no_wrap(format!("Feito por {OWNER_NAME} · {OWNER_EMAIL}"), theme::body(size), theme::NEVOA);
+    let line = ui.painter().layout_no_wrap(
+        format!("Made by {OWNER_NAME} · {OWNER_EMAIL}"),
+        theme::body(size),
+        theme::NEVOA,
+    );
     let one_line = line.size().x <= area.width();
     let h = line.size().y * if one_line { 1.0 } else { 2.0 } + 2.0;
     let rect = Rect::from_min_max(Pos2::new(area.left(), area.bottom() - h), area.max);
@@ -123,7 +151,11 @@ pub fn signature_footer(ui: &mut egui::Ui, area: Rect, size: f32) {
         signature(&mut ui, size, theme::NEVOA);
     } else {
         ui.spacing_mut().item_spacing.y = 0.0;
-        ui.label(RichText::new(format!("Feito por {OWNER_NAME}")).font(theme::body(size)).color(theme::NEVOA));
+        ui.label(
+            RichText::new(format!("Made by {OWNER_NAME}"))
+                .font(theme::body(size))
+                .color(theme::NEVOA),
+        );
         email_link(&mut ui, size);
     }
 }
@@ -131,12 +163,23 @@ pub fn signature_footer(ui: &mut egui::Ui, area: Rect, size: f32) {
 /// The owner's e-mail as a link (opens the mail app; never in an autotest).
 pub fn email_link(ui: &mut egui::Ui, size: f32) -> egui::Response {
     let resp = ui
-        .add(egui::Label::new(RichText::new(OWNER_EMAIL).font(theme::body(size)).color(theme::LINK)).sense(Sense::click()))
+        .add(
+            egui::Label::new(
+                RichText::new(OWNER_EMAIL)
+                    .font(theme::body(size))
+                    .color(theme::LINK),
+            )
+            .sense(Sense::click()),
+        )
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text("Escrever um e-mail");
+        .on_hover_text("Write an email");
     if resp.hovered() {
         let r = resp.rect;
-        ui.painter().hline(r.x_range(), r.bottom() - 1.0, egui::Stroke::new(1.0, theme::LINK));
+        ui.painter().hline(
+            r.x_range(),
+            r.bottom() - 1.0,
+            egui::Stroke::new(1.0, theme::LINK),
+        );
     }
     if resp.clicked() {
         crate::links::open_url(OWNER_MAILTO);
@@ -155,9 +198,20 @@ pub fn hicon(px: u32) -> Option<isize> {
     // CreateIconFromResourceEx reads PNG data as an icon image: the simplest way to a transparent
     // icon (the same trick eframe uses).
     let mut png = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .ok()?;
     // SAFETY: reads `png` (valid for the call) and returns a new icon handle or null.
-    let h = unsafe { CreateIconFromResourceEx(png.as_ptr(), png.len() as u32, 1, 0x0003_0000, px as i32, px as i32, LR_DEFAULTCOLOR) };
+    let h = unsafe {
+        CreateIconFromResourceEx(
+            png.as_ptr(),
+            png.len() as u32,
+            1,
+            0x0003_0000,
+            px as i32,
+            px as i32,
+            LR_DEFAULTCOLOR,
+        )
+    };
     (!h.is_null()).then_some(h as isize)
 }
 
@@ -165,7 +219,9 @@ pub fn hicon(px: u32) -> Option<isize> {
 /// eframe does it too, but only once the window is active, which a background autotest never is.
 #[cfg(windows)]
 pub fn set_window_icons(hwnd: isize) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SendMessageW, ICON_BIG, ICON_SMALL, SM_CXICON, SM_CXSMICON, WM_SETICON};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, SendMessageW, ICON_BIG, ICON_SMALL, SM_CXICON, SM_CXSMICON, WM_SETICON,
+    };
     // SAFETY: plain queries and messages to a window of this process.
     unsafe {
         let big = GetSystemMetrics(SM_CXICON).max(16) as u32;
@@ -190,7 +246,10 @@ mod tests {
             assert_eq!((img.width(), img.height()), (size, size));
             assert_eq!(img.get_pixel(0, 0)[3], 0, "{size}: transparent background");
             let c = img.get_pixel(size / 2, size / 2);
-            assert!(c[3] == 255 && c[0] > 200, "{size}: the white face in the middle");
+            assert!(
+                c[3] == 255 && c[0] > 200,
+                "{size}: the white face in the middle"
+            );
         }
     }
 

@@ -94,10 +94,15 @@ impl VoiceGuard {
     /// token from before their last revocation?
     fn stale_token(&self, user: UserId, joined_at: i64) -> bool {
         let g = self.lock();
-        let Some(&revoked) = g.revoked_at.get(&user) else { return false };
+        let Some(&revoked) = g.revoked_at.get(&user) else {
+            return false;
+        };
         // LiveKit gives seconds: a session that joined in the revocation's second may be after it.
         let joined_after = joined_at.saturating_mul(1000).saturating_add(999) >= revoked;
-        let token_before = g.issued_at.get(&user).is_none_or(|&issued| issued < revoked);
+        let token_before = g
+            .issued_at
+            .get(&user)
+            .is_none_or(|&issued| issued < revoked);
         joined_after && token_before
     }
 }
@@ -112,7 +117,8 @@ pub fn revoke(s: &AppState, user: UserId) {
 /// Somebody just lost a room (or access to one): check every `voice_check_fast` for as long as
 /// a join token issued before now could still be used, so a rejoin with it is cut short.
 pub fn watch_closely(s: &AppState) {
-    let until = Instant::now() + std::time::Duration::from_secs(crate::livekit_token::TOKEN_USABLE_SECS as u64 + 5);
+    let until = Instant::now()
+        + std::time::Duration::from_secs(crate::livekit_token::TOKEN_USABLE_SECS as u64 + 5);
     {
         let mut g = s.voice_guard.lock();
         g.close_until = Some(g.close_until.map_or(until, |u| u.max(until)));
@@ -168,14 +174,23 @@ pub async fn remove_everywhere(s: &AppState, user: UserId) {
     for room in rooms_of(s, user).await {
         match s.livekit.remove(&room, &user.to_string()).await {
             Ok(()) | Err(LkError::NotFound) | Err(LkError::Disabled) => {}
-            Err(LkError::Other(e)) => tracing::warn!(room, error = %e, "livekit: removing a participant failed"),
+            Err(LkError::Other(e)) => {
+                tracing::warn!(room, error = %e, "livekit: removing a participant failed")
+            }
         }
     }
 }
 
 enum Act {
-    Remove { room: String, user: UserId, why: &'static str },
-    TakeMic { room: String, user: UserId },
+    Remove {
+        room: String,
+        user: UserId,
+        why: &'static str,
+    },
+    TakeMic {
+        room: String,
+        user: UserId,
+    },
 }
 
 /// One comparison of LiveKit's rooms with the hub's state, and the fixes.
@@ -192,24 +207,36 @@ pub async fn check(s: &AppState) {
     let mut acts = Vec::new();
     let mut seen: BTreeSet<(UserId, String)> = BTreeSet::new();
     for room in rooms {
-        let Some(kind) = RoomKind::parse(&room) else { continue };
+        let Some(kind) = RoomKind::parse(&room) else {
+            continue;
+        };
         let participants = match s.livekit.list_participants(&room).await {
             Ok(p) => p,
             Err(_) => continue,
         };
         for p in participants {
             // Identities are user ids; anything else did not come from this hub.
-            let Ok(user) = p.identity.parse::<UserId>() else { continue };
+            let Ok(user) = p.identity.parse::<UserId>() else {
+                continue;
+            };
             let key = (user, room.clone());
             seen.insert(key.clone());
             if s.voice_guard.stale_token(user, p.joined_at) {
-                acts.push(Act::Remove { room: room.clone(), user, why: "joined with a token from before a removal" });
+                acts.push(Act::Remove {
+                    room: room.clone(),
+                    user,
+                    why: "joined with a token from before a removal",
+                });
                 continue;
             }
             // v0.9: a private room without access (a token from before they lost it): out at once.
             if let RoomKind::Voice(ch) = kind {
                 if !s.can_see(user, ch) {
-                    acts.push(Act::Remove { room: room.clone(), user, why: "no access to this private channel" });
+                    acts.push(Act::Remove {
+                        room: room.clone(),
+                        user,
+                        why: "no access to this private channel",
+                    });
                     continue;
                 }
             }
@@ -218,16 +245,26 @@ pub async fn check(s: &AppState) {
             } else {
                 let first = *s.voice_guard.lock().unlisted.entry(key).or_insert(now);
                 if now.duration_since(first) >= s.tuning.voice_grace {
-                    acts.push(Act::Remove { room: room.clone(), user, why: "in the room without being in the hub's voice list" });
+                    acts.push(Act::Remove {
+                        room: room.clone(),
+                        user,
+                        why: "in the room without being in the hub's voice list",
+                    });
                     continue;
                 }
             }
             if p.can_publish_mic && s.is_server_muted(user) {
-                acts.push(Act::TakeMic { room: room.clone(), user });
+                acts.push(Act::TakeMic {
+                    room: room.clone(),
+                    user,
+                });
             }
         }
     }
-    s.voice_guard.lock().unlisted.retain(|k, _| seen.contains(k));
+    s.voice_guard
+        .lock()
+        .unlisted
+        .retain(|k, _| seen.contains(k));
     for act in acts {
         match act {
             Act::Remove { room, user, why } => {
@@ -238,8 +275,14 @@ pub async fn check(s: &AppState) {
                 }
             }
             Act::TakeMic { room, user } => {
-                tracing::warn!(room, user, "voice check: server-muted participant could still publish a microphone");
-                if let Err(LkError::Other(e)) = crate::admin::sync_mic_permission(s, user, &room).await {
+                tracing::warn!(
+                    room,
+                    user,
+                    "voice check: server-muted participant could still publish a microphone"
+                );
+                if let Err(LkError::Other(e)) =
+                    crate::admin::sync_mic_permission(s, user, &room).await
+                {
                     tracing::warn!(room, error = %e, "voice check: server mute failed");
                 }
             }
@@ -282,10 +325,19 @@ mod tests {
         assert!(!g.stale_token(1, 0), "never revoked");
         g.lock().revoked_at.insert(1, 10_000);
         g.lock().issued_at.insert(1, 9_000);
-        assert!(g.stale_token(1, 10), "joined after the revocation with an older token");
-        assert!(!g.stale_token(1, 8), "the session from before (removed by the revocation itself)");
+        assert!(
+            g.stale_token(1, 10),
+            "joined after the revocation with an older token"
+        );
+        assert!(
+            !g.stale_token(1, 8),
+            "the session from before (removed by the revocation itself)"
+        );
         g.lock().issued_at.insert(1, 10_500);
-        assert!(!g.stale_token(1, 11), "a token issued after the revocation is fine");
+        assert!(
+            !g.stale_token(1, 11),
+            "a token issued after the revocation is fine"
+        );
         assert!(!g.stale_token(2, 11), "somebody else");
     }
 }

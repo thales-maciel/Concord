@@ -38,7 +38,9 @@ fn presented(key: &str) -> u64 {
 
 impl Auto {
     fn clip_waited(&self, secs: f32) -> bool {
-        self.clip.at.is_some_and(|t| t.elapsed().as_secs_f32() >= secs)
+        self.clip
+            .at
+            .is_some_and(|t| t.elapsed().as_secs_f32() >= secs)
     }
 
     fn clip_next(&mut self, phase: u8) {
@@ -52,14 +54,22 @@ impl Auto {
         let clip = app.video.clips.get(key).cloned();
         let placed = app.video.placed.get(key).copied();
         let window = window_state(app, key);
-        log(&format!("{what}: clip={clip:?} placed={placed:?} window(shown, region box)={window:?}"));
+        log(&format!(
+            "{what}: clip={clip:?} placed={placed:?} window(shown, region box)={window:?}"
+        ));
         let Some(Clip::Cut(cuts)) = clip else {
-            return Err(format!("{what}: the camera video is not clipped around the overlay (clip={clip:?})"));
+            return Err(format!(
+                "{what}: the camera video is not clipped around the overlay (clip={clip:?})"
+            ));
         };
-        let Some((_, _, w, h)) = placed else { return Err(format!("{what}: the camera video is not placed")) };
+        let Some((_, _, w, h)) = placed else {
+            return Err(format!("{what}: the camera video is not placed"));
+        };
         // (macOS: no video window; egui draws the overlay over the video it drew itself.)
         if cfg!(windows) && !window.is_some_and(|(shown, region)| shown && region.is_some()) {
-            return Err(format!("{what}: the video window is not shown with a region: {window:?}"));
+            return Err(format!(
+                "{what}: the video window is not shown with a region: {window:?}"
+            ));
         }
         // A point under the overlay is cut out; a point of what is left still shows.
         let c = cuts[0];
@@ -72,16 +82,25 @@ impl Auto {
         let (hit_under, hit_away) = (window_hit(app, key, under), window_hit(app, key, away));
         log(&format!("{what}: region holds {under:?} (under the overlay): {hit_under:?}, {away:?} (the video): {hit_away:?}"));
         if cfg!(windows) && (hit_under != Some(false) || hit_away != Some(true)) {
-            return Err(format!("{what}: the window region does not match the cut ({hit_under:?} / {hit_away:?})"));
+            return Err(format!(
+                "{what}: the window region does not match the cut ({hit_under:?} / {hit_away:?})"
+            ));
         }
         Ok(cuts)
     }
 
     /// Frames presented since the last baseline, and the rate; `Err` when none were.
     fn clip_frames(&mut self, key: &str, what: &str) -> Result<(), String> {
-        let secs = self.clip.at.map(|t| t.elapsed().as_secs_f32()).unwrap_or(1.0);
+        let secs = self
+            .clip
+            .at
+            .map(|t| t.elapsed().as_secs_f32())
+            .unwrap_or(1.0);
         let d = presented(key).saturating_sub(self.clip.presented);
-        log(&format!("presented {what}: +{d} in {secs:.1}s = {:.1} fps", d as f32 / secs));
+        log(&format!(
+            "presented {what}: +{d} in {secs:.1}s = {:.1} fps",
+            d as f32 / secs
+        ));
         if d == 0 {
             return Err(format!("the camera video stopped presenting frames {what}"));
         }
@@ -185,7 +204,9 @@ fn window_hit(_app: &App, _key: &str, _at: (i32, i32)) -> Option<bool> {
 /// `VOX_AUTOTEST_SHOT_DIR`: save the app window (as Windows renders it) and, when the app is in
 /// front, the screen under it.
 fn shot(app: &App, label: &str) {
-    let Some(dir) = std::env::var_os("VOX_AUTOTEST_SHOT_DIR") else { return };
+    let Some(dir) = std::env::var_os("VOX_AUTOTEST_SHOT_DIR") else {
+        return;
+    };
     let Some(hwnd) = app.video.parent else { return };
     #[cfg(windows)]
     for (screen, kind) in [(false, "window"), (true, "screen")] {
@@ -195,7 +216,9 @@ fn shot(app: &App, label: &str) {
                 Ok(()) => log(&format!("saved {}", path.display())),
                 Err(e) => log(&format!("could not save {}: {e}", path.display())),
             },
-            None => log(&format!("no {kind} capture (the app is not in front, or the capture failed)")),
+            None => log(&format!(
+                "no {kind} capture (the app is not in front, or the capture failed)"
+            )),
         }
     }
     #[cfg(not(windows))]
@@ -208,7 +231,8 @@ pub(super) mod capture {
 
     use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
     use windows_sys::Win32::Graphics::Gdi::{
-        BitBlt, ClientToScreen, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+        BitBlt, ClientToScreen, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
+        GetDC, GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
         DIB_RGB_COLORS, HDC, SRCCOPY,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetClientRect, GetForegroundWindow};
@@ -230,12 +254,21 @@ pub(super) mod capture {
             if screen && GetForegroundWindow() != hwnd {
                 return None;
             }
-            let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+            let mut r = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
             if GetClientRect(hwnd, &mut r) == 0 || r.right <= 0 || r.bottom <= 0 {
                 return None;
             }
             let (w, h) = (r.right, r.bottom);
-            let src = if screen { GetDC(null_mut()) } else { GetDC(hwnd) };
+            let src = if screen {
+                GetDC(null_mut())
+            } else {
+                GetDC(hwnd)
+            };
             let mem = CreateCompatibleDC(src);
             let bmp = CreateCompatibleBitmap(src, w, h);
             let old = SelectObject(mem, bmp);
@@ -255,7 +288,19 @@ pub(super) mod capture {
             bi.bmiHeader.biBitCount = 32;
             bi.bmiHeader.biCompression = BI_RGB;
             let mut buf = vec![0u8; w as usize * h as usize * 4];
-            let rows = if ok { GetDIBits(mem, bmp, 0, h as u32, buf.as_mut_ptr().cast(), &mut bi, DIB_RGB_COLORS) } else { 0 };
+            let rows = if ok {
+                GetDIBits(
+                    mem,
+                    bmp,
+                    0,
+                    h as u32,
+                    buf.as_mut_ptr().cast(),
+                    &mut bi,
+                    DIB_RGB_COLORS,
+                )
+            } else {
+                0
+            };
             DeleteObject(bmp);
             DeleteDC(mem);
             ReleaseDC(if screen { null_mut() } else { hwnd }, src);

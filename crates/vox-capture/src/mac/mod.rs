@@ -30,11 +30,15 @@ use std::time::{Duration, Instant};
 
 use crate::pixels::{downscale_nv12, Planes};
 use crate::{
-    fit_inside, CaptureError, EncodedStats, EncoderBackend, EncoderCandidate, EncoderControl, EncoderKind,
-    FrameCallback, GpuInfo, Nv12Frame, Permission, PreviewConfig, Result, SelfTestResult,
+    fit_inside, CaptureError, EncodedStats, EncoderBackend, EncoderCandidate, EncoderControl,
+    EncoderKind, FrameCallback, GpuInfo, Nv12Frame, Permission, PreviewConfig, Result,
+    SelfTestResult,
 };
 
-pub use camera::{camera_diagnostics, camera_property_pages, list_camera_formats, list_cameras, start_camera, CameraInner, CameraOutput};
+pub use camera::{
+    camera_diagnostics, camera_property_pages, list_camera_formats, list_cameras, start_camera,
+    CameraInner, CameraOutput,
+};
 pub use content::{is_window_minimized, list_monitors, list_windows};
 pub use stream::{start_audio, start_video, AudioInner, VideoInner};
 pub use thumb::{window_icon, GrabberInner};
@@ -132,19 +136,35 @@ pub fn retained_pixel_buffer(frame: &Nv12Frame<'_>) -> Option<NonNull<c_void>> {
 ///
 /// # Safety
 /// `pb` is a valid CVPixelBuffer.
-pub(crate) unsafe fn with_nv12(pb: ffi::CVPixelBufferRef, timestamp_us: i64, f: impl FnOnce(&Nv12Frame<'_>)) -> bool {
+pub(crate) unsafe fn with_nv12(
+    pb: ffi::CVPixelBufferRef,
+    timestamp_us: i64,
+    f: impl FnOnce(&Nv12Frame<'_>),
+) -> bool {
     use ffi::*;
     let fmt = CVPixelBufferGetPixelFormatType(pb);
-    if (fmt != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange && fmt != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange) || CVPixelBufferGetPlaneCount(pb) != 2 {
+    if (fmt != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        && fmt != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)
+        || CVPixelBufferGetPlaneCount(pb) != 2
+    {
         return false;
     }
     if CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly) != 0 {
         return false;
     }
     let (w, h) = (CVPixelBufferGetWidth(pb), CVPixelBufferGetHeight(pb));
-    let (y0, uv0) = (CVPixelBufferGetBaseAddressOfPlane(pb, 0), CVPixelBufferGetBaseAddressOfPlane(pb, 1));
-    let (ys, uvs) = (CVPixelBufferGetBytesPerRowOfPlane(pb, 0), CVPixelBufferGetBytesPerRowOfPlane(pb, 1));
-    let (yh, uvh) = (CVPixelBufferGetHeightOfPlane(pb, 0), CVPixelBufferGetHeightOfPlane(pb, 1));
+    let (y0, uv0) = (
+        CVPixelBufferGetBaseAddressOfPlane(pb, 0),
+        CVPixelBufferGetBaseAddressOfPlane(pb, 1),
+    );
+    let (ys, uvs) = (
+        CVPixelBufferGetBytesPerRowOfPlane(pb, 0),
+        CVPixelBufferGetBytesPerRowOfPlane(pb, 1),
+    );
+    let (yh, uvh) = (
+        CVPixelBufferGetHeightOfPlane(pb, 0),
+        CVPixelBufferGetHeightOfPlane(pb, 1),
+    );
     let ok = !y0.is_null() && !uv0.is_null() && w >= 2 && h >= 2 && ys >= w && uvs >= w;
     if ok {
         let frame = Nv12Frame {
@@ -166,12 +186,34 @@ pub(crate) unsafe fn with_nv12(pb: ffi::CVPixelBufferRef, timestamp_us: i64, f: 
 
 /// A small NV12 copy of `f` fitting inside `max_w` x `max_h` (never enlarged), into `buf`, handed
 /// to `cb`.
-pub(crate) fn deliver_small(f: &Nv12Frame<'_>, max_w: u32, max_h: u32, mirror: bool, buf: &mut Vec<u8>, cb: &mut FrameCallback) {
+pub(crate) fn deliver_small(
+    f: &Nv12Frame<'_>,
+    max_w: u32,
+    max_h: u32,
+    mirror: bool,
+    buf: &mut Vec<u8>,
+    cb: &mut FrameCallback,
+) {
     let (ow, oh) = fit_inside(f.width, f.height, max_w.max(2), max_h.max(2));
-    let src = Planes { width: f.width, height: f.height, y: f.y, y_stride: f.y_stride as usize, uv: f.uv, uv_stride: f.uv_stride as usize };
+    let src = Planes {
+        width: f.width,
+        height: f.height,
+        y: f.y,
+        y_stride: f.y_stride as usize,
+        uv: f.uv,
+        uv_stride: f.uv_stride as usize,
+    };
     downscale_nv12(&src, ow, oh, mirror, buf);
     let (y, uv) = buf.split_at(ow as usize * oh as usize);
-    cb(&Nv12Frame { width: ow, height: oh, timestamp_us: f.timestamp_us, y, y_stride: ow, uv, uv_stride: ow });
+    cb(&Nv12Frame {
+        width: ow,
+        height: oh,
+        timestamp_us: f.timestamp_us,
+        y,
+        y_stride: ow,
+        uv,
+        uv_stride: ow,
+    });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -188,7 +230,10 @@ pub struct PreviewHandle(Arc<PreviewState>);
 
 impl PreviewHandle {
     pub fn new() -> Result<Self> {
-        Ok(Self(Arc::new(PreviewState { cfg: Mutex::new(PreviewConfig::default()), frames: AtomicU64::new(0) })))
+        Ok(Self(Arc::new(PreviewState {
+            cfg: Mutex::new(PreviewConfig::default()),
+            frames: AtomicU64::new(0),
+        })))
     }
     pub fn set(&self, cfg: PreviewConfig) {
         *lock(&self.0.cfg) = cfg;
@@ -219,7 +264,12 @@ pub struct PreviewAttach {
 
 impl PreviewAttach {
     pub fn new(h: &PreviewHandle, cb: FrameCallback) -> Self {
-        Self { state: h.0.clone(), cb, last: None, buf: Vec::new() }
+        Self {
+            state: h.0.clone(),
+            cb,
+            last: None,
+            buf: Vec::new(),
+        }
     }
 
     pub(crate) fn offer(&mut self, f: &Nv12Frame<'_>) {
@@ -235,7 +285,14 @@ impl PreviewAttach {
             return;
         }
         self.last = Some(Instant::now());
-        deliver_small(f, cfg.max_width, cfg.max_height, false, &mut self.buf, &mut self.cb);
+        deliver_small(
+            f,
+            cfg.max_width,
+            cfg.max_height,
+            false,
+            &mut self.buf,
+            &mut self.cb,
+        );
         self.state.frames.fetch_add(1, Ordering::Relaxed);
     }
 }
@@ -268,7 +325,9 @@ pub fn start_video_encoded(
     _: crate::EncodedCallback,
     _: Option<PreviewAttach>,
 ) -> Result<EncodedInner> {
-    Err(CaptureError::Unsupported("on macOS VideoToolbox encodes inside libwebrtc (raw path)".into()))
+    Err(CaptureError::Unsupported(
+        "on macOS VideoToolbox encodes inside libwebrtc (raw path)".into(),
+    ))
 }
 
 /// No pre-encoded backend here (see [`start_video_encoded`]).
@@ -297,13 +356,20 @@ pub fn list_gpus() -> Vec<GpuInfo> {
 
 /// VideoToolbox (in libwebrtc), then the processor (OpenH264 in libwebrtc).
 pub fn encoder_candidates(gpus: &[GpuInfo]) -> Vec<EncoderCandidate> {
-    let mut v: Vec<EncoderCandidate> = gpus.iter().take(1).map(|g| EncoderCandidate::hardware(EncoderKind::VideoToolbox, g)).collect();
+    let mut v: Vec<EncoderCandidate> = gpus
+        .iter()
+        .take(1)
+        .map(|g| EncoderCandidate::hardware(EncoderKind::VideoToolbox, g))
+        .collect();
     v.push(EncoderCandidate::software());
     v
 }
 
 /// Nothing to test: VideoToolbox runs inside libwebrtc, which falls back to OpenH264 by itself.
-pub fn self_test_encoders(_: &[EncoderCandidate], _: &mut dyn FnMut(&SelfTestResult)) -> Vec<SelfTestResult> {
+pub fn self_test_encoders(
+    _: &[EncoderCandidate],
+    _: &mut dyn FnMut(&SelfTestResult),
+) -> Vec<SelfTestResult> {
     Vec::new()
 }
 
@@ -317,11 +383,20 @@ mod tests {
         assert_eq!(gpus.len(), 1);
         assert!(gpus[0].name.starts_with("Apple"), "{}", gpus[0].name);
         let c = encoder_candidates(&gpus);
-        assert_eq!(c.iter().map(|c| c.kind).collect::<Vec<_>>(), vec![EncoderKind::VideoToolbox, EncoderKind::Software]);
+        assert_eq!(
+            c.iter().map(|c| c.kind).collect::<Vec<_>>(),
+            vec![EncoderKind::VideoToolbox, EncoderKind::Software]
+        );
         assert_eq!(c[0].backend(), Some(EncoderBackend::VideoToolbox));
         assert_eq!(c[0].label_pt(&c), "Apple VideoToolbox");
         assert!(self_test_encoders(&c, &mut |_| {}).is_empty());
-        assert!(start_video_encoded(crate::VideoTarget::Monitor(0), Default::default(), Box::new(|_| {}), None).is_err());
+        assert!(start_video_encoded(
+            crate::VideoTarget::Monitor(0),
+            Default::default(),
+            Box::new(|_| {}),
+            None
+        )
+        .is_err());
     }
 
     #[test]
@@ -335,7 +410,15 @@ mod tests {
     #[test]
     fn frames_without_a_pixel_buffer_have_none() {
         let (y, uv) = (vec![0u8; 16], vec![128u8; 8]);
-        let f = Nv12Frame { width: 4, height: 4, timestamp_us: 0, y: &y, y_stride: 4, uv: &uv, uv_stride: 4 };
+        let f = Nv12Frame {
+            width: 4,
+            height: 4,
+            timestamp_us: 0,
+            y: &y,
+            y_stride: 4,
+            uv: &uv,
+            uv_stride: 4,
+        };
         assert!(retained_pixel_buffer(&f).is_none());
     }
 }

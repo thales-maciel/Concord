@@ -1,30 +1,8 @@
-//! Mentions, replies and reactions in the chat (v0.8; the wire contract is `vox_proto::chat`):
+//! Mentions, replies, reactions and deletion; wire contract: `vox_proto::chat`.
+//! The hub enforces staff-only `@todos` mentions and moderation permissions.
 //!
-//! - **Menções**: typing `@` in a channel's input opens a list of the server's members (display
-//!   name and username, filtered as you type; arrows / Tab / Enter pick, Esc closes). A message that
-//!   mentions me has a highlighted background, the names show as chips, and it notifies with its
-//!   own sound and an `@` on the channel's counter (`notify.rs`). `@todos` is offered to
-//!   Moderador and above only (the hub enforces it). DMs have no list: a `@name` of one of the two
-//!   people just shows as a chip.
-//! - **Responder**: on a message's hover bar or right-click menu. The input shows "Respondendo a
-//!   <nome>" with "@ ligado" (also mention them; channels) and ✖. The reply shows a one-line quote
-//!   above it; a click scrolls to the original and flashes it (older pages are loaded when needed).
-//! - **Reações**: "😀" on the hover bar (or "Reagir" in the menu) opens a small picker: the emoji I
-//!   used last plus a fixed grid of common ones (all in egui's bundled emoji font, so they draw).
-//!   Reactions show as chips under the message, highlighted when I am in them; a click toggles,
-//!   hovering lists who reacted.
-//!
-//! - **Apagar mensagem** (v0.8.2): my own messages (channels and DMs), and anybody's in a channel
-//!   for Moderador and above. In the right-click menu and as 🗑 on the hover bar; it asks "Apagar
-//!   esta mensagem?" first, Shift+click deletes at once (like Discord).
-//!
-//! Light on the frame: the chip layout of a message (where its mentions are) is computed once and
-//! cached, everything else is a few comparisons per visible message. A child module of `app`.
-//!
-//! Nothing here trusts a message id alone (v0.8.2): a hub up to v0.8.1 hands a deleted message's
-//! id to the next message. Cached chip layouts are checked against the text, history pages replace
-//! what they cover ([`merge_page`]), and a deleted message or channel takes its cached state with
-//! it ([`App::forget_message`], [`App::forget_channel`]).
+//! Older hubs reuse deleted message IDs. Cache keys must also validate text, history
+//! pages replace their covered range, and deletion clears cached message/channel state.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -32,12 +10,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, RichText};
-use vox_proto::{find_mention, Attachment, ChannelId, ChatFeatures, Reaction, ReplyRef, User, UserId, MENTIONS_MAX, MENTION_EVERYONE};
+use vox_proto::{
+    find_mention, Attachment, ChannelId, ChatFeatures, Reaction, ReplyRef, User, UserId,
+    MENTIONS_MAX, MENTION_EVERYONE,
+};
 
 use super::App;
 use crate::backend::Cmd;
-use crate::theme::{self, ph};
 pub use crate::chat_images::Target;
+use crate::theme::{self, ph};
 
 /// The curated reaction grid (every one of them is in egui's bundled emoji font).
 pub const REACTION_GRID: [&str; 40] = [
@@ -83,17 +64,36 @@ pub struct Span {
 
 /// Where the chips of a text are: every `@name` of `people` (id, username, display name) and, with
 /// `everyone`, `@todos`. Overlaps keep the longer one.
-pub fn mention_spans(text: &str, people: &[(UserId, &str, Option<&str>)], everyone: bool) -> Vec<Span> {
+pub fn mention_spans(
+    text: &str,
+    people: &[(UserId, &str, Option<&str>)],
+    everyone: bool,
+) -> Vec<Span> {
     let mut all: Vec<Span> = Vec::new();
     for &(id, username, display) in people {
         for name in [Some(username), display].into_iter().flatten() {
-            all.extend(find_mention(text, name).into_iter().map(|range| Span { range, chip: Chip::User(id) }));
+            all.extend(find_mention(text, name).into_iter().map(|range| Span {
+                range,
+                chip: Chip::User(id),
+            }));
         }
     }
     if everyone {
-        all.extend(find_mention(text, MENTION_EVERYONE).into_iter().map(|range| Span { range, chip: Chip::Everyone }));
+        all.extend(
+            find_mention(text, MENTION_EVERYONE)
+                .into_iter()
+                .map(|range| Span {
+                    range,
+                    chip: Chip::Everyone,
+                }),
+        );
     }
-    all.sort_by(|a, b| a.range.start.cmp(&b.range.start).then(b.range.end.cmp(&a.range.end)));
+    all.sort_by(|a, b| {
+        a.range
+            .start
+            .cmp(&b.range.start)
+            .then(b.range.end.cmp(&a.range.end))
+    });
     let mut out: Vec<Span> = Vec::new();
     for s in all {
         if out.last().is_none_or(|l| s.range.start >= l.range.end) {
@@ -107,11 +107,15 @@ pub fn mention_spans(text: &str, people: &[(UserId, &str, Option<&str>)], everyo
 pub fn mention_query(text: &str, cursor: usize) -> Option<(usize, &str)> {
     let before = text.get(..cursor)?;
     let at = before.rfind('@')?;
-    let ok_start = before[..at].chars().next_back().is_none_or(|c| c.is_whitespace() || "([{\"'".contains(c));
+    let ok_start = before[..at]
+        .chars()
+        .next_back()
+        .is_none_or(|c| c.is_whitespace() || "([{\"'".contains(c));
     let query = &before[at + 1..];
     // A query with a space only lives on while a display name could still match (checked by the
     // caller: no candidates, no list); a line break or a long run ends it.
-    (ok_start && !query.contains('\n') && query.chars().count() <= vox_proto::DISPLAY_NAME_MAX).then_some((at, query))
+    (ok_start && !query.contains('\n') && query.chars().count() <= vox_proto::DISPLAY_NAME_MAX)
+        .then_some((at, query))
 }
 
 /// One entry of the mention list.
@@ -127,7 +131,12 @@ pub struct Candidate {
 
 /// The mention list for `query`: people whose display name or username starts with it first,
 /// then those containing it; `@todos` first when allowed and it fits.
-pub fn candidates(people: &[User], me: Option<UserId>, query: &str, can_everyone: bool) -> Vec<Candidate> {
+pub fn candidates(
+    people: &[User],
+    me: Option<UserId>,
+    query: &str,
+    can_everyone: bool,
+) -> Vec<Candidate> {
     let q = query.to_lowercase();
     let mut starts: Vec<&User> = Vec::new();
     let mut contains: Vec<&User> = Vec::new();
@@ -139,18 +148,30 @@ pub fn candidates(people: &[User], me: Option<UserId>, query: &str, can_everyone
             contains.push(u);
         }
     }
-    let by_name = |a: &&User, b: &&User| a.shown_name().to_lowercase().cmp(&b.shown_name().to_lowercase());
+    let by_name = |a: &&User, b: &&User| {
+        a.shown_name()
+            .to_lowercase()
+            .cmp(&b.shown_name().to_lowercase())
+    };
     starts.sort_by(by_name);
     contains.sort_by(by_name);
     let mut out = Vec::new();
     if can_everyone && MENTION_EVERYONE.starts_with(&q) {
-        out.push(Candidate { id: None, name: MENTION_EVERYONE.to_string(), username: String::new() });
+        out.push(Candidate {
+            id: None,
+            name: MENTION_EVERYONE.to_string(),
+            username: String::new(),
+        });
     }
     for u in starts.into_iter().chain(contains) {
         if out.len() >= LIST_MAX {
             break;
         }
-        out.push(Candidate { id: Some(u.id), name: u.shown_name().to_string(), username: u.username.clone() });
+        out.push(Candidate {
+            id: Some(u.id),
+            name: u.shown_name().to_string(),
+            username: u.username.clone(),
+        });
     }
     out
 }
@@ -168,7 +189,12 @@ pub fn complete(text: &str, at: usize, cursor: usize, name: &str) -> (String, us
 /// The ids a message being sent mentions: the people picked from the list whose `@name` is still
 /// in the text, plus anybody of `people` written as `@username` / `@display name` by hand. Never
 /// me; at most [`MENTIONS_MAX`].
-pub fn send_mentions(text: &str, people: &[User], picks: &[(UserId, String)], me: Option<UserId>) -> Vec<UserId> {
+pub fn send_mentions(
+    text: &str,
+    people: &[User],
+    picks: &[(UserId, String)],
+    me: Option<UserId>,
+) -> Vec<UserId> {
     let mut out: Vec<UserId> = Vec::new();
     let mut add = |id: UserId| {
         if Some(id) != me && !out.contains(&id) && out.len() < MENTIONS_MAX {
@@ -182,7 +208,9 @@ pub fn send_mentions(text: &str, people: &[User], picks: &[(UserId, String)], me
     }
     if text.contains('@') {
         for u in people {
-            if !find_mention(text, &u.username).is_empty() || (u.has_display_name() && !find_mention(text, u.shown_name()).is_empty()) {
+            if !find_mention(text, &u.username).is_empty()
+                || (u.has_display_name() && !find_mention(text, u.shown_name()).is_empty())
+            {
                 add(u.id);
             }
         }
@@ -197,16 +225,33 @@ pub fn send_mentions(text: &str, people: &[User], picks: &[(UserId, String)], me
 /// the page does not have were deleted meanwhile and go (`deleted`); a message the page has is
 /// replaced by the page's (fresher) copy, and when it is not even the same message (`same`: an
 /// older hub reused the id) the local one is reported in `replaced`.
-pub fn merge_page<T: Clone>(msgs: &mut Vec<T>, mut page: Vec<T>, before: Option<i64>, complete: bool, id: impl Fn(&T) -> i64, same: impl Fn(&T, &T) -> bool) -> Merged<T> {
+pub fn merge_page<T: Clone>(
+    msgs: &mut Vec<T>,
+    mut page: Vec<T>,
+    before: Option<i64>,
+    complete: bool,
+    id: impl Fn(&T) -> i64,
+    same: impl Fn(&T, &T) -> bool,
+) -> Merged<T> {
     page.sort_by_key(&id);
     page.dedup_by_key(|m| id(m));
-    let lo = if complete { i64::MIN } else { page.first().map(&id).unwrap_or(i64::MAX) };
+    let lo = if complete {
+        i64::MIN
+    } else {
+        page.first().map(&id).unwrap_or(i64::MAX)
+    };
     let hi = match before {
         Some(b) => b,
         // The newest page: up to its newest message (an empty, complete one: everything is gone).
-        None => page.last().map(|m| id(m).saturating_add(1)).unwrap_or(if complete { i64::MAX } else { i64::MIN }),
+        None => page
+            .last()
+            .map(|m| id(m).saturating_add(1))
+            .unwrap_or(if complete { i64::MAX } else { i64::MIN }),
     };
-    let mut out = Merged { deleted: Vec::new(), replaced: Vec::new() };
+    let mut out = Merged {
+        deleted: Vec::new(),
+        replaced: Vec::new(),
+    };
     msgs.retain(|m| {
         let i = id(m);
         if i < lo || i >= hi {
@@ -240,17 +285,17 @@ pub struct Merged<T> {
     pub replaced: Vec<T>,
 }
 
-/// What a quote line says: who, and the text (or "imagem" / "mensagem apagada").
+/// What a quote line says: who, and the text (or "imagem" / "message deleted").
 pub fn quote_parts(r: &ReplyRef) -> (Option<String>, String) {
     if r.deleted || r.author.is_none() {
-        return (None, "mensagem apagada".into());
+        return (None, "message deleted".into());
     }
     let who = r.author.as_ref().map(|u| u.shown_name().to_string());
     let body = match (r.excerpt.is_empty(), r.images) {
         (false, _) => r.excerpt.clone(),
         (true, 0) => String::new(),
         (true, 1) => "imagem".into(),
-        (true, n) => format!("{n} imagens"),
+        (true, n) => format!("{n} images"),
     };
     (who, body)
 }
@@ -262,11 +307,15 @@ pub fn reaction_hover(emoji: &str, names: &[String]) -> String {
     let who = match (shown.len(), more) {
         (0, _) => String::new(),
         (1, 0) => shown[0].to_string(),
-        (n, 0) => format!("{} e {}", shown[..n - 1].join(", "), shown[n - 1]),
-        (_, m) => format!("{} e mais {m}", shown.join(", ")),
+        (n, 0) => format!("{} and {}", shown[..n - 1].join(", "), shown[n - 1]),
+        (_, m) => format!("{} and {m} more", shown.join(", ")),
     };
-    let verb = if names.len() > 1 { "reagiram" } else { "reagiu" };
-    format!("{who} {verb} com {emoji}")
+    let verb = if names.len() > 1 {
+        "reagiram"
+    } else {
+        "reagiu"
+    };
+    format!("{who} {verb} with {emoji}")
 }
 
 /// Put `emoji` first in the recent list (no duplicates, at most [`RECENT_MAX`]).
@@ -279,11 +328,14 @@ pub fn push_recent(recent: &mut Vec<String>, emoji: &str) {
 /// A failed reaction in words for the person.
 pub fn reaction_error_text(e: &anyhow::Error) -> String {
     match e.downcast_ref::<vox_client_core::hub::HttpStatusError>() {
-        Some(s) if s.status == 409 => format!("Essa mensagem já tem {} reações diferentes.", vox_proto::REACTIONS_MAX_PER_MESSAGE),
-        Some(s) if s.status == 429 => "Calma: espere um instante para reagir de novo.".into(),
-        Some(s) if s.status == 403 => "Não dá: um de vocês bloqueou o outro.".into(),
-        Some(s) if s.status == 404 => "Essa mensagem não existe mais.".into(),
-        Some(s) if s.status == 400 => "Só dá para reagir com um emoji.".into(),
+        Some(s) if s.status == 409 => format!(
+            "This message already has {} different reactions.",
+            vox_proto::REACTIONS_MAX_PER_MESSAGE
+        ),
+        Some(s) if s.status == 429 => "Slow down: wait a moment before reacting again.".into(),
+        Some(s) if s.status == 403 => "Not allowed: one of you blocked the other.".into(),
+        Some(s) if s.status == 404 => "This message no longer exists.".into(),
+        Some(s) if s.status == 400 => "Reactions must be a single emoji.".into(),
         _ => crate::backend::friendly(e),
     }
 }
@@ -295,7 +347,7 @@ pub fn reaction_error_text(e: &anyhow::Error) -> String {
 pub struct ReplyDraft {
     pub id: i64,
     pub author: User,
-    /// "@ ligado": the reply mentions its author too (channels).
+    /// "@ on": the reply mentions its author too (channels).
     pub ping: bool,
 }
 
@@ -350,10 +402,10 @@ pub struct ChatUi {
     /// The messages behind the sidebar counters, per channel: (id, mentions me). A deleted one
     /// takes its count with it.
     pub unread_ids: HashMap<ChannelId, Vec<(i64, bool)>>,
-    /// "Apagar esta mensagem?" (v0.8.2).
+    /// "Delete this message?" (v0.8.2).
     pub confirm_delete: Option<ConfirmDelete>,
     /// For the autotest: deletions asked of the hub, and the messages (target, id) whose menu and
-    /// hover bar offered "Apagar mensagem" in the last frame drawn.
+    /// hover bar offered "Delete message" in the last frame drawn.
     pub deletes_sent: u32,
     pub delete_offers: Vec<(Target, i64)>,
     frame: u64,
@@ -371,7 +423,10 @@ impl ChatUi {
     }
 
     pub fn name(&self, id: UserId) -> String {
-        self.people.get(&id).map(|u| u.shown_name().to_string()).unwrap_or_else(|| format!("#{id}"))
+        self.people
+            .get(&id)
+            .map(|u| u.shown_name().to_string())
+            .unwrap_or_else(|| format!("#{id}"))
     }
 
     /// Remember a person (and notice a name change).
@@ -401,20 +456,40 @@ impl ChatUi {
 
     /// The chip layout of a message, computed once (and cached; checked against the text, so a
     /// reused id never gets another message's chips).
-    pub fn chips(&mut self, target: Target, id: i64, text: &str, ids: &[UserId], everyone: bool) -> Arc<[Span]> {
+    pub fn chips(
+        &mut self,
+        target: Target,
+        id: i64,
+        text: &str,
+        ids: &[UserId],
+        everyone: bool,
+    ) -> Arc<[Span]> {
         let fp = text_fingerprint(text);
         if let Some((gen, f, s)) = self.spans.get(&(target, id)) {
             if *gen == self.names_gen && *f == fp {
                 return s.clone();
             }
         }
-        let people: Vec<(UserId, &str, Option<&str>)> =
-            ids.iter().filter_map(|i| self.people.get(i)).map(|u| (u.id, u.username.as_str(), u.display_name.as_deref().map(str::trim).filter(|d| !d.is_empty()))).collect();
+        let people: Vec<(UserId, &str, Option<&str>)> = ids
+            .iter()
+            .filter_map(|i| self.people.get(i))
+            .map(|u| {
+                (
+                    u.id,
+                    u.username.as_str(),
+                    u.display_name
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|d| !d.is_empty()),
+                )
+            })
+            .collect();
         let spans: Arc<[Span]> = mention_spans(text, &people, everyone).into();
         if self.spans.len() >= SPAN_CACHE_MAX {
             self.spans.clear();
         }
-        self.spans.insert((target, id), (self.names_gen, fp, spans.clone()));
+        self.spans
+            .insert((target, id), (self.names_gen, fp, spans.clone()));
         spans
     }
 
@@ -429,10 +504,18 @@ impl ChatUi {
         if self.seek.is_some_and(|(t, i, _)| t == target && i == id) {
             self.seek = None;
         }
-        if self.picker.as_ref().is_some_and(|p| p.target == target && p.id == id) {
+        if self
+            .picker
+            .as_ref()
+            .is_some_and(|p| p.target == target && p.id == id)
+        {
             self.picker = None;
         }
-        if self.confirm_delete.as_ref().is_some_and(|c| c.target == target && c.id == id) {
+        if self
+            .confirm_delete
+            .as_ref()
+            .is_some_and(|c| c.target == target && c.id == id)
+        {
             self.confirm_delete = None;
         }
     }
@@ -451,7 +534,11 @@ impl ChatUi {
         if self.picker.as_ref().is_some_and(|p| p.target == target) {
             self.picker = None;
         }
-        if self.confirm_delete.as_ref().is_some_and(|c| c.target == target) {
+        if self
+            .confirm_delete
+            .as_ref()
+            .is_some_and(|c| c.target == target)
+        {
             self.confirm_delete = None;
         }
         if self.ac_closed.is_some_and(|(t, _)| t == target) {
@@ -474,7 +561,7 @@ fn text_fingerprint(text: &str) -> u64 {
 /// Chip layouts per message, with the name generation and the text they were made for.
 type SpanCache = HashMap<(Target, i64), (u64, u64, Arc<[Span]>)>;
 
-/// "Apagar esta mensagem?" waiting for an answer.
+/// "Delete this message?" waiting for an answer.
 #[derive(Debug, Clone)]
 pub struct ConfirmDelete {
     pub target: Target,
@@ -488,11 +575,24 @@ pub struct ConfirmDelete {
 #[derive(Debug, Clone)]
 pub enum Act {
     Reply(i64),
-    React { id: i64, emoji: String, add: bool },
-    Picker { id: i64, pos: egui::Pos2 },
-    Jump { id: i64, deleted: bool },
-    /// "Apagar mensagem"; `now`: Shift was held (no confirmation).
-    Delete { id: i64, now: bool },
+    React {
+        id: i64,
+        emoji: String,
+        add: bool,
+    },
+    Picker {
+        id: i64,
+        pos: egui::Pos2,
+    },
+    Jump {
+        id: i64,
+        deleted: bool,
+    },
+    /// "Delete message"; `now`: Shift was held (no confirmation).
+    Delete {
+        id: i64,
+        now: bool,
+    },
 }
 
 /// What may be done with one message, for its menu and hover bar.
@@ -501,9 +601,9 @@ pub struct MsgActions {
     pub features: ChatFeatures,
     /// Replies and reactions are allowed here (not while a DM is blocked).
     pub social: bool,
-    /// "Apagar mensagem" is offered.
+    /// "Delete message" is offered.
     pub delete: bool,
-    /// It is my own message (the menu says "Apagar mensagem"; someone else's is "(moderação)").
+    /// It is my own message (the menu says "Delete message"; someone else's is "(moderation)").
     pub own: bool,
 }
 
@@ -515,9 +615,16 @@ impl MsgActions {
 
 /// May I delete this message? My own: always, wherever I can write (channels on a hub that knows
 /// roles, which is where the delete endpoint exists; my DM lines). Somebody else's channel
-/// message: Moderador and above (the hub checks it again). Never somebody else's DM line, nor a
+/// message: Moderator and above (the hub checks it again). Never somebody else's DM line, nor a
 /// call line.
-pub fn may_delete(target: Target, roles_supported: bool, me: Option<UserId>, author: UserId, my_role_can_moderate: bool, text_line: bool) -> bool {
+pub fn may_delete(
+    target: Target,
+    roles_supported: bool,
+    me: Option<UserId>,
+    author: UserId,
+    my_role_can_moderate: bool,
+    text_line: bool,
+) -> bool {
     let own = me == Some(author);
     match target {
         Target::Channel(_) => roles_supported && (own || my_role_can_moderate),
@@ -535,17 +642,30 @@ pub fn row_bg_slot(ui: &egui::Ui) -> egui::layers::ShapeIdx {
 
 /// Paint a message row's background: the mention highlight, the flash of a clicked quote's
 /// original, and a faint hover.
-pub fn paint_row_bg(ui: &egui::Ui, slot: egui::layers::ShapeIdx, row: egui::Rect, mentioned: bool, flash: f32, hovered: bool) {
+pub fn paint_row_bg(
+    ui: &egui::Ui,
+    slot: egui::layers::ShapeIdx,
+    row: egui::Rect,
+    mentioned: bool,
+    flash: f32,
+    hovered: bool,
+) {
     // (No allocation for a plain row: most rows are neither mentioned, hovered nor flashing.)
     let mut shape = egui::Shape::Noop;
     if mentioned {
         let bar = egui::Rect::from_min_size(row.min, egui::vec2(3.0, row.height()));
-        shape = egui::Shape::Vec(vec![egui::Shape::rect_filled(row, 0.0, MENTION_BG), egui::Shape::rect_filled(bar, 0.0, MENTION_BAR)]);
+        shape = egui::Shape::Vec(vec![
+            egui::Shape::rect_filled(row, 0.0, MENTION_BG),
+            egui::Shape::rect_filled(bar, 0.0, MENTION_BAR),
+        ]);
     } else if hovered {
         shape = egui::Shape::rect_filled(row, 0.0, crate::theme::ROW_HOVER.gamma_multiply(0.6));
     }
     if flash > 0.0 {
-        shape = egui::Shape::Vec(vec![shape, egui::Shape::rect_filled(row, 0.0, crate::theme::GIZ.gamma_multiply(0.12 * flash))]);
+        shape = egui::Shape::Vec(vec![
+            shape,
+            egui::Shape::rect_filled(row, 0.0, crate::theme::GIZ.gamma_multiply(0.12 * flash)),
+        ]);
     }
     ui.painter().set(slot, shape);
 }
@@ -556,23 +676,53 @@ pub fn quote_line(ui: &mut egui::Ui, r: &ReplyRef) -> bool {
     let mut job = egui::text::LayoutJob::default();
     let small = crate::theme::body(12.0);
     let weak = crate::theme::NEVOA;
-    job.append(&format!("{}  ", ph::ARROW_BEND_UP_LEFT), 0.0, egui::TextFormat::simple(small.clone(), weak));
+    job.append(
+        &format!("{}  ", ph::ARROW_BEND_UP_LEFT),
+        0.0,
+        egui::TextFormat::simple(small.clone(), weak),
+    );
     match who {
         Some(name) => {
             let author = r.author.as_ref().map(|u| u.id).unwrap_or_default();
-            job.append(&format!("{name}: "), 0.0, egui::TextFormat::simple(crate::theme::semibold(12.0), super::name_color(author)));
+            job.append(
+                &format!("{name}: "),
+                0.0,
+                egui::TextFormat::simple(crate::theme::semibold(12.0), super::name_color(author)),
+            );
             job.append(&body, 0.0, egui::TextFormat::simple(small, weak));
         }
-        None => job.append(&body, 0.0, egui::TextFormat { italics: true, ..egui::TextFormat::simple(small, weak) }),
+        None => job.append(
+            &body,
+            0.0,
+            egui::TextFormat {
+                italics: true,
+                ..egui::TextFormat::simple(small, weak)
+            },
+        ),
     }
-    let resp = ui.add(egui::Label::new(job).truncate().sense(egui::Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand);
-    let resp = if r.deleted { resp.on_hover_text("A mensagem original foi apagada") } else { resp.on_hover_text("Ir para a mensagem original") };
+    let resp = ui
+        .add(egui::Label::new(job).truncate().sense(egui::Sense::click()))
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    let resp = if r.deleted {
+        resp.on_hover_text("The original message was deleted")
+    } else {
+        resp.on_hover_text("Go to original message")
+    };
     resp.clicked()
 }
 
 /// The text of a message with its mention chips (plain `links::message` when it has none).
 #[allow(clippy::too_many_arguments)]
-pub fn message_text(ui: &mut egui::Ui, chat: &mut ChatUi, target: Target, id: i64, caption: &str, ids: &[UserId], everyone: bool, me: Option<UserId>) {
+pub fn message_text(
+    ui: &mut egui::Ui,
+    chat: &mut ChatUi,
+    target: Target,
+    id: i64,
+    caption: &str,
+    ids: &[UserId],
+    everyone: bool,
+    me: Option<UserId>,
+) {
     if (ids.is_empty() && !everyone) || !caption.contains('@') {
         crate::links::message(ui, caption);
         return;
@@ -589,7 +739,10 @@ pub fn message_text(ui: &mut egui::Ui, chat: &mut ChatUi, target: Target, id: i6
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             let mut pos = start;
-            for s in spans.iter().filter(|s| s.range.start >= start && s.range.end <= end) {
+            for s in spans
+                .iter()
+                .filter(|s| s.range.start >= start && s.range.end <= end)
+            {
                 text_part(ui, &caption[pos..s.range.start]);
                 let label = &caption[s.range.clone()];
                 let (bg, fg) = match s.chip {
@@ -597,12 +750,23 @@ pub fn message_text(ui: &mut egui::Ui, chat: &mut ChatUi, target: Target, id: i6
                     Chip::Everyone => (CHIP_ME_BG, CHIP_ME_TEXT),
                     Chip::User(_) => (CHIP_BG, CHIP_TEXT),
                 };
-                let chip = ui.label(RichText::new(label).font(crate::theme::semibold(14.0)).color(fg).background_color(bg));
+                let chip = ui.label(
+                    RichText::new(label)
+                        .font(crate::theme::semibold(14.0))
+                        .color(fg)
+                        .background_color(bg),
+                );
                 // (The username is only looked up under the pointer.)
                 chip.on_hover_ui(|ui| {
                     ui.label(match s.chip {
-                        Chip::User(u) => format!("@{}", chat.people.get(&u).map(|p| p.username.as_str()).unwrap_or("")),
-                        Chip::Everyone => "Menciona todo mundo".to_string(),
+                        Chip::User(u) => format!(
+                            "@{}",
+                            chat.people
+                                .get(&u)
+                                .map(|p| p.username.as_str())
+                                .unwrap_or("")
+                        ),
+                        Chip::Everyone => "Mentions everyone".to_string(),
                     });
                 });
                 pos = s.range.end;
@@ -629,7 +793,14 @@ fn text_part(ui: &mut egui::Ui, text: &str) {
 }
 
 /// The reaction chips under a message ("👍 3", highlighted when I am in it).
-pub fn reaction_chips(ui: &mut egui::Ui, chat: &ChatUi, id: i64, reactions: &[Reaction], me: Option<UserId>, acts: &mut Vec<Act>) {
+pub fn reaction_chips(
+    ui: &mut egui::Ui,
+    chat: &ChatUi,
+    id: i64,
+    reactions: &[Reaction],
+    me: Option<UserId>,
+    acts: &mut Vec<Act>,
+) {
     if reactions.is_empty() {
         return;
     }
@@ -645,7 +816,11 @@ pub fn reaction_chips(ui: &mut egui::Ui, chat: &ChatUi, id: i64, reactions: &[Re
                 ui.label(reaction_hover(&r.emoji, &names));
             });
             if resp.clicked() && chat.features.reactions {
-                acts.push(Act::React { id, emoji: r.emoji.clone(), add: !mine });
+                acts.push(Act::React {
+                    id,
+                    emoji: r.emoji.clone(),
+                    add: !mine,
+                });
             }
         }
     });
@@ -654,7 +829,9 @@ pub fn reaction_chips(ui: &mut egui::Ui, chat: &ChatUi, id: i64, reactions: &[Re
 /// A reaction pill ("👍 2"): round, raised; mine a step lighter with a chalk outline (the lamp is
 /// only for speakers, the main action and mentions).
 pub fn reaction_pill(ui: &mut egui::Ui, emoji: &str, count: usize, mine: bool) -> egui::Response {
-    let g = ui.painter().layout_no_wrap(format!("{emoji} {count}"), theme::body(13.0), theme::GIZ);
+    let g = ui
+        .painter()
+        .layout_no_wrap(format!("{emoji} {count}"), theme::body(13.0), theme::GIZ);
     let size = egui::vec2(g.size().x + 18.0, 24.0);
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
     if ui.is_rect_visible(rect) {
@@ -664,7 +841,13 @@ pub fn reaction_pill(ui: &mut egui::Ui, emoji: &str, count: usize, mine: bool) -
             (false, false) => (theme::MOVEL, theme::RISCO),
         };
         let p = ui.painter();
-        p.rect(rect, theme::radius::PILL, fill, egui::Stroke::new(theme::stroke::HAIRLINE, line), egui::StrokeKind::Inside);
+        p.rect(
+            rect,
+            theme::radius::PILL,
+            fill,
+            egui::Stroke::new(theme::stroke::HAIRLINE, line),
+            egui::StrokeKind::Inside,
+        );
         p.galley(rect.center() - g.size() / 2.0, g, theme::GIZ);
     }
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -674,17 +857,30 @@ pub fn reaction_pill(ui: &mut egui::Ui, emoji: &str, count: usize, mine: bool) -
 /// as icon buttons.
 pub fn hover_bar(ui: &mut egui::Ui, row: egui::Rect, a: MsgActions, id: i64, acts: &mut Vec<Act>) {
     use crate::ui_kit::{icon_button, IconState};
-    let (reply, react) = (a.social && a.features.replies, a.social && a.features.reactions);
+    let (reply, react) = (
+        a.social && a.features.replies,
+        a.social && a.features.reactions,
+    );
     let n = reply as usize + react as usize + a.delete as usize;
     if n == 0 {
         return;
     }
     let w = n as f32 * 32.0 + 8.0;
-    let rect = egui::Rect::from_min_size(egui::pos2(row.right() - w - 14.0, row.top() - 16.0), egui::vec2(w, 38.0));
-    let mut bar = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(row.right() - w - 14.0, row.top() - 16.0),
+        egui::vec2(w, 38.0),
+    );
+    let mut bar = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+    );
     let frame = egui::Frame::new()
         .fill(crate::theme::PAREDE)
-        .stroke(egui::Stroke::new(crate::theme::stroke::HAIRLINE, crate::theme::RISCO))
+        .stroke(egui::Stroke::new(
+            crate::theme::stroke::HAIRLINE,
+            crate::theme::RISCO,
+        ))
         .corner_radius(crate::theme::radius::BUTTON)
         .inner_margin(egui::Margin::same(3));
     frame.show(&mut bar, |ui| {
@@ -693,37 +889,60 @@ pub fn hover_bar(ui: &mut egui::Ui, row: egui::Rect, a: MsgActions, id: i64, act
             let b = icon_button(ui, ph::TRASH, delete_hover(a.own), IconState::Normal);
             if b.hovered() {
                 // (Red under the pointer only: deleting is the one destructive action here.)
-                ui.painter().text(b.rect.center(), egui::Align2::CENTER_CENTER, ph::TRASH, crate::theme::body(18.0), super::RED);
+                ui.painter().text(
+                    b.rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    ph::TRASH,
+                    crate::theme::body(18.0),
+                    super::RED,
+                );
             }
             if b.clicked() {
-                acts.push(Act::Delete { id, now: ui.input(|i| i.modifiers.shift) });
+                acts.push(Act::Delete {
+                    id,
+                    now: ui.input(|i| i.modifiers.shift),
+                });
             }
         }
         if react {
-            let b = icon_button(ui, ph::SMILEY, "Adicionar reação", IconState::Normal);
+            let b = icon_button(ui, ph::SMILEY, "Add reaction", IconState::Normal);
             if b.clicked() {
-                acts.push(Act::Picker { id, pos: b.rect.left_bottom() + egui::vec2(0.0, 4.0) });
+                acts.push(Act::Picker {
+                    id,
+                    pos: b.rect.left_bottom() + egui::vec2(0.0, 4.0),
+                });
             }
         }
-        if reply && icon_button(ui, ph::ARROW_BEND_UP_LEFT, "Responder", IconState::Normal).clicked() {
+        if reply && icon_button(ui, ph::ARROW_BEND_UP_LEFT, "Reply", IconState::Normal).clicked() {
             acts.push(Act::Reply(id));
         }
     });
 }
 
 fn delete_hover(own: bool) -> &'static str {
-    if own { "Apagar mensagem (Shift+clique: sem confirmar)" } else { "Apagar mensagem (moderação; Shift+clique: sem confirmar)" }
+    if own {
+        "Delete message (Shift+click to skip confirmation)"
+    } else {
+        "Delete message (moderation; Shift+click to skip confirmation)"
+    }
 }
 
-/// A message's right-click menu: Responder, Adicionar reação, Apagar mensagem (as allowed).
+/// A message's right-click menu: Reply, Add reaction, Delete message (as allowed).
 pub fn menu_items(ui: &mut egui::Ui, a: MsgActions, id: i64, acts: &mut Vec<Act>) {
     use crate::ui_kit::menu_row;
-    if a.social && a.features.replies && menu_row(ui, ph::ARROW_BEND_UP_LEFT, "Responder", false).clicked() {
+    if a.social
+        && a.features.replies
+        && menu_row(ui, ph::ARROW_BEND_UP_LEFT, "Reply", false).clicked()
+    {
         acts.push(Act::Reply(id));
         ui.close();
     }
-    if a.social && a.features.reactions && menu_row(ui, ph::SMILEY, "Adicionar reação", false).clicked() {
-        let pos = ui.ctx().pointer_interact_pos().unwrap_or(ui.min_rect().left_bottom());
+    if a.social && a.features.reactions && menu_row(ui, ph::SMILEY, "Add reaction", false).clicked()
+    {
+        let pos = ui
+            .ctx()
+            .pointer_interact_pos()
+            .unwrap_or(ui.min_rect().left_bottom());
         acts.push(Act::Picker { id, pos });
         ui.close();
     }
@@ -731,10 +950,18 @@ pub fn menu_items(ui: &mut egui::Ui, a: MsgActions, id: i64, acts: &mut Vec<Act>
         if a.social && (a.features.replies || a.features.reactions) {
             crate::ui_kit::menu_separator(ui);
         }
-        let label = if a.own { "Apagar mensagem" } else { "Apagar mensagem (moderação)" };
-        let b = menu_row(ui, ph::TRASH, label, true).on_hover_text("Shift+clique: apaga sem confirmar");
+        let label = if a.own {
+            "Delete message"
+        } else {
+            "Delete message (moderation)"
+        };
+        let b = menu_row(ui, ph::TRASH, label, true)
+            .on_hover_text("Shift+click: delete without confirmation");
         if b.clicked() {
-            acts.push(Act::Delete { id, now: ui.input(|i| i.modifiers.shift) });
+            acts.push(Act::Delete {
+                id,
+                now: ui.input(|i| i.modifiers.shift),
+            });
             ui.close();
         }
     }
@@ -743,21 +970,48 @@ pub fn menu_items(ui: &mut egui::Ui, a: MsgActions, id: i64, acts: &mut Vec<Act>
 /// The right-click menu of a message: opens on a right click anywhere on its row (text, images,
 /// link cards, reactions, the header's empty space), except where the row has a menu of its own
 /// (the author's name and picture: `person_menu`).
-pub fn message_menu(ui: &mut egui::Ui, row: egui::Rect, menu_id: egui::Id, a: MsgActions, id: i64, person_menu: bool, acts: &mut Vec<Act>) {
+pub fn message_menu(
+    ui: &mut egui::Ui,
+    row: egui::Rect,
+    menu_id: egui::Id,
+    a: MsgActions,
+    id: i64,
+    person_menu: bool,
+    acts: &mut Vec<Act>,
+) {
     if !a.any() {
         return;
     }
     let area = ui.interact(row, menu_id, egui::Sense::hover());
-    let right_click = !person_menu && ui.rect_contains_pointer(row) && ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Secondary));
-    egui::Popup::menu(&area).open_memory(right_click.then_some(egui::SetOpenCommand::Bool(true))).at_pointer_fixed().frame(crate::ui_kit::popup_frame(ui.style())).style(crate::ui_kit::menu_style).show(|ui| {
-        ui.set_min_width(200.0);
-        menu_items(ui, a, id, acts);
-    });
+    let right_click = !person_menu
+        && ui.rect_contains_pointer(row)
+        && ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Secondary));
+    egui::Popup::menu(&area)
+        .open_memory(right_click.then_some(egui::SetOpenCommand::Bool(true)))
+        .at_pointer_fixed()
+        .frame(crate::ui_kit::popup_frame(ui.style()))
+        .style(crate::ui_kit::menu_style)
+        .show(|ui| {
+            ui.set_min_width(200.0);
+            menu_items(ui, a, id, acts);
+        });
 }
 
 /// How strong the flash of a jumped-to message is now (0 = none), and scroll to it once.
-pub fn jump_flash(ui: &egui::Ui, chat: &mut ChatUi, target: Target, id: i64, row: egui::Rect) -> f32 {
-    let Some(j) = chat.jump.as_mut().filter(|j| j.target == target && j.id == id) else { return 0.0 };
+pub fn jump_flash(
+    ui: &egui::Ui,
+    chat: &mut ChatUi,
+    target: Target,
+    id: i64,
+    row: egui::Rect,
+) -> f32 {
+    let Some(j) = chat
+        .jump
+        .as_mut()
+        .filter(|j| j.target == target && j.id == id)
+    else {
+        return 0.0;
+    };
     if !j.scrolled {
         j.scrolled = true;
         ui.scroll_to_rect(row, Some(egui::Align::Center));
@@ -773,24 +1027,43 @@ pub fn jump_flash(ui: &egui::Ui, chat: &mut ChatUi, target: Target, id: i64, row
 /// One entry of the `@` list: the name, then the username quiet (`@todos` says who it reaches);
 /// the selected one raised.
 fn mention_row(ui: &mut egui::Ui, c: &Candidate, selected: bool) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width().max(240.0), 28.0), egui::Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width().max(240.0), 28.0),
+        egui::Sense::click(),
+    );
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
         if selected || resp.hovered() {
-            p.rect_filled(rect, theme::radius::ROW, if selected { theme::MOVEL_HOVER } else { theme::ROW_HOVER });
+            p.rect_filled(
+                rect,
+                theme::radius::ROW,
+                if selected {
+                    theme::MOVEL_HOVER
+                } else {
+                    theme::ROW_HOVER
+                },
+            );
         }
         let y = rect.center().y;
         let x = rect.left() + 8.0;
         let (name, sub) = match c.id {
             None => (format!("@{}", c.name), "todo mundo".to_string()),
-            Some(_) if !c.username.is_empty() && c.username != c.name => (c.name.clone(), format!("@{}", c.username)),
+            Some(_) if !c.username.is_empty() && c.username != c.name => {
+                (c.name.clone(), format!("@{}", c.username))
+            }
             Some(_) => (c.name.clone(), String::new()),
         };
         let g = p.layout_no_wrap(name, theme::semibold(13.5), theme::GIZ);
         let w = g.size().x;
         p.galley(egui::pos2(x, y - g.size().y / 2.0), g, theme::GIZ);
         if !sub.is_empty() {
-            p.text(egui::pos2(x + w + 8.0, y), egui::Align2::LEFT_CENTER, sub, theme::body(12.0), theme::NEVOA);
+            p.text(
+                egui::pos2(x + w + 8.0, y),
+                egui::Align2::LEFT_CENTER,
+                sub,
+                theme::body(12.0),
+                theme::NEVOA,
+            );
         }
     }
     resp
@@ -835,7 +1108,7 @@ impl App {
 
     /// A message of `target` was deleted (or replaced by another under the same id): everything
     /// cached for it goes (images, chips, a reply being written to it, its unread count) and
-    /// replies to it quote "mensagem apagada".
+    /// replies to it quote "message deleted".
     pub(crate) fn forget_message(&mut self, target: Target, id: i64, attachments: &[Attachment]) {
         self.forget_images(attachments);
         self.chatx.forget_message(target, id);
@@ -868,7 +1141,11 @@ impl App {
     pub(crate) fn forget_channel(&mut self, ch: ChannelId) {
         let target = Target::Channel(ch);
         if let Some(log) = self.logs.remove(&ch) {
-            let atts: Vec<Attachment> = log.msgs.iter().flat_map(|m| m.attachments.iter().cloned()).collect();
+            let atts: Vec<Attachment> = log
+                .msgs
+                .iter()
+                .flat_map(|m| m.attachments.iter().cloned())
+                .collect();
             self.forget_images(&atts);
         }
         self.unread.remove(&ch);
@@ -883,23 +1160,51 @@ impl App {
         tracing::info!(channel = ch, "channel gone: its client state was dropped");
     }
 
-    /// "Apagar mensagem": at once (Shift held), or after "Apagar esta mensagem?".
+    /// "Delete message": at once (Shift held), or after "Delete this message?".
     pub fn ask_delete(&mut self, target: Target, id: i64, now: bool) {
         if now {
             self.delete_message_now(target, id);
             return;
         }
         let found = match target {
-            Target::Channel(ch) => self.logs.get(&ch).and_then(|l| l.msgs.iter().find(|m| m.id == id)).map(|m| (m.author.shown_name().to_string(), m.caption().to_string(), m.attachments.len())),
-            Target::Dm(dm) => self.dms.logs.get(&dm).and_then(|l| l.msgs.iter().find(|m| m.id == id)).map(|m| (m.author.shown_name().to_string(), m.caption().to_string(), m.attachments.len())),
+            Target::Channel(ch) => self
+                .logs
+                .get(&ch)
+                .and_then(|l| l.msgs.iter().find(|m| m.id == id))
+                .map(|m| {
+                    (
+                        m.author.shown_name().to_string(),
+                        m.caption().to_string(),
+                        m.attachments.len(),
+                    )
+                }),
+            Target::Dm(dm) => self
+                .dms
+                .logs
+                .get(&dm)
+                .and_then(|l| l.msgs.iter().find(|m| m.id == id))
+                .map(|m| {
+                    (
+                        m.author.shown_name().to_string(),
+                        m.caption().to_string(),
+                        m.attachments.len(),
+                    )
+                }),
         };
-        let Some((author, caption, images)) = found else { return };
+        let Some((author, caption, images)) = found else {
+            return;
+        };
         let excerpt = match (caption.trim().is_empty(), images) {
             (false, _) => vox_proto::reply_excerpt(&caption),
             (true, 1) => "imagem".into(),
-            (true, n) => format!("{n} imagens"),
+            (true, n) => format!("{n} images"),
         };
-        self.chatx.confirm_delete = Some(ConfirmDelete { target, id, author, excerpt });
+        self.chatx.confirm_delete = Some(ConfirmDelete {
+            target,
+            id,
+            author,
+            excerpt,
+        });
     }
 
     /// Ask the hub to delete it (the deletion shows when the hub says so, for everybody alike).
@@ -909,30 +1214,56 @@ impl App {
         tracing::info!(?target, id, "delete message");
         match target {
             Target::Channel(_) => self.admin(crate::roles::AdminCmd::DeleteMessage { id }),
-            Target::Dm(dm) => self.backend.send(Cmd::Dm(super::dms::DmCmd::Delete { dm, id })),
+            Target::Dm(dm) => self
+                .backend
+                .send(Cmd::Dm(super::dms::DmCmd::Delete { dm, id })),
         }
     }
 
-    /// "Apagar esta mensagem?" (Enter confirms, Esc cancels).
+    /// "Delete this message?" (Enter confirms, Esc cancels).
     pub(super) fn delete_message_window(&mut self, ctx: &egui::Context) {
-        let Some(c) = self.chatx.confirm_delete.clone() else { return };
+        let Some(c) = self.chatx.confirm_delete.clone() else {
+            return;
+        };
         let (mut yes, mut no) = (false, false);
         ctx.input_mut(|i| {
             yes |= i.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
             no |= i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
         });
         // The kit's dialog: the message quoted, the action on the right.
-        let answer = crate::ui_kit::confirm(ctx, "delete_message", "Apagar mensagem", "Apagar", crate::ui_kit::Kind::Danger, true, |ui| {
-            crate::ui_kit::body_text(ui, "Apagar esta mensagem?");
-            egui::Frame::new().fill(theme::NOITE).corner_radius(theme::radius::ROW).inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.spacing_mut().item_spacing.y = 2.0;
-                ui.label(RichText::new(&c.author).font(theme::semibold(13.5)).color(theme::GIZ));
-                ui.add(egui::Label::new(RichText::new(&c.excerpt).color(theme::TEXTO)).truncate());
-            });
-            crate::ui_kit::hint(ui, "Ela some para todo mundo, com as imagens. Isso não pode ser desfeito.");
-            crate::ui_kit::hint(ui, "Dica: Shift+clique em Apagar mensagem apaga sem perguntar.");
-        });
+        let answer = crate::ui_kit::confirm(
+            ctx,
+            "delete_message",
+            "Delete message",
+            "Delete",
+            crate::ui_kit::Kind::Danger,
+            true,
+            |ui| {
+                crate::ui_kit::body_text(ui, "Delete this message?");
+                egui::Frame::new()
+                    .fill(theme::NOITE)
+                    .corner_radius(theme::radius::ROW)
+                    .inner_margin(egui::Margin::symmetric(12, 8))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        ui.label(
+                            RichText::new(&c.author)
+                                .font(theme::semibold(13.5))
+                                .color(theme::GIZ),
+                        );
+                        ui.add(
+                            egui::Label::new(RichText::new(&c.excerpt).color(theme::TEXTO))
+                                .truncate(),
+                        );
+                    });
+                crate::ui_kit::hint(
+                    ui,
+                    "It disappears for everyone, including its images. This cannot be undone.",
+                );
+                crate::ui_kit::hint(ui, "Tip: Shift+click Delete message to skip confirmation.");
+            },
+        );
         yes |= answer == Some(true);
         no |= answer == Some(false);
         if yes {
@@ -944,19 +1275,36 @@ impl App {
 
     fn reply_target_message(&self, target: Target, id: i64) -> Option<User> {
         match target {
-            Target::Channel(ch) => self.logs.get(&ch)?.msgs.iter().find(|m| m.id == id).map(|m| m.author.clone()),
-            Target::Dm(dm) => self.dms.logs.get(&dm)?.msgs.iter().find(|m| m.id == id).map(|m| m.author.clone()),
+            Target::Channel(ch) => self
+                .logs
+                .get(&ch)?
+                .msgs
+                .iter()
+                .find(|m| m.id == id)
+                .map(|m| m.author.clone()),
+            Target::Dm(dm) => self
+                .dms
+                .logs
+                .get(&dm)?
+                .msgs
+                .iter()
+                .find(|m| m.id == id)
+                .map(|m| m.author.clone()),
         }
     }
 
-    /// "Responder": the input shows who is answered, and gets the focus.
+    /// "Reply": the input shows who is answered, and gets the focus.
     pub fn start_reply(&mut self, target: Target, id: i64) {
         if !self.chatx.features.replies {
             return;
         }
-        let Some(author) = self.reply_target_message(target, id) else { return };
+        let Some(author) = self.reply_target_message(target, id) else {
+            return;
+        };
         let ping = Some(author.id) != self.my_id();
-        self.chatx.replying.insert(target, ReplyDraft { id, author, ping });
+        self.chatx
+            .replying
+            .insert(target, ReplyDraft { id, author, ping });
         match target {
             Target::Channel(_) => self.focus_input = true,
             Target::Dm(_) => self.dms.focus_input = true,
@@ -972,13 +1320,16 @@ impl App {
         let picks = self.chatx.picks.remove(&target).unwrap_or_default();
         let reply = self.chatx.replying.remove(&target);
         let mentions = match target {
-            Target::Channel(_) if self.chatx.features.mentions => send_mentions(text, &self.chatx.people_sorted, &picks, self.my_id()),
+            Target::Channel(_) if self.chatx.features.mentions => {
+                send_mentions(text, &self.chatx.people_sorted, &picks, self.my_id())
+            }
             _ => Vec::new(),
         };
         SendExtras {
             mentions,
             reply_to: reply.as_ref().map(|r| r.id),
-            reply_mention: matches!(target, Target::Channel(_)) && reply.as_ref().is_some_and(|r| r.ping),
+            reply_mention: matches!(target, Target::Channel(_))
+                && reply.as_ref().is_some_and(|r| r.ping),
         }
     }
 
@@ -992,31 +1343,64 @@ impl App {
             self.save_settings();
         }
         self.chatx.reactions_sent += 1;
-        self.backend.send(Cmd::React { target, message: id, emoji: emoji.to_string(), add });
+        self.backend.send(Cmd::React {
+            target,
+            message: id,
+            emoji: emoji.to_string(),
+            add,
+        });
     }
 
     /// My reactions on a message (to toggle from the picker).
     fn my_reaction(&self, target: Target, id: i64, emoji: &str) -> bool {
         let me = self.my_id();
         let list = match target {
-            Target::Channel(ch) => self.logs.get(&ch).and_then(|l| l.msgs.iter().find(|m| m.id == id)).map(|m| m.reactions.as_slice()),
-            Target::Dm(dm) => self.dms.logs.get(&dm).and_then(|l| l.msgs.iter().find(|m| m.id == id)).map(|m| m.reactions.as_slice()),
+            Target::Channel(ch) => self
+                .logs
+                .get(&ch)
+                .and_then(|l| l.msgs.iter().find(|m| m.id == id))
+                .map(|m| m.reactions.as_slice()),
+            Target::Dm(dm) => self
+                .dms
+                .logs
+                .get(&dm)
+                .and_then(|l| l.msgs.iter().find(|m| m.id == id))
+                .map(|m| m.reactions.as_slice()),
         };
-        list.is_some_and(|l| l.iter().any(|r| r.emoji == emoji && me.is_some_and(|m| r.users.contains(&m))))
+        list.is_some_and(|l| {
+            l.iter()
+                .any(|r| r.emoji == emoji && me.is_some_and(|m| r.users.contains(&m)))
+        })
     }
 
     /// The hub says a reaction changed.
-    pub(super) fn on_reaction(&mut self, target: Target, id: i64, emoji: &str, user: UserId, added: bool) {
+    pub(super) fn on_reaction(
+        &mut self,
+        target: Target,
+        id: i64,
+        emoji: &str,
+        user: UserId,
+        added: bool,
+    ) {
         let list = match target {
-            Target::Channel(ch) => self.logs.get_mut(&ch).and_then(|l| l.msgs.iter_mut().find(|m| m.id == id)).map(|m| &mut m.reactions),
-            Target::Dm(dm) => self.dms.logs.get_mut(&dm).and_then(|l| l.msgs.iter_mut().find(|m| m.id == id)).map(|m| &mut m.reactions),
+            Target::Channel(ch) => self
+                .logs
+                .get_mut(&ch)
+                .and_then(|l| l.msgs.iter_mut().find(|m| m.id == id))
+                .map(|m| &mut m.reactions),
+            Target::Dm(dm) => self
+                .dms
+                .logs
+                .get_mut(&dm)
+                .and_then(|l| l.msgs.iter_mut().find(|m| m.id == id))
+                .map(|m| &mut m.reactions),
         };
         if let Some(list) = list {
             vox_proto::apply_reaction(list, emoji, user, added);
         }
     }
 
-    /// A message was deleted: replies to it now quote "mensagem apagada".
+    /// A message was deleted: replies to it now quote "message deleted".
     pub(crate) fn quotes_of_deleted(&mut self, target: Target, id: i64) {
         let gone = |r: &mut Option<ReplyRef>| {
             if let Some(q) = r.as_mut().filter(|q| q.id == id) {
@@ -1024,16 +1408,39 @@ impl App {
             }
         };
         match target {
-            Target::Channel(ch) => self.logs.get_mut(&ch).into_iter().flat_map(|l| l.msgs.iter_mut()).for_each(|m| gone(&mut m.reply)),
-            Target::Dm(dm) => self.dms.logs.get_mut(&dm).into_iter().flat_map(|l| l.msgs.iter_mut()).for_each(|m| gone(&mut m.reply)),
+            Target::Channel(ch) => self
+                .logs
+                .get_mut(&ch)
+                .into_iter()
+                .flat_map(|l| l.msgs.iter_mut())
+                .for_each(|m| gone(&mut m.reply)),
+            Target::Dm(dm) => self
+                .dms
+                .logs
+                .get_mut(&dm)
+                .into_iter()
+                .flat_map(|l| l.msgs.iter_mut())
+                .for_each(|m| gone(&mut m.reply)),
         }
     }
 
     /// (oldest id loaded, all loaded, a page is loading) of a conversation, and whether `id` is in it.
     fn log_facts(&self, target: Target, id: i64) -> (Option<i64>, bool, bool) {
         match target {
-            Target::Channel(ch) => self.logs.get(&ch).map_or((None, false, false), |l| (l.msgs.first().map(|m| m.id), l.no_more, l.msgs.iter().any(|m| m.id == id))),
-            Target::Dm(dm) => self.dms.logs.get(&dm).map_or((None, false, false), |l| (l.msgs.first().map(|m| m.id), l.no_more, l.msgs.iter().any(|m| m.id == id))),
+            Target::Channel(ch) => self.logs.get(&ch).map_or((None, false, false), |l| {
+                (
+                    l.msgs.first().map(|m| m.id),
+                    l.no_more,
+                    l.msgs.iter().any(|m| m.id == id),
+                )
+            }),
+            Target::Dm(dm) => self.dms.logs.get(&dm).map_or((None, false, false), |l| {
+                (
+                    l.msgs.first().map(|m| m.id),
+                    l.no_more,
+                    l.msgs.iter().any(|m| m.id == id),
+                )
+            }),
         }
     }
 
@@ -1043,13 +1450,19 @@ impl App {
                 if let Some(l) = self.logs.get_mut(&ch) {
                     l.loading_older = true;
                 }
-                self.backend.send(Cmd::LoadHistory { channel: ch, before: Some(before) });
+                self.backend.send(Cmd::LoadHistory {
+                    channel: ch,
+                    before: Some(before),
+                });
             }
             Target::Dm(dm) => {
                 if let Some(l) = self.dms.logs.get_mut(&dm) {
                     l.loading_older = true;
                 }
-                self.backend.send(Cmd::Dm(super::dms::DmCmd::History { dm, before: Some(before) }));
+                self.backend.send(Cmd::Dm(super::dms::DmCmd::History {
+                    dm,
+                    before: Some(before),
+                }));
             }
         }
     }
@@ -1058,24 +1471,31 @@ impl App {
     /// loaded yet.
     pub fn jump_to(&mut self, target: Target, id: i64, deleted: bool) {
         if deleted {
-            self.toast("A mensagem original foi apagada.");
+            self.toast("The original message was deleted.");
             return;
         }
         let (oldest, no_more, found) = self.log_facts(target, id);
         if found {
-            self.chatx.jump = Some(Jump { target, id, at: Instant::now(), scrolled: false });
+            self.chatx.jump = Some(Jump {
+                target,
+                id,
+                at: Instant::now(),
+                scrolled: false,
+            });
             self.chatx.jumps_found += 1;
         } else if oldest.is_some_and(|o| id < o) && !no_more {
             self.chatx.seek = Some((target, id, 1));
             self.load_older(target, oldest.unwrap_or(id));
         } else {
-            self.toast("A mensagem original não está mais disponível.");
+            self.toast("The original message is no longer available.");
         }
     }
 
     /// An older page arrived for `target`: maybe it has the quoted message we look for.
     pub(super) fn chat_on_history(&mut self, target: Target) {
-        let Some((t, id, pages)) = self.chatx.seek else { return };
+        let Some((t, id, pages)) = self.chatx.seek else {
+            return;
+        };
         if t != target {
             return;
         }
@@ -1088,7 +1508,7 @@ impl App {
             self.load_older(target, oldest.unwrap_or(id));
         } else {
             self.chatx.seek = None;
-            self.toast("A mensagem original não está carregada (é antiga demais).");
+            self.toast("The original message is not loaded (it is too old).");
         }
     }
 
@@ -1098,7 +1518,14 @@ impl App {
             match a {
                 Act::Reply(id) => self.start_reply(target, id),
                 Act::React { id, emoji, add } => self.react(target, id, &emoji, add),
-                Act::Picker { id, pos } => self.chatx.picker = Some(Picker { target, id, pos, opened: self.chatx.frame }),
+                Act::Picker { id, pos } => {
+                    self.chatx.picker = Some(Picker {
+                        target,
+                        id,
+                        pos,
+                        opened: self.chatx.frame,
+                    })
+                }
                 Act::Jump { id, deleted } => self.jump_to(target, id, deleted),
                 Act::Delete { id, now } => self.ask_delete(target, id, now),
             }
@@ -1108,65 +1535,113 @@ impl App {
     /// The reaction picker, when open (drawn over everything).
     pub(super) fn reaction_picker(&mut self, ctx: &egui::Context) {
         self.chatx.frame += 1;
-        let Some(p) = self.chatx.picker.as_ref() else { return };
+        let Some(p) = self.chatx.picker.as_ref() else {
+            return;
+        };
         let (target, id, pos, opened) = (p.target, p.id, p.pos, p.opened);
         let mut chosen: Option<String> = None;
         let recent = self.settings.recent_reactions.clone();
-        let area = egui::Area::new(egui::Id::new("reaction_picker")).order(egui::Order::Foreground).fixed_pos(pos).constrain(true).show(ctx, |ui| {
-            crate::ui_kit::popup_frame(ui.style()).show(ui, |ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
-                let mut cell = |ui: &mut egui::Ui, e: &str| {
-                    if ui.add(egui::Button::new(RichText::new(e).size(18.0)).frame(false).min_size(egui::vec2(28.0, 28.0))).clicked() {
-                        chosen = Some(e.to_string());
-                    }
-                };
-                if !recent.is_empty() {
-                    crate::ui_kit::section(ui, "Recentes");
-                    ui.horizontal(|ui| {
-                        for e in &recent {
-                            cell(ui, e);
+        let area = egui::Area::new(egui::Id::new("reaction_picker"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos)
+            .constrain(true)
+            .show(ctx, |ui| {
+                crate::ui_kit::popup_frame(ui.style()).show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
+                    let mut cell = |ui: &mut egui::Ui, e: &str| {
+                        if ui
+                            .add(
+                                egui::Button::new(RichText::new(e).size(18.0))
+                                    .frame(false)
+                                    .min_size(egui::vec2(28.0, 28.0)),
+                            )
+                            .clicked()
+                        {
+                            chosen = Some(e.to_string());
                         }
-                    });
-                    ui.separator();
-                }
-                egui::Grid::new("reaction_grid").spacing(egui::vec2(2.0, 2.0)).show(ui, |ui| {
-                    for (i, e) in REACTION_GRID.iter().enumerate() {
-                        cell(ui, e);
-                        if i % 10 == 9 {
-                            ui.end_row();
-                        }
+                    };
+                    if !recent.is_empty() {
+                        crate::ui_kit::section(ui, "Recent");
+                        ui.horizontal(|ui| {
+                            for e in &recent {
+                                cell(ui, e);
+                            }
+                        });
+                        ui.separator();
                     }
+                    egui::Grid::new("reaction_grid")
+                        .spacing(egui::vec2(2.0, 2.0))
+                        .show(ui, |ui| {
+                            for (i, e) in REACTION_GRID.iter().enumerate() {
+                                cell(ui, e);
+                                if i % 10 == 9 {
+                                    ui.end_row();
+                                }
+                            }
+                        });
                 });
             });
-        });
         if let Some(e) = chosen {
             self.chatx.picker = None;
             let add = !self.my_reaction(target, id, &e);
             self.react(target, id, &e, add);
             return;
         }
-        let clicked_outside = ctx.input(|i| i.pointer.any_click()) && !ctx.pointer_interact_pos().is_some_and(|p| area.response.rect.contains(p));
+        let clicked_outside = ctx.input(|i| i.pointer.any_click())
+            && !ctx
+                .pointer_interact_pos()
+                .is_some_and(|p| area.response.rect.contains(p));
         let esc = ctx.input(|i| i.key_pressed(egui::Key::Escape));
-        if (clicked_outside && self.chatx.frame > opened + 1) || esc || self.chat_target_on_screen() != Some(target) {
+        if (clicked_outside && self.chatx.frame > opened + 1)
+            || esc
+            || self.chat_target_on_screen() != Some(target)
+        {
             self.chatx.picker = None;
         }
     }
 
-    /// "Respondendo a <nome>" over an input (with "@ ligado" in channels, and ✖).
+    /// "Respondendo a <nome>" over an input (with "@ on" in channels, and ✖).
     pub(super) fn reply_bar(&mut self, ui: &mut egui::Ui, target: Target) {
-        let Some(r) = self.chatx.replying.get_mut(&target) else { return };
+        let Some(r) = self.chatx.replying.get_mut(&target) else {
+            return;
+        };
         let mut cancel = false;
         ui.horizontal(|ui| {
             ui.add_space(4.0);
-            ui.label(RichText::new(format!("{}  Respondendo a", ph::ARROW_BEND_UP_LEFT)).font(crate::theme::body(12.5)).color(crate::theme::NEVOA));
-            ui.label(RichText::new(r.author.shown_name()).font(crate::theme::semibold(12.5)).color(super::name_color(r.author.id)));
+            ui.label(
+                RichText::new(format!("{}  Respondendo a", ph::ARROW_BEND_UP_LEFT))
+                    .font(crate::theme::body(12.5))
+                    .color(crate::theme::NEVOA),
+            );
+            ui.label(
+                RichText::new(r.author.shown_name())
+                    .font(crate::theme::semibold(12.5))
+                    .color(super::name_color(r.author.id)),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::ui_kit::icon_button(ui, ph::X, "Cancelar a resposta (Esc)", crate::ui_kit::IconState::Normal).clicked() {
+                if crate::ui_kit::icon_button(
+                    ui,
+                    ph::X,
+                    "Cancel reply (Esc)",
+                    crate::ui_kit::IconState::Normal,
+                )
+                .clicked()
+                {
                     cancel = true;
                 }
-                if matches!(target, Target::Channel(_)) && Some(r.author.id) != self.me.as_ref().map(|u| u.id) {
-                    let label = if r.ping { RichText::new("@ ligado").small().color(MENTION_BAR) } else { RichText::new("@ desligado").small().weak() };
-                    if ui.add(egui::Button::new(label).frame(false)).on_hover_text("Ligado: a pessoa respondida também é mencionada (é avisada)").clicked() {
+                if matches!(target, Target::Channel(_))
+                    && Some(r.author.id) != self.me.as_ref().map(|u| u.id)
+                {
+                    let label = if r.ping {
+                        RichText::new("@ on").small().color(MENTION_BAR)
+                    } else {
+                        RichText::new("@ off").small().weak()
+                    };
+                    if ui
+                        .add(egui::Button::new(label).frame(false))
+                        .on_hover_text("On: also mention (notify) the person you reply to")
+                        .clicked()
+                    {
                         r.ping = !r.ping;
                     }
                 }
@@ -1178,7 +1653,12 @@ impl App {
     }
 
     /// The mention list for the channel input's text and cursor: where the `@` is and the entries.
-    pub fn mention_list(&self, target: Target, text: &str, cursor: usize) -> Option<(usize, Vec<Candidate>)> {
+    pub fn mention_list(
+        &self,
+        target: Target,
+        text: &str,
+        cursor: usize,
+    ) -> Option<(usize, Vec<Candidate>)> {
         if !self.chatx.features.mentions || !matches!(target, Target::Channel(_)) {
             return None;
         }
@@ -1188,22 +1668,43 @@ impl App {
         }
         // A private channel (v0.9): only the people who may see it (the hub drops anybody else).
         let private = match target {
-            Target::Channel(ch) => self.channels.iter().find(|c| c.id == ch).and_then(|c| c.private.clone()),
+            Target::Channel(ch) => self
+                .channels
+                .iter()
+                .find(|c| c.id == ch)
+                .and_then(|c| c.private.clone()),
             Target::Dm(_) => None,
         };
         let list = match &private {
             Some(p) => {
-                let allowed: Vec<User> = self.chatx.people_sorted.iter().filter(|u| p.allows(u.id, u.role)).cloned().collect();
+                let allowed: Vec<User> = self
+                    .chatx
+                    .people_sorted
+                    .iter()
+                    .filter(|u| p.allows(u.id, u.role))
+                    .cloned()
+                    .collect();
                 candidates(&allowed, self.my_id(), query, self.my_role().can_moderate())
             }
-            None => candidates(&self.chatx.people_sorted, self.my_id(), query, self.my_role().can_moderate()),
+            None => candidates(
+                &self.chatx.people_sorted,
+                self.my_id(),
+                query,
+                self.my_role().can_moderate(),
+            ),
         };
         (!list.is_empty()).then_some((at, list))
     }
 
     /// Pick `cand` for the `@query` at `at`..`cursor` of the channel input. Returns the new
     /// cursor (byte offset).
-    pub fn pick_mention(&mut self, target: Target, at: usize, cursor: usize, cand: &Candidate) -> usize {
+    pub fn pick_mention(
+        &mut self,
+        target: Target,
+        at: usize,
+        cursor: usize,
+        cand: &Candidate,
+    ) -> usize {
         let input = match target {
             Target::Channel(_) => &mut self.input,
             Target::Dm(_) => &mut self.dms.input,
@@ -1211,7 +1712,11 @@ impl App {
         let (text, new_cursor) = complete(input, at, cursor, &cand.name);
         *input = text;
         if let Some(id) = cand.id {
-            self.chatx.picks.entry(target).or_default().push((id, cand.name.clone()));
+            self.chatx
+                .picks
+                .entry(target)
+                .or_default()
+                .push((id, cand.name.clone()));
         }
         self.chatx.ac_selected = 0;
         new_cursor
@@ -1219,7 +1724,11 @@ impl App {
 
     /// Keys for the mention list, read before the text box sees them. Returns (the text box keeps
     /// the arrows / Tab / Esc while the list is open).
-    fn mention_keys(&mut self, ui: &egui::Ui, list: &Option<(usize, Vec<Candidate>)>) -> Option<usize> {
+    fn mention_keys(
+        &mut self,
+        ui: &egui::Ui,
+        list: &Option<(usize, Vec<Candidate>)>,
+    ) -> Option<usize> {
         let (_, entries) = list.as_ref()?;
         let n = entries.len();
         self.chatx.ac_selected = self.chatx.ac_selected.min(n - 1);
@@ -1237,11 +1746,22 @@ impl App {
     }
 
     /// The channel's text box with the mention list. Returns the text box's response.
-    pub(super) fn mention_input(&mut self, ui: &mut egui::Ui, target: Target, hint: String, width: f32) -> egui::Response {
+    pub(super) fn mention_input(
+        &mut self,
+        ui: &mut egui::Ui,
+        target: Target,
+        hint: String,
+        width: f32,
+    ) -> egui::Response {
         let id = egui::Id::new("chat_input_box");
         let cursor = egui::text_edit::TextEditState::load(ui.ctx(), id)
             .and_then(|s| s.cursor.char_range())
-            .map(|r| self.input.char_indices().nth(r.primary.index.into()).map_or(self.input.len(), |(b, _)| b))
+            .map(|r| {
+                self.input
+                    .char_indices()
+                    .nth(r.primary.index.into())
+                    .map_or(self.input.len(), |(b, _)| b)
+            })
             .unwrap_or(self.input.len());
         let list = self.mention_list(target, &self.input, cursor);
         let mut esc = false;
@@ -1252,12 +1772,26 @@ impl App {
             None
         };
         // Esc with no list: drop the reply being written.
-        if list.is_none() && self.chatx.replying.contains_key(&target) && ui.memory(|m| m.has_focus(id)) && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if list.is_none()
+            && self.chatx.replying.contains_key(&target)
+            && ui.memory(|m| m.has_focus(id))
+            && ui.input(|i| i.key_pressed(egui::Key::Escape))
+        {
             self.cancel_reply(target);
         }
         let open = list.is_some();
-        let filter = egui::EventFilter { tab: open, vertical_arrows: open, horizontal_arrows: false, escape: open };
-        let resp = ui.add(super::chat_view::field_edit(&mut self.input, hint).desired_width(width).event_filter(filter).id(id));
+        let filter = egui::EventFilter {
+            tab: open,
+            vertical_arrows: open,
+            horizontal_arrows: false,
+            escape: open,
+        };
+        let resp = ui.add(
+            super::chat_view::field_edit(&mut self.input, hint)
+                .desired_width(width)
+                .event_filter(filter)
+                .id(id),
+        );
         if let Some((at, entries)) = &list {
             if esc {
                 self.chatx.ac_closed = Some((target, *at));
@@ -1265,11 +1799,14 @@ impl App {
             let mut choice = picked;
             if !esc {
                 let sel = self.chatx.ac_selected;
-                let area = egui::Area::new(egui::Id::new("mention_list")).order(egui::Order::Foreground).fixed_pos(resp.rect.left_top()).pivot(egui::Align2::LEFT_BOTTOM);
+                let area = egui::Area::new(egui::Id::new("mention_list"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(resp.rect.left_top())
+                    .pivot(egui::Align2::LEFT_BOTTOM);
                 area.show(ui.ctx(), |ui| {
                     crate::ui_kit::popup_frame(ui.style()).show(ui, |ui| {
                         ui.set_min_width(260.0);
-                        crate::ui_kit::section(ui, "Membros");
+                        crate::ui_kit::section(ui, "Members");
                         ui.add_space(2.0);
                         for (i, c) in entries.iter().enumerate() {
                             if mention_row(ui, c, i == sel).clicked() {
@@ -1277,7 +1814,11 @@ impl App {
                             }
                         }
                         ui.add_space(2.0);
-                        ui.label(RichText::new("Setas: escolher · Tab ou Enter: inserir · Esc: fechar").font(crate::theme::body(11.5)).color(crate::theme::NEVOA));
+                        ui.label(
+                            RichText::new("Arrows: select · Tab or Enter: insert · Esc: close")
+                                .font(crate::theme::body(11.5))
+                                .color(crate::theme::NEVOA),
+                        );
                     });
                 });
             }
@@ -1286,17 +1827,26 @@ impl App {
                     let new_cursor = self.pick_mention(target, *at, cursor, &c);
                     let chars = self.input[..new_cursor].chars().count();
                     if let Some(mut s) = egui::text_edit::TextEditState::load(ui.ctx(), id) {
-                        s.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(chars))));
+                        s.cursor.set_char_range(Some(egui::text::CCursorRange::one(
+                            egui::text::CCursor::new(chars),
+                        )));
                         s.store(ui.ctx(), id);
                     }
                     resp.request_focus();
                 }
             }
-        } else if self.chatx.ac_closed.is_some_and(|(t, at)| t == target && mention_query(&self.input, cursor).is_none_or(|(a, _)| a != at)) {
+        } else if self.chatx.ac_closed.is_some_and(|(t, at)| {
+            t == target && mention_query(&self.input, cursor).is_none_or(|(a, _)| a != at)
+        }) {
             self.chatx.ac_closed = None;
         }
         // The member list can be stale (somebody new joined the server): refresh it now and then.
-        if open && self.chatx.people_asked.is_none_or(|t| t.elapsed() > Duration::from_secs(60)) {
+        if open
+            && self
+                .chatx
+                .people_asked
+                .is_none_or(|t| t.elapsed() > Duration::from_secs(60))
+        {
             self.chatx.people_asked = Some(Instant::now());
             self.backend.send(Cmd::Dm(super::dms::DmCmd::People));
         }
@@ -1311,7 +1861,12 @@ mod tests {
     fn people() -> Vec<User> {
         let mut tati = User::new(2, "tati");
         tati.display_name = Some("Tati Silva".into());
-        vec![User::new(1, "dono"), tati, User::new(3, "joao"), User::new(4, "Joana")]
+        vec![
+            User::new(1, "dono"),
+            tati,
+            User::new(3, "joao"),
+            User::new(4, "Joana"),
+        ]
     }
 
     #[derive(Debug, Clone, PartialEq)]
@@ -1322,7 +1877,14 @@ mod tests {
     }
 
     fn merge(msgs: &mut Vec<M>, page: Vec<M>, before: Option<i64>, complete: bool) -> Merged<M> {
-        merge_page(msgs, page, before, complete, |m| m.0, |a, b| a.1.chars().next() == b.1.chars().next())
+        merge_page(
+            msgs,
+            page,
+            before,
+            complete,
+            |m| m.0,
+            |a, b| a.1.chars().next() == b.1.chars().next(),
+        )
     }
 
     #[test]
@@ -1331,10 +1893,29 @@ mod tests {
         // (an older hub reused the id), 2 got a reaction ("b" -> "b+"), 9 arrived live after the
         // page was read.
         let mut msgs = vec![M(1, "a"), M(2, "b"), M(3, "c"), M(5, "old"), M(9, "live")];
-        let out = merge(&mut msgs, vec![M(6, "f"), M(5, "new"), M(2, "b+")], None, false);
-        assert_eq!(ids(&msgs), [1, 2, 5, 6, 9], "1 is older than the page: untouched; 9 is newer: kept");
-        assert_eq!((msgs[1].1, msgs[2].1), ("b+", "new"), "the page's copies win");
-        assert_eq!(out, Merged { deleted: vec![M(3, "c")], replaced: vec![M(5, "old")] });
+        let out = merge(
+            &mut msgs,
+            vec![M(6, "f"), M(5, "new"), M(2, "b+")],
+            None,
+            false,
+        );
+        assert_eq!(
+            ids(&msgs),
+            [1, 2, 5, 6, 9],
+            "1 is older than the page: untouched; 9 is newer: kept"
+        );
+        assert_eq!(
+            (msgs[1].1, msgs[2].1),
+            ("b+", "new"),
+            "the page's copies win"
+        );
+        assert_eq!(
+            out,
+            Merged {
+                deleted: vec![M(3, "c")],
+                replaced: vec![M(5, "old")]
+            }
+        );
         // An older page (before 2), the last one: everything below 2 that it lacks is gone.
         let out = merge(&mut msgs, vec![], Some(2), true);
         assert_eq!(ids(&msgs), [2, 5, 6, 9]);
@@ -1353,7 +1934,10 @@ mod tests {
         let (ch, dm) = (Target::Channel(1), Target::Dm(1));
         // My own channel message: any role, with or without images (the author is what counts).
         assert!(may_delete(ch, true, Some(5), 5, false, true));
-        assert!(may_delete(ch, true, Some(5), 5, true, true), "an admin / the owner deletes their own too");
+        assert!(
+            may_delete(ch, true, Some(5), 5, true, true),
+            "an admin / the owner deletes their own too"
+        );
         // Somebody else's: moderators and up only.
         assert!(!may_delete(ch, true, Some(5), 6, false, true));
         assert!(may_delete(ch, true, Some(5), 6, true, true));
@@ -1362,7 +1946,10 @@ mod tests {
         // DMs: only my own text lines, whatever my role.
         assert!(may_delete(dm, true, Some(5), 5, false, true));
         assert!(!may_delete(dm, true, Some(5), 6, true, true));
-        assert!(!may_delete(dm, true, Some(5), 5, false, false), "call lines stay");
+        assert!(
+            !may_delete(dm, true, Some(5), 5, false, false),
+            "call lines stay"
+        );
         assert!(!may_delete(ch, true, None, 5, false, true));
     }
 
@@ -1372,7 +1959,11 @@ mod tests {
         assert_eq!(mention_query("@", 1), Some((0, "")));
         assert_eq!(mention_query("oi @Tati S", 10), Some((3, "Tati S")));
         assert_eq!(mention_query("email@x", 7), None, "inside a word");
-        assert_eq!(mention_query("oi @ma tudo", 2), None, "the cursor is before it");
+        assert_eq!(
+            mention_query("oi @ma tudo", 2),
+            None,
+            "the cursor is before it"
+        );
         assert_eq!(mention_query("(@jo", 4), Some((1, "jo")));
         assert_eq!(mention_query("oi", 99), None);
     }
@@ -1381,22 +1972,45 @@ mod tests {
     fn candidates_prefix_first_never_me_and_todos_for_staff() {
         let p = people();
         let names = |v: Vec<Candidate>| v.into_iter().map(|c| c.name).collect::<Vec<_>>();
-        assert_eq!(names(candidates(&p, Some(1), "jo", false)), ["Joana", "joao"]);
-        assert_eq!(names(candidates(&p, Some(1), "silva", false)), ["Tati Silva"], "contains, in the display name");
-        assert_eq!(names(candidates(&p, Some(1), "tati s", false)), ["Tati Silva"]);
+        assert_eq!(
+            names(candidates(&p, Some(1), "jo", false)),
+            ["Joana", "joao"]
+        );
+        assert_eq!(
+            names(candidates(&p, Some(1), "silva", false)),
+            ["Tati Silva"],
+            "contains, in the display name"
+        );
+        assert_eq!(
+            names(candidates(&p, Some(1), "tati s", false)),
+            ["Tati Silva"]
+        );
         assert!(candidates(&p, Some(1), "do", false).is_empty(), "not me");
         assert!(candidates(&p, Some(1), "x y", false).is_empty());
         assert_eq!(names(candidates(&p, Some(3), "to", true)), ["todos"]);
-        assert!(candidates(&p, Some(3), "to", false).is_empty(), "a member is not offered @todos");
-        assert_eq!(candidates(&p, Some(1), "", true).len(), 4, "@todos and the three others");
+        assert!(
+            candidates(&p, Some(3), "to", false).is_empty(),
+            "a member is not offered @todos"
+        );
+        assert_eq!(
+            candidates(&p, Some(1), "", true).len(),
+            4,
+            "@todos and the three others"
+        );
         let c = &candidates(&p, Some(1), "tat", false)[0];
         assert_eq!((c.id, c.username.as_str()), (Some(2), "tati"));
     }
 
     #[test]
     fn completing_replaces_the_query() {
-        assert_eq!(complete("oi @ta", 3, 6, "Tati Silva"), ("oi @Tati Silva ".to_string(), 15));
-        assert_eq!(complete("oi @ta tudo", 3, 6, "Tati"), ("oi @Tati tudo".to_string(), 9));
+        assert_eq!(
+            complete("oi @ta", 3, 6, "Tati Silva"),
+            ("oi @Tati Silva ".to_string(), 15)
+        );
+        assert_eq!(
+            complete("oi @ta tudo", 3, 6, "Tati"),
+            ("oi @Tati tudo".to_string(), 9)
+        );
         assert_eq!(complete("@", 0, 1, "todos"), ("@todos ".to_string(), 7));
     }
 
@@ -1404,10 +2018,21 @@ mod tests {
     fn sent_mentions_follow_the_text() {
         let p = people();
         let picks = vec![(2, "Tati Silva".to_string()), (3, "joao".to_string())];
-        assert_eq!(send_mentions("oi @Tati Silva", &p, &picks, Some(1)), vec![2], "joao was deleted from the text");
-        assert_eq!(send_mentions("@joana e @TATI", &p, &[], Some(1)), vec![2, 4], "typed by hand");
-        assert!(send_mentions("@dono", &p, &[(1, "dono".into())], Some(1)).is_empty(), "never me");
-        assert!(send_mentions("sem arroba", &p, &[], Some(1)).is_empty());
+        assert_eq!(
+            send_mentions("oi @Tati Silva", &p, &picks, Some(1)),
+            vec![2],
+            "joao was deleted from the text"
+        );
+        assert_eq!(
+            send_mentions("@joana e @TATI", &p, &[], Some(1)),
+            vec![2, 4],
+            "typed by hand"
+        );
+        assert!(
+            send_mentions("@dono", &p, &[(1, "dono".into())], Some(1)).is_empty(),
+            "never me"
+        );
+        assert!(send_mentions("without at sign", &p, &[], Some(1)).is_empty());
     }
 
     #[test]
@@ -1416,8 +2041,21 @@ mod tests {
         let people = [(2, "tati", Some("Tati Silva")), (4, "Joana", None)];
         let s = mention_spans(t, &people, true);
         let shown: Vec<(&str, Chip)> = s.iter().map(|s| (&t[s.range.clone()], s.chip)).collect();
-        assert_eq!(shown, [("@Tati Silva", Chip::User(2)), ("@tati", Chip::User(2)), ("@todos", Chip::Everyone), ("@Joana", Chip::User(4))]);
-        assert!(mention_spans(t, &people, false).iter().all(|s| s.chip != Chip::Everyone), "a member's @todos is plain text");
+        assert_eq!(
+            shown,
+            [
+                ("@Tati Silva", Chip::User(2)),
+                ("@tati", Chip::User(2)),
+                ("@todos", Chip::Everyone),
+                ("@Joana", Chip::User(4))
+            ]
+        );
+        assert!(
+            mention_spans(t, &people, false)
+                .iter()
+                .all(|s| s.chip != Chip::Everyone),
+            "a member's @todos is plain text"
+        );
         // "@Tati" inside "@Tati Silva" is not a second chip.
         let s = mention_spans("@Tati Silva", &[(2, "Tati", Some("Tati Silva"))], false);
         assert_eq!(s.len(), 1);
@@ -1426,15 +2064,49 @@ mod tests {
 
     #[test]
     fn quotes_and_hover_texts() {
-        let r = ReplyRef { id: 1, author: Some(User::new(2, "Tati")), excerpt: "oi".into(), images: 0, deleted: false };
+        let r = ReplyRef {
+            id: 1,
+            author: Some(User::new(2, "Tati")),
+            excerpt: "oi".into(),
+            images: 0,
+            deleted: false,
+        };
         assert_eq!(quote_parts(&r), (Some("Tati".into()), "oi".into()));
-        assert_eq!(quote_parts(&ReplyRef { excerpt: String::new(), images: 1, ..r.clone() }).1, "imagem");
-        assert_eq!(quote_parts(&ReplyRef { excerpt: String::new(), images: 3, ..r.clone() }).1, "3 imagens");
-        assert_eq!(quote_parts(&ReplyRef::gone(1)), (None, "mensagem apagada".into()));
-        assert_eq!(reaction_hover("👍", &["Tati".into()]), "Tati reagiu com 👍");
-        assert_eq!(reaction_hover("👍", &["Tati".into(), "Joao".into()]), "Tati e Joao reagiram com 👍");
+        assert_eq!(
+            quote_parts(&ReplyRef {
+                excerpt: String::new(),
+                images: 1,
+                ..r.clone()
+            })
+            .1,
+            "imagem"
+        );
+        assert_eq!(
+            quote_parts(&ReplyRef {
+                excerpt: String::new(),
+                images: 3,
+                ..r.clone()
+            })
+            .1,
+            "3 images"
+        );
+        assert_eq!(
+            quote_parts(&ReplyRef::gone(1)),
+            (None, "message deleted".into())
+        );
+        assert_eq!(
+            reaction_hover("👍", &["Tati".into()]),
+            "Tati reacted with 👍"
+        );
+        assert_eq!(
+            reaction_hover("👍", &["Tati".into(), "Joao".into()]),
+            "Tati and Joao reacted with 👍"
+        );
         let many: Vec<String> = (0..8).map(|i| format!("p{i}")).collect();
-        assert_eq!(reaction_hover("🎉", &many), "p0, p1, p2, p3, p4, p5 e mais 2 reagiram com 🎉");
+        assert_eq!(
+            reaction_hover("🎉", &many),
+            "p0, p1, p2, p3, p4, p5 and 2 more reacted with 🎉"
+        );
     }
 
     #[test]

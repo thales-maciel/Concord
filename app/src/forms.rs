@@ -1,17 +1,9 @@
-//! The form pieces of the v1.0 secondary windows (phase 3a): settings pages, "Configurar câmera",
-//! the Go Live picker, the soundboard dialogs. Built on [`crate::theme`] and [`crate::ui_kit`]:
-//!
-//! - [`Dialog`]: a window drawn as an egui area (no title bar of egui's): [`theme::PAREDE`],
-//!   hairline, radius 10, its own header with a Bricolage title and a close button, Esc to close.
-//! - [`group`] / [`divider`]: sentence-case section headers (Bricolage) and the hairline between
-//!   groups.
-//! - [`row`]: a label in its own column and the control after it, so every label of a page lines up.
-//! - [`note`]: a quiet hint under a control (wraps).
-//! - [`segmented`]: a row of pill choices (the selected one in chalk on [`theme::MOVEL`]).
-//!
-//! Plain functions, no state: nothing here allocates per frame beyond the text egui lays out.
+//! Stateless dialogs and form controls built on [`crate::theme`] and [`crate::ui_kit`].
 
-use eframe::egui::{self, Align, Align2, Color32, Frame, Id, Layout, Margin, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType};
+use eframe::egui::{
+    self, Align, Align2, Color32, Frame, Id, Layout, Margin, Pos2, Rect, RichText, Sense, Stroke,
+    StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
+};
 
 use crate::theme::{self, ph, radius, size, space, stroke};
 use crate::ui_kit::{self, IconState};
@@ -32,12 +24,19 @@ pub fn group(ui: &mut Ui, title: &str) {
     ui.add_space(space::XS);
 }
 
-/// [`group`] with a Phosphor icon before the title (the groups of "Configurar câmera").
+/// [`group`] with a Phosphor icon before the title (the groups of "Configure camera").
 pub fn group_icon(ui: &mut Ui, icon: &str, title: &str) {
     ui.add_space(space::S);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = space::M;
-        ui.add(egui::Label::new(RichText::new(icon).font(theme::body(15.0)).color(theme::NEVOA)).selectable(false));
+        ui.add(
+            egui::Label::new(
+                RichText::new(icon)
+                    .font(theme::body(15.0))
+                    .color(theme::NEVOA),
+            )
+            .selectable(false),
+        );
         ui_kit::section(ui, title);
     });
     ui.add_space(space::XS);
@@ -48,7 +47,11 @@ pub fn divider(ui: &mut Ui) {
     ui.add_space(space::L);
     let w = ui.available_width();
     let (r, _) = ui.allocate_exact_size(Vec2::new(w, 1.0), Sense::hover());
-    ui.painter().hline(r.x_range(), r.center().y, Stroke::new(stroke::HAIRLINE, theme::RISCO));
+    ui.painter().hline(
+        r.x_range(),
+        r.center().y,
+        Stroke::new(stroke::HAIRLINE, theme::RISCO),
+    );
     ui.add_space(space::L);
 }
 
@@ -57,8 +60,17 @@ pub fn row<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.horizontal(|ui| {
         ui.spacing_mut().interact_size.y = ROW_H;
         let (rect, _) = ui.allocate_exact_size(Vec2::new(LABEL_W, ROW_H), Sense::hover());
-        let g = ui.painter().layout(label.to_owned(), theme::body(size::BODY), theme::TEXTO, LABEL_W - space::M);
-        ui.painter().galley(Pos2::new(rect.left(), rect.center().y - g.size().y / 2.0), g, theme::TEXTO);
+        let g = ui.painter().layout(
+            label.to_owned(),
+            theme::body(size::BODY),
+            theme::TEXTO,
+            LABEL_W - space::M,
+        );
+        ui.painter().galley(
+            Pos2::new(rect.left(), rect.center().y - g.size().y / 2.0),
+            g,
+            theme::TEXTO,
+        );
         add(ui)
     })
     .inner
@@ -81,13 +93,24 @@ pub fn note(ui: &mut Ui, text: impl Into<String>, indent: bool) {
 
 /// [`note`] in another colour (a warning in the lamp, an error in red).
 pub fn note_colored(ui: &mut Ui, text: impl Into<String>, indent: bool, color: Color32) {
-    let left = if indent { LABEL_W + ui.spacing().item_spacing.x } else { 0.0 };
+    let left = if indent {
+        LABEL_W + ui.spacing().item_spacing.x
+    } else {
+        0.0
+    };
     let w = (ui.available_width() - left).max(80.0);
     ui.horizontal(|ui| {
         ui.add_space(left);
         ui.vertical(|ui| {
             ui.set_max_width(w);
-            ui.add(egui::Label::new(RichText::new(text.into()).size(size::SMALL + 0.5).color(color)).wrap());
+            ui.add(
+                egui::Label::new(
+                    RichText::new(text.into())
+                        .size(size::SMALL + 0.5)
+                        .color(color),
+                )
+                .wrap(),
+            );
         });
     });
 }
@@ -110,24 +133,46 @@ pub fn segmented<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T,
 
 /// One pill of [`segmented`] (also used alone: a toggle chip). 28 high.
 pub fn chip(ui: &mut Ui, selected: bool, text: &str) -> egui::Response {
-    let g = ui.painter().layout_no_wrap(text.to_owned(), theme::semibold(size::BUTTON), Color32::PLACEHOLDER);
+    let g = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        theme::semibold(size::BUTTON),
+        Color32::PLACEHOLDER,
+    );
     let s = Vec2::new(g.size().x + 2.0 * space::L, 28.0);
     let (rect, resp) = ui.allocate_exact_size(s, Sense::click());
     if ui.is_rect_visible(rect) {
         let hovered = resp.hovered() && ui.is_enabled();
         let (fill, fg, line) = if selected {
-            (theme::MOVEL, theme::GIZ, Stroke::new(stroke::HAIRLINE, theme::GIZ))
+            (
+                theme::MOVEL,
+                theme::GIZ,
+                Stroke::new(stroke::HAIRLINE, theme::GIZ),
+            )
         } else if hovered {
-            (theme::ROW_HOVER, theme::GIZ, Stroke::new(stroke::HAIRLINE, theme::RISCO))
+            (
+                theme::ROW_HOVER,
+                theme::GIZ,
+                Stroke::new(stroke::HAIRLINE, theme::RISCO),
+            )
         } else {
-            (Color32::TRANSPARENT, theme::NEVOA, Stroke::new(stroke::HAIRLINE, theme::RISCO))
+            (
+                Color32::TRANSPARENT,
+                theme::NEVOA,
+                Stroke::new(stroke::HAIRLINE, theme::RISCO),
+            )
         };
-        let fg = if ui.is_enabled() { fg } else { fg.gamma_multiply(0.5) };
+        let fg = if ui.is_enabled() {
+            fg
+        } else {
+            fg.gamma_multiply(0.5)
+        };
         let p = ui.painter();
         p.rect(rect, radius::PILL, fill, line, StrokeKind::Inside);
         p.galley(rect.center() - g.size() / 2.0, g, fg);
     }
-    resp.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, ui.is_enabled(), selected, text));
+    resp.widget_info(|| {
+        WidgetInfo::selected(WidgetType::SelectableLabel, ui.is_enabled(), selected, text)
+    });
     resp
 }
 
@@ -147,7 +192,14 @@ pub struct Dialog<'a> {
 
 impl<'a> Dialog<'a> {
     pub fn new(id: &'a str, title: &'a str) -> Self {
-        Self { id, title, icon: None, size: None, width: 420.0, esc_closes: true }
+        Self {
+            id,
+            title,
+            icon: None,
+            size: None,
+            width: 420.0,
+            esc_closes: true,
+        }
     }
 
     pub fn icon(mut self, icon: &'a str) -> Self {
@@ -167,7 +219,10 @@ impl<'a> Dialog<'a> {
 
     /// The frame of a dialog: [`theme::PAREDE`], hairline, radius 10 (no shadow: windows have none).
     pub fn frame() -> Frame {
-        Frame::new().fill(theme::PAREDE).stroke(Stroke::new(stroke::HAIRLINE, theme::RISCO)).corner_radius(radius::POPUP)
+        Frame::new()
+            .fill(theme::PAREDE)
+            .stroke(Stroke::new(stroke::HAIRLINE, theme::RISCO))
+            .corner_radius(radius::POPUP)
     }
 
     /// Show it centred on the screen. `add` gets the body's `Ui` (below the header, with the
@@ -182,11 +237,13 @@ impl<'a> Dialog<'a> {
             .show(ctx, |ui| {
                 Self::frame().show(ui, |ui| {
                     // (A content-sized dialog scrolls when the app's window is too short for it:
-                    // v1.0 phase 4, "Adicionar som" in a 600-point window lost its title bar.)
+                    // v1.0 phase 4, "Add sound" in a 600-point window lost its title bar.)
                     let mut body_max = None;
                     match self.size {
                         Some(s) => {
-                            let s = s.min(screen.size() - Vec2::splat(16.0)).max(Vec2::new(320.0, 200.0));
+                            let s = s
+                                .min(screen.size() - Vec2::splat(16.0))
+                                .max(Vec2::new(320.0, 200.0));
                             ui.set_min_size(s);
                             ui.set_max_size(s);
                         }
@@ -203,12 +260,21 @@ impl<'a> Dialog<'a> {
                     if header(ui, self.title, self.icon) {
                         open = false;
                     }
-                    let body = Frame::new().inner_margin(Margin { left: 18, right: 18, top: 12, bottom: 16 });
+                    let body = Frame::new().inner_margin(Margin {
+                        left: 18,
+                        right: 18,
+                        top: 12,
+                        bottom: 16,
+                    });
                     match body_max {
                         Some(h) => {
-                            egui::ScrollArea::vertical().id_salt((self.id, "body")).max_height(h).auto_shrink([false, true]).show(ui, |ui| {
-                                body.show(ui, add);
-                            });
+                            egui::ScrollArea::vertical()
+                                .id_salt((self.id, "body"))
+                                .max_height(h)
+                                .auto_shrink([false, true])
+                                .show(ui, |ui| {
+                                    body.show(ui, add);
+                                });
                         }
                         None => {
                             body.show(ui, add);
@@ -216,7 +282,10 @@ impl<'a> Dialog<'a> {
                     }
                 });
             });
-        if self.esc_closes && ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !egui::Popup::is_any_open(ctx) {
+        if self.esc_closes
+            && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+            && !egui::Popup::is_any_open(ctx)
+        {
             open = false;
         }
         open
@@ -231,16 +300,39 @@ pub fn header(ui: &mut Ui, title: &str, icon: Option<&str>) -> bool {
     let inner = rect.shrink2(Vec2::new(18.0, 0.0));
     let mut x = inner.left();
     if let Some(i) = icon {
-        let g = ui.painter().layout_no_wrap(i.to_owned(), theme::body(19.0), theme::NEVOA);
+        let g = ui
+            .painter()
+            .layout_no_wrap(i.to_owned(), theme::body(19.0), theme::NEVOA);
         let gw = g.size().x;
-        ui.painter().galley(Pos2::new(x, rect.center().y - g.size().y / 2.0), g, theme::NEVOA);
+        ui.painter().galley(
+            Pos2::new(x, rect.center().y - g.size().y / 2.0),
+            g,
+            theme::NEVOA,
+        );
         x += gw + space::M + 2.0;
     }
-    ui.painter().text(Pos2::new(x, rect.center().y), Align2::LEFT_CENTER, title, theme::display(17.0), theme::GIZ);
-    ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(stroke::HAIRLINE, theme::RISCO));
-    let close = Rect::from_center_size(Pos2::new(inner.right() - 15.0 + 6.0, rect.center().y), Vec2::splat(30.0));
-    let mut c = ui.new_child(UiBuilder::new().max_rect(close).layout(Layout::left_to_right(Align::Center)));
-    ui_kit::icon_button(&mut c, ph::X, "Fechar (Esc)", IconState::Normal).clicked()
+    ui.painter().text(
+        Pos2::new(x, rect.center().y),
+        Align2::LEFT_CENTER,
+        title,
+        theme::display(17.0),
+        theme::GIZ,
+    );
+    ui.painter().hline(
+        rect.x_range(),
+        rect.bottom() - 0.5,
+        Stroke::new(stroke::HAIRLINE, theme::RISCO),
+    );
+    let close = Rect::from_center_size(
+        Pos2::new(inner.right() - 15.0 + 6.0, rect.center().y),
+        Vec2::splat(30.0),
+    );
+    let mut c = ui.new_child(
+        UiBuilder::new()
+            .max_rect(close)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    ui_kit::icon_button(&mut c, ph::X, "Close (Esc)", IconState::Normal).clicked()
 }
 
 /// The footer line of a dialog: a hairline, then `add` laid out right to left (put the main
@@ -249,7 +341,11 @@ pub fn footer(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     ui.add_space(space::M);
     let w = ui.available_width();
     let (r, _) = ui.allocate_exact_size(Vec2::new(w, 1.0), Sense::hover());
-    ui.painter().hline(r.x_range(), r.center().y, Stroke::new(stroke::HAIRLINE, theme::RISCO));
+    ui.painter().hline(
+        r.x_range(),
+        r.center().y,
+        Stroke::new(stroke::HAIRLINE, theme::RISCO),
+    );
     ui.add_space(space::M + 2.0);
     ui.with_layout(Layout::right_to_left(Align::Center), add);
 }

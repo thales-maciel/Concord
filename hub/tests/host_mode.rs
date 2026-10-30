@@ -12,10 +12,19 @@ use std::time::{Duration, Instant};
 use reqwest::StatusCode;
 use serde_json::json;
 use vox_proto::*;
-use voxhub_server::host::{self, ports::PortBlock, HostRunner, HostStatus, NetMode, Phase, RunOptions};
+use voxhub_server::host::{
+    self, ports::PortBlock, HostRunner, HostStatus, NetMode, Phase, RunOptions,
+};
 
 fn opts() -> RunOptions {
-    RunOptions { net: NetMode::Off, mapper: None, bind_ip: Ipv4Addr::LOCALHOST, first_block: 7, livekit_bin: None, lan_override: Some((Ipv4Addr::LOCALHOST, 8)) }
+    RunOptions {
+        net: NetMode::Off,
+        mapper: None,
+        bind_ip: Ipv4Addr::LOCALHOST,
+        first_block: 7,
+        livekit_bin: None,
+        lan_override: Some((Ipv4Addr::LOCALHOST, 8)),
+    }
 }
 
 async fn running(r: &HostRunner) -> HostStatus {
@@ -33,8 +42,15 @@ async fn running(r: &HostRunner) -> HostStatus {
 }
 
 async fn login(http: &reqwest::Client, base: &str, req: LoginRequest) -> reqwest::Response {
-    let req = LoginRequest { protocol_version: PROTOCOL_VERSION, ..req };
-    http.post(format!("{base}/api/login")).json(&req).send().await.unwrap()
+    let req = LoginRequest {
+        protocol_version: PROTOCOL_VERSION,
+        ..req
+    };
+    http.post(format!("{base}/api/login"))
+        .json(&req)
+        .send()
+        .await
+        .unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -53,31 +69,85 @@ async fn host_invite_join_stop_and_reopen() {
     let base = format!("http://{}", st.hub_addr.unwrap());
 
     // The host's app: logs in through 127.0.0.1 with the server password and becomes the owner.
-    let l: LoginResponse = login(&http, &base, LoginRequest { username: "Tati".into(), server_password: h.password.clone(), ..Default::default() }).await.json().await.unwrap();
+    let l: LoginResponse = login(
+        &http,
+        &base,
+        LoginRequest {
+            username: "Tati".into(),
+            server_password: h.password.clone(),
+            ..Default::default()
+        },
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
     assert_eq!(l.user.role, Role::Owner);
     assert_eq!(l.server_name, "Servidor da Tati");
-    let r = http.post(format!("{base}/api/account/password")).bearer_auth(&l.token).json(&json!({"new": "tati-senha-1"})).send().await.unwrap();
-    assert_eq!(r.status(), StatusCode::OK);
-    let owner: LoginResponse = login(&http, &base, LoginRequest { username: "Tati".into(), server_password: h.password.clone(), password: Some("tati-senha-1".into()), ..Default::default() })
+    let r = http
+        .post(format!("{base}/api/account/password"))
+        .bearer_auth(&l.token)
+        .json(&json!({"new": "tati-senha-1"}))
+        .send()
         .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let owner: LoginResponse = login(
+        &http,
+        &base,
+        LoginRequest {
+            username: "Tati".into(),
+            server_password: h.password.clone(),
+            password: Some("tati-senha-1".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+
+    // An invite, turned into the code the app shows (addresses from the host status).
+    let created: InviteCreated = http
+        .post(format!("{base}/api/invites"))
+        .bearer_auth(&owner.token)
+        .json(&json!({"max_uses": 5}))
+        .send()
+        .await
+        .unwrap()
         .json()
         .await
         .unwrap();
-
-    // An invite, turned into the code the app shows (addresses from the host status).
-    let created: InviteCreated = http.post(format!("{base}/api/invites")).bearer_auth(&owner.token).json(&json!({"max_uses": 5})).send().await.unwrap().json().await.unwrap();
-    let code = InviteCode { token: invite_token_from_hex(&created.token).unwrap(), hub_port: st.hub_addr.unwrap().port(), addrs: st.invite_addrs() }.encode();
+    let code = InviteCode {
+        token: invite_token_from_hex(&created.token).unwrap(),
+        hub_port: st.hub_addr.unwrap().port(),
+        addrs: st.invite_addrs(),
+    }
+    .encode();
 
     // The friend: only the code.
     let decoded = InviteCode::decode(&code).unwrap();
     let urls = decoded.candidate_urls(&[(Ipv4Addr::LOCALHOST.into(), 8)]);
     assert_eq!(urls, [base.as_str()]);
-    let joao: LoginResponse = login(&http, &urls[0], LoginRequest { username: "Joao".into(), invite: Some(decoded.token_hex()), remember_device: true, ..Default::default() })
-        .await
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(joao.user.role, Role::Member, "a loopback login does not make a second owner");
+    let joao: LoginResponse = login(
+        &http,
+        &urls[0],
+        LoginRequest {
+            username: "Joao".into(),
+            invite: Some(decoded.token_hex()),
+            remember_device: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(
+        joao.user.role,
+        Role::Member,
+        "a loopback login does not make a second owner"
+    );
     let device = joao.device_token.expect("device token");
 
     // Stop ("Parar servidor"): nothing listens; reopen ("Abrir servidor"): the block it used is free
@@ -90,10 +160,27 @@ async fn host_invite_join_stop_and_reopen() {
     let runner = HostRunner::start(&h, opts(), Arc::new(|| {}));
     let st2 = running(&runner).await;
     assert_eq!(st2.ports, Some(PortBlock::nth(8)));
-    let r = login(&http, &base, LoginRequest { username: "Joao".into(), device_token: Some(device), ..Default::default() }).await;
+    let r = login(
+        &http,
+        &base,
+        LoginRequest {
+            username: "Joao".into(),
+            device_token: Some(device),
+            ..Default::default()
+        },
+    )
+    .await;
     assert_eq!(r.status(), StatusCode::OK);
     // The invite and its use survived.
-    let list: Vec<Invite> = http.get(format!("{base}/api/invites")).bearer_auth(&owner.token).send().await.unwrap().json().await.unwrap();
+    let list: Vec<Invite> = http
+        .get(format!("{base}/api/invites"))
+        .bearer_auth(&owner.token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(list[0].uses, 1);
     drop(runner);
 }

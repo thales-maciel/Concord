@@ -1,19 +1,9 @@
-//! v1.0.1: voxhub became concord, and its folders moved with the name:
-//! - `%APPDATA%\voxhub` → `%APPDATA%\concord`: settings.json, servers.json, encoders.json;
-//! - `%LOCALAPPDATA%\voxhub` → `%LOCALAPPDATA%\concord`: `host\` (the servers hosted in the app,
-//!   their databases and the downloaded voice server) and `sounds\` (the soundboard's cache).
-//!   The logs are not copied: concord starts its own in `%LOCALAPPDATA%\concord\logs`.
+//! Copies legacy voxhub settings, hosted servers and sound cache into concord directories.
+//! Originals remain for downgrade support; logs are excluded. DPAPI values remain valid
+//! for the same Windows user. Autotests never migrate real profiles.
 //!
-//! On the first start of concord the old items are COPIED (never moved): the old folders stay as
-//! they were, so going back to a voxhub version still finds everything. The DPAPI-encrypted values
-//! in settings.json are tied to the Windows user, not to the path, so they keep working.
-//!
-//! When: the old folder has one of the items and the new one has none of them yet. (A `logs`
-//! folder alone, from a test run or an early crash, does not count as "already migrated".) Each
-//! item is copied under a temporary name and then renamed, so an interrupted copy is never taken
-//! for a finished one: the next start throws the leftover away and copies again.
-//!
-//! Autotests never migrate (they must not read or write the real profile).
+//! Migration runs only when destination data is absent; a logs-only directory does not
+//! count. Temporary copies are renamed on completion, allowing interrupted copies to retry.
 
 use std::path::{Path, PathBuf};
 
@@ -85,7 +75,8 @@ pub fn migrate_root(old_root: &Path, new_root: &Path, items: &[&str]) -> (Decisi
         let tmp = new_root.join(format!("{item}{PARTIAL}"));
         remove_any(&tmp);
         let (mut files, mut bytes) = (0, 0);
-        let copied = copy_any(&from, &tmp, &mut files, &mut bytes).and_then(|()| std::fs::rename(&tmp, &to));
+        let copied =
+            copy_any(&from, &tmp, &mut files, &mut bytes).and_then(|()| std::fs::rename(&tmp, &to));
         match copied {
             Ok(()) => {
                 report.items.push(item.to_string());
@@ -135,7 +126,12 @@ pub fn run_at_startup() -> Option<String> {
     let mut total_files = 0;
     let mut errors = Vec::new();
     for (var, items) in [("APPDATA", ROAMING_ITEMS), ("LOCALAPPDATA", LOCAL_ITEMS)] {
-        let Some(base) = std::env::var_os(var).filter(|v| !v.is_empty()).map(PathBuf::from) else { continue };
+        let Some(base) = std::env::var_os(var)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+        else {
+            continue;
+        };
         let (decision, report) = migrate_root(&base.join(OLD_DIR), &base.join(NEW_DIR), items);
         if decision == Decision::Copy {
             parts.push(format!("{var}: {}", report.items.join(", ")));
@@ -146,7 +142,10 @@ pub fn run_at_startup() -> Option<String> {
     if parts.is_empty() {
         return None;
     }
-    let mut line = format!("data copied from the voxhub folders (they stay for a downgrade): {} ({total_files} files)", parts.join("; "));
+    let mut line = format!(
+        "data copied from the voxhub folders (they stay for a downgrade): {} ({total_files} files)",
+        parts.join("; ")
+    );
     if !errors.is_empty() {
         line.push_str(&format!("; not copied: {}", errors.join("; ")));
     }
@@ -166,9 +165,15 @@ mod tests {
 
     #[test]
     fn the_lists_are_what_the_app_keeps() {
-        assert_eq!(ROAMING_ITEMS, ["settings.json", "servers.json", "encoders.json"]);
+        assert_eq!(
+            ROAMING_ITEMS,
+            ["settings.json", "servers.json", "encoders.json"]
+        );
         assert_eq!(LOCAL_ITEMS, ["host", "sounds"]);
-        assert!(!LOCAL_ITEMS.contains(&"logs"), "concord starts its own logs");
+        assert!(
+            !LOCAL_ITEMS.contains(&"logs"),
+            "concord starts its own logs"
+        );
         assert_eq!((OLD_DIR, NEW_DIR), ("voxhub", "concord"));
         // The files the app reads are the ones in the list.
         let settings = crate::settings::encoder_cache_path();
@@ -215,8 +220,16 @@ mod tests {
         std::fs::create_dir_all(old.join("host").join("bin")).unwrap();
         std::fs::create_dir_all(old.join("logs").join("app")).unwrap();
         std::fs::write(old.join("host").join("abc").join("voxhub.db"), b"db").unwrap();
-        std::fs::write(old.join("host").join("abc").join("config.toml"), b"server_name = \"x\"").unwrap();
-        std::fs::write(old.join("host").join("bin").join("livekit-server.exe"), b"exe").unwrap();
+        std::fs::write(
+            old.join("host").join("abc").join("config.toml"),
+            b"server_name = \"x\"",
+        )
+        .unwrap();
+        std::fs::write(
+            old.join("host").join("bin").join("livekit-server.exe"),
+            b"exe",
+        )
+        .unwrap();
         std::fs::write(old.join("logs").join("app").join("app.log"), b"log").unwrap();
         // A leftover from an interrupted copy is replaced.
         std::fs::create_dir_all(new.join("host.migrating").join("junk")).unwrap();
@@ -226,13 +239,22 @@ mod tests {
         assert_eq!(report.items, ["host"], "sounds did not exist");
         assert_eq!((report.files, report.bytes), (3, 2 + 17 + 3));
         assert!(report.errors.is_empty(), "{:?}", report.errors);
-        assert_eq!(std::fs::read(new.join("host").join("abc").join("voxhub.db")).unwrap(), b"db");
-        assert_eq!(std::fs::read(new.join("host").join("bin").join("livekit-server.exe")).unwrap(), b"exe");
+        assert_eq!(
+            std::fs::read(new.join("host").join("abc").join("voxhub.db")).unwrap(),
+            b"db"
+        );
+        assert_eq!(
+            std::fs::read(new.join("host").join("bin").join("livekit-server.exe")).unwrap(),
+            b"exe"
+        );
         assert!(!new.join("host.migrating").exists());
         assert!(!new.join("host").join("junk").exists());
         assert!(!new.join("logs").exists(), "the logs are not copied");
         // The old folder is untouched (a downgrade still works).
-        assert_eq!(std::fs::read(old.join("host").join("abc").join("voxhub.db")).unwrap(), b"db");
+        assert_eq!(
+            std::fs::read(old.join("host").join("abc").join("voxhub.db")).unwrap(),
+            b"db"
+        );
         assert!(old.join("logs").join("app").join("app.log").exists());
 
         // Once is enough: a second start changes nothing, even after the old data changed.
@@ -240,7 +262,10 @@ mod tests {
         let (again, r2) = migrate_root(&old, &new, LOCAL_ITEMS);
         assert_eq!(again, Decision::AlreadyMigrated);
         assert!(r2.items.is_empty());
-        assert_eq!(std::fs::read(new.join("host").join("abc").join("voxhub.db")).unwrap(), b"db");
+        assert_eq!(
+            std::fs::read(new.join("host").join("abc").join("voxhub.db")).unwrap(),
+            b"db"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -256,7 +281,10 @@ mod tests {
         assert_eq!(decision, Decision::Copy);
         assert_eq!(report.items, ROAMING_ITEMS);
         for (i, f) in ROAMING_ITEMS.iter().enumerate() {
-            assert_eq!(std::fs::read_to_string(new.join(f)).unwrap(), format!("{{\"n\":{i}}}"));
+            assert_eq!(
+                std::fs::read_to_string(new.join(f)).unwrap(),
+                format!("{{\"n\":{i}}}")
+            );
             assert!(old.join(f).exists());
         }
         let _ = std::fs::remove_dir_all(&d);

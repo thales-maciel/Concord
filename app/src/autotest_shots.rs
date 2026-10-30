@@ -30,8 +30,13 @@ pub struct State {
 const TEST_WINDOW_TITLE: &str = "vox test window";
 /// `shots3`: the sounds put on the soundboard for its screenshot (name, emoji, tone length); the
 /// hub takes at most 5 uploads in a row from one person.
-const SHOT_SOUNDS: [(&str, &str, f32); 5] =
-    [("aplausos", "👏", 0.6), ("buzina", "🚨", 0.5), ("risada", "😂", 0.7), ("tambor", "🥁", 0.4), ("trombeta", "🎺", 0.6)];
+const SHOT_SOUNDS: [(&str, &str, f32); 5] = [
+    ("aplausos", "👏", 0.6),
+    ("buzina", "🚨", 0.5),
+    ("risada", "😂", 0.7),
+    ("tambor", "🥁", 0.4),
+    ("trombeta", "🎺", 0.6),
+];
 
 fn log(what: &str) {
     tracing::info!(target: "autotest", "AUTOTEST shots: {what}");
@@ -41,8 +46,12 @@ fn log(what: &str) {
 /// (`VOX_AUTOTEST_SHOT_PREFIX`, e.g. "small-" or "dpi150-", goes in front of every name: the same
 /// screens at another window size or display scale, see [`window`].)
 pub(super) fn save(app: &App, name: &str) {
-    let Some(dir) = std::env::var_os("VOX_AUTOTEST_SHOT_DIR") else { return };
-    let Some(hwnd) = app.video.parent else { return log("no window yet") };
+    let Some(dir) = std::env::var_os("VOX_AUTOTEST_SHOT_DIR") else {
+        return;
+    };
+    let Some(hwnd) = app.video.parent else {
+        return log("no window yet");
+    };
     #[cfg(windows)]
     {
         let prefix = std::env::var("VOX_AUTOTEST_SHOT_PREFIX").unwrap_or_default();
@@ -68,7 +77,11 @@ pub fn window() -> ([f32; 2], f32) {
     if std::env::var_os("VOX_AUTOTEST_SHOT_DIR").is_none() {
         return normal;
     }
-    let zoom = std::env::var("VOX_AUTOTEST_ZOOM").ok().and_then(|z| z.trim().parse::<f32>().ok()).filter(|z| (0.5..=3.0).contains(z)).unwrap_or(1.0);
+    let zoom = std::env::var("VOX_AUTOTEST_ZOOM")
+        .ok()
+        .and_then(|z| z.trim().parse::<f32>().ok())
+        .filter(|z| (0.5..=3.0).contains(z))
+        .unwrap_or(1.0);
     let size = std::env::var("VOX_AUTOTEST_WINDOW")
         .ok()
         .and_then(|s| {
@@ -81,7 +94,9 @@ pub fn window() -> ([f32; 2], f32) {
 
 impl Auto {
     fn shot_waited(&self, secs: f32) -> bool {
-        self.shots.at.is_some_and(|t| t.elapsed().as_secs_f32() >= secs)
+        self.shots
+            .at
+            .is_some_and(|t| t.elapsed().as_secs_f32() >= secs)
     }
 
     fn shot_next(&mut self, step: u32, what: &str) {
@@ -124,7 +139,9 @@ impl Auto {
             }
             2 => {
                 if self.logged_in(app) {
-                    let Some(vc) = Self::first_voice(app) else { return self.fail("no voice channel") };
+                    let Some(vc) = Self::first_voice(app) else {
+                        return self.fail("no voice channel");
+                    };
                     app.join_voice(vc);
                     self.shot_next(3, "joining voice");
                 } else if self.shot_waited(30.0) || app.form.error.is_some() {
@@ -132,13 +149,18 @@ impl Auto {
                 }
             }
             // Wait for the other(s) in the room and their camera, if any, to settle.
-            3 if app.voice.channel.is_some() && app.members_here().len() >= 2 && self.shot_waited(8.0) => {
+            3 if app.voice.channel.is_some()
+                && app.members_here().len() >= 2
+                && self.shot_waited(8.0) =>
+            {
                 save(app, "call");
-                let Some(ch) = Self::first_text(app) else { return self.fail("no text channel") };
+                let Some(ch) = Self::first_text(app) else {
+                    return self.fail("no text channel");
+                };
                 app.select_text(ch);
                 for text in [
-                    "boa noite! alguém topa a partida depois do jantar?",
-                    "vou abrir a sala de voz daqui a pouco",
+                    "good evening! anyone up for a game after dinner?",
+                    "I will open the voice room soon",
                     "a nova interface ficou bem mais calma de ler à noite",
                 ] {
                     Self::say(app, text);
@@ -162,7 +184,7 @@ impl Auto {
         None
     }
 
-    /// `shots3` (v1.0 phase 3a): every settings section, "Configurar câmera" (the synthetic camera),
+    /// `shots3` (v1.0 phase 3a): every settings section, "Configure camera" (the synthetic camera),
     /// the soundboard popup with a few sounds, the trim editor, the voice changer popup and the Go
     /// Live picker (left with the test windows only), each saved.
     pub(super) fn run_shots3(&mut self, app: &mut App) -> Option<i32> {
@@ -174,7 +196,9 @@ impl Auto {
             }
             1 => {
                 if self.logged_in(app) {
-                    let Some(vc) = Self::first_voice(app) else { return self.fail("no voice channel") };
+                    let Some(vc) = Self::first_voice(app) else {
+                        return self.fail("no voice channel");
+                    };
                     app.join_voice(vc);
                     self.shot_next(2, "joining voice");
                 } else if self.shot_waited(30.0) || app.form.error.is_some() {
@@ -213,7 +237,7 @@ impl Auto {
                     None => {
                         app.settings_ui.open = false;
                         app.open_camera_window();
-                        self.shot_next(6, "Configurar câmera");
+                        self.shot_next(6, "Configure camera");
                     }
                 }
             }
@@ -229,16 +253,28 @@ impl Auto {
             6 if self.shot_waited(20.0) => return self.fail("the camera never reported"),
             // The sounds, one upload at a time.
             // (`page` counts the uploads started; the next one waits for the last to be listed.)
-            7 if !app.sb.busy && app.sb.sounds.len() >= self.shots.page && self.shot_waited(0.5) => {
+            7 if !app.sb.busy
+                && app.sb.sounds.len() >= self.shots.page
+                && self.shot_waited(0.5) =>
+            {
                 if !app.sb.supported {
-                    return if self.shot_waited(20.0) { self.fail("the hub reports no soundboard") } else { None };
+                    return if self.shot_waited(20.0) {
+                        self.fail("the hub reports no soundboard")
+                    } else {
+                        None
+                    };
                 }
                 if let Some((false, e)) = app.sb.message.clone() {
                     return self.fail(&format!("an upload failed: {e}"));
                 }
                 match SHOT_SOUNDS.get(self.shots.page) {
                     Some((name, emoji, secs)) => {
-                        let path = self.shots.dir.clone().unwrap_or_default().join(format!("{name}.wav"));
+                        let path = self
+                            .shots
+                            .dir
+                            .clone()
+                            .unwrap_or_default()
+                            .join(format!("{name}.wav"));
                         let _ = std::fs::write(&path, super::sound::test_wav(*secs));
                         if let Err(e) = app.add_sound(path, name, emoji) {
                             return self.fail(&format!("could not add a sound: {e}"));
@@ -257,7 +293,12 @@ impl Auto {
             8 if self.shot_waited(2.0) => {
                 save(app, "soundboard");
                 // The trim editor over a longer recording.
-                let path = self.shots.dir.clone().unwrap_or_default().join("gravacao-longa.wav");
+                let path = self
+                    .shots
+                    .dir
+                    .clone()
+                    .unwrap_or_default()
+                    .join("gravacao-longa.wav");
                 let _ = std::fs::write(&path, super::sound::test_wav(9.0));
                 app.trim_choose(path);
                 self.shot_next(9, "the trim editor");
@@ -270,13 +311,19 @@ impl Auto {
                 // none (VOX_NO_MIC), so the dock is told it has one (nothing is captured).
                 app.voice.no_mic = false;
                 app.settings.voice_fx.effect = vox_client_core::VoiceEffect::Robot;
-                egui::Popup::open_id(&app.repaint_ctx(), egui::Id::new(crate::call::dock::FX_MENU));
+                egui::Popup::open_id(
+                    &app.repaint_ctx(),
+                    egui::Id::new(crate::call::dock::FX_MENU),
+                );
                 self.shot_next(10, "the voice changer popup");
             }
             9 if self.shot_waited(20.0) => return self.fail("the trim editor never got ready"),
             10 if self.shot_waited(2.0) => {
                 save(app, "voice-fx");
-                egui::Popup::close_id(&app.repaint_ctx(), egui::Id::new(crate::call::dock::FX_MENU));
+                egui::Popup::close_id(
+                    &app.repaint_ctx(),
+                    egui::Id::new(crate::call::dock::FX_MENU),
+                );
                 app.settings.voice_fx.effect = vox_client_core::VoiceEffect::Off;
                 app.voice.no_mic = true;
                 app.open_golive();
@@ -288,10 +335,19 @@ impl Auto {
                 if app.golive.windows.is_empty() {
                     return self.fail("no test window to show (start examples/test_window.exe)");
                 }
-                app.golive.pick = app.golive.windows.first().map(|w| crate::app::Pick::Window(w.hwnd));
+                app.golive.pick = app
+                    .golive
+                    .windows
+                    .first()
+                    .map(|w| crate::app::Pick::Window(w.hwnd));
                 let repaint = app.repaint.clone();
                 app.golive.picker.release();
-                app.golive.picker.sources_listed(&app.golive.windows, &[], std::sync::Arc::new(move || repaint.wake()), false);
+                app.golive.picker.sources_listed(
+                    &app.golive.windows,
+                    &[],
+                    std::sync::Arc::new(move || repaint.wake()),
+                    false,
+                );
                 self.shot_next(12, "thumbnails of the test windows");
             }
             11 if self.shot_waited(20.0) => return self.fail("the sources never came"),
@@ -301,7 +357,12 @@ impl Auto {
                 app.golive.pick = Some(crate::app::Pick::AllSound);
                 let repaint = app.repaint.clone();
                 app.golive.picker.release();
-                app.golive.picker.sources_listed(&app.golive.windows, &[], std::sync::Arc::new(move || repaint.wake()), true);
+                app.golive.picker.sources_listed(
+                    &app.golive.windows,
+                    &[],
+                    std::sync::Arc::new(move || repaint.wake()),
+                    true,
+                );
                 self.shot_next(13, "the audio-only picker");
             }
             13 if self.shot_waited(3.0) => {
@@ -311,7 +372,9 @@ impl Auto {
                 // Leave the soundboard as it was found.
                 let ids: Vec<_> = app.sb.sounds.iter().map(|s| s.id).collect();
                 for id in ids {
-                    app.backend.send(crate::backend::Cmd::Sound(crate::soundboard::SoundCmd::Delete(id)));
+                    app.backend.send(crate::backend::Cmd::Sound(
+                        crate::soundboard::SoundCmd::Delete(id),
+                    ));
                 }
                 if let Some(d) = self.shots.dir.take() {
                     let _ = std::fs::remove_dir_all(d);
@@ -326,11 +389,11 @@ impl Auto {
 
     /// `calladex` (v1.0.1): the concord home screen ("home"), "calladex" typed there (the credits
     /// card, "calladex-creditos"), then in a text channel an ordinary message that contains the word
-    /// (sent) and the exact `/calladex` (not sent; the members' card, "calladex"), and Configurações
-    /// → Sobre ("sobre"). Fails if `/calladex` ever reaches the hub or the plain message does not.
+    /// (sent) and the exact `/calladex` (not sent; the members' card, "calladex"), and Settings
+    /// → About ("sobre"). Fails if `/calladex` ever reaches the hub or the plain message does not.
     pub(super) fn run_calladex(&mut self, app: &mut App) -> Option<i32> {
         use crate::app::calladex::Flavour;
-        const PLAIN: &str = "o calladex é segredo";
+        const PLAIN: &str = "calladex is a secret";
         match self.step {
             0 => self.shot_next(1, "home screen"),
             1 if self.shot_waited(3.0) => {
@@ -342,7 +405,8 @@ impl Auto {
             }
             2 if self.shot_waited(2.0) => {
                 if app.calladex.as_ref().map(|c| c.flavour) != Some(Flavour::Credits) {
-                    return self.fail("\"calladex\" typed on the home screen did not open the credits");
+                    return self
+                        .fail("\"calladex\" typed on the home screen did not open the credits");
                 }
                 save(app, "calladex-creditos");
                 app.calladex = None;
@@ -355,7 +419,9 @@ impl Auto {
             3 => {
                 // Logged in, and the member list has arrived (the partners are online first).
                 if self.logged_in(app) && (app.chatx.people.len() >= 3 || self.shot_waited(25.0)) {
-                    let Some(ch) = Self::first_text(app) else { return self.fail("no text channel") };
+                    let Some(ch) = Self::first_text(app) else {
+                        return self.fail("no text channel");
+                    };
                     app.select_text(ch);
                     Self::say(app, PLAIN);
                     Self::say(app, "/calladex");
@@ -363,7 +429,9 @@ impl Auto {
                         return self.fail("the input still holds /calladex");
                     }
                     match app.calladex.as_ref() {
-                        Some(c) if c.flavour == Flavour::Members => log(&format!("the card lists {} members", c.entries.len())),
+                        Some(c) if c.flavour == Flavour::Members => {
+                            log(&format!("the card lists {} members", c.entries.len()))
+                        }
                         _ => return self.fail("/calladex did not open the card"),
                     }
                     self.shot_next(4, "the members' card");
@@ -381,9 +449,11 @@ impl Auto {
                 save(app, "calladex");
                 app.calladex = None;
                 app.open_settings_at(crate::app::SettingsPage::About);
-                self.shot_next(5, "Configurações → Sobre");
+                self.shot_next(5, "Settings → Sobre");
             }
-            4 if self.shot_waited(20.0) => return self.fail("the ordinary message with the word was not sent"),
+            4 if self.shot_waited(20.0) => {
+                return self.fail("the ordinary message with the word was not sent")
+            }
             5 if self.shot_waited(2.0) => {
                 save(app, "sobre");
                 app.settings_ui.open = false;

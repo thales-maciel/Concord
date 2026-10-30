@@ -1,4 +1,4 @@
-//! Mentions, replies and reactions ("Menções, respostas e reações", v0.8), added after v0.7.0
+//! Mentions, replies and reactions ("Mentions, replies and reactions", v0.8), added after v0.7.0
 //! with no protocol bump: new optional fields, one new request type and two new events; nothing
 //! existing changes meaning.
 //!
@@ -7,7 +7,7 @@
 //! sender lists the ids it means (`mentions` of [`crate::ClientEvent::SendMessage`] /
 //! [`crate::SendMessageRequest`]); the hub keeps only real people whose `@name` (username or
 //! display name, any case, see [`find_mention`]) is in the text, at most [`MENTIONS_MAX`].
-//! `@todos` ([`MENTION_EVERYONE`]) mentions everybody, but only when a Moderador or above writes
+//! `@todos` ([`MENTION_EVERYONE`]) mentions everybody, but only when a Moderator or above writes
 //! it ([`crate::Message::mention_everyone`]); anybody else's `@todos` is plain text. The hub reads
 //! `@todos` from the text itself, so it works from older apps too. DMs have no mention ids (both
 //! people are always told).
@@ -16,7 +16,7 @@
 //! anything else is dropped (the message goes out as a plain one). Every message that is a reply
 //! carries a [`ReplyRef`]: the original's author and a one-line excerpt, or `deleted` once it is
 //! gone, filled by the hub for history pages in one query per page. `reply_mention` (Discord's
-//! "@ ligado", on by default in the app) also mentions the original's author. An older app shows a
+//! "@ on", on by default in the app) also mentions the original's author. An older app shows a
 //! reply as a plain message.
 //!
 //! **Reactions** (channels and DMs): `POST /api/messages/{id}/reactions` and
@@ -46,7 +46,7 @@ pub const MENTIONS_MAX: usize = 20;
 pub const MENTIONS_WIRE_MAX: usize = 50;
 /// The answer to a message whose mention list is longer than [`MENTIONS_WIRE_MAX`].
 pub const ERR_TOO_MANY_MENTIONS: &str = "too many mentions";
-/// `@todos`: everybody (Moderador and above only).
+/// `@todos`: everybody (Moderator and above only).
 pub const MENTION_EVERYONE: &str = "todos";
 /// Most distinct emoji on one message.
 pub const REACTIONS_MAX_PER_MESSAGE: usize = 20;
@@ -77,7 +77,12 @@ pub struct ChatFeatures {
 
 impl ChatFeatures {
     /// Everything this version knows.
-    pub const ALL: ChatFeatures = ChatFeatures { mentions: true, replies: true, reactions: true, private_channels: true };
+    pub const ALL: ChatFeatures = ChatFeatures {
+        mentions: true,
+        replies: true,
+        reactions: true,
+        private_channels: true,
+    };
 }
 
 /// The message a reply answers, as shown above it.
@@ -94,7 +99,7 @@ pub struct ReplyRef {
     /// How many images it has.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub images: u32,
-    /// The original was deleted: show "mensagem apagada".
+    /// The original was deleted: show "message deleted".
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub deleted: bool,
 }
@@ -102,7 +107,11 @@ pub struct ReplyRef {
 impl ReplyRef {
     /// The quote of a message that no longer exists.
     pub fn gone(id: MessageId) -> Self {
-        ReplyRef { id, deleted: true, ..Default::default() }
+        ReplyRef {
+            id,
+            deleted: true,
+            ..Default::default()
+        }
     }
 }
 
@@ -127,7 +136,10 @@ pub(crate) fn is_zero(n: &u32) -> bool {
 
 /// Variation selectors, skin tones, ZWJ and the keycap mark: they belong to the emoji before them.
 fn is_emoji_modifier(c: char) -> bool {
-    matches!(c, '\u{FE0E}' | '\u{FE0F}' | '\u{200D}' | '\u{20E3}' | '\u{1F3FB}'..='\u{1F3FF}')
+    matches!(
+        c,
+        '\u{FE0E}' | '\u{FE0F}' | '\u{200D}' | '\u{20E3}' | '\u{1F3FB}'..='\u{1F3FF}'
+    )
 }
 
 fn is_regional_indicator(c: char) -> bool {
@@ -141,11 +153,15 @@ fn is_regional_indicator(c: char) -> bool {
 pub fn clean_reaction_emoji(raw: &str) -> Option<String> {
     let e = raw.trim();
     let n = e.chars().count();
-    if n == 0 || n > REACTION_EMOJI_MAX_CHARS || e.len() > REACTION_EMOJI_MAX_BYTES || e.is_ascii() {
+    if n == 0 || n > REACTION_EMOJI_MAX_CHARS || e.len() > REACTION_EMOJI_MAX_BYTES || e.is_ascii()
+    {
         return None;
     }
     let plain = e.chars().all(|c| {
-        !crate::is_forbidden_char(c) && !c.is_whitespace() && !c.is_alphabetic() && (!c.is_ascii() || matches!(c, '0'..='9' | '#' | '*'))
+        !crate::is_forbidden_char(c)
+            && !c.is_whitespace()
+            && !c.is_alphabetic()
+            && (!c.is_ascii() || matches!(c, '0'..='9' | '#' | '*'))
     });
     if !plain {
         return None;
@@ -194,7 +210,9 @@ pub fn find_mention(text: &str, name: &str) -> Vec<std::ops::Range<usize>> {
             let mut end = Some(0);
             for nc in name.chars() {
                 match ti.next() {
-                    Some((j, tc)) if tc.to_lowercase().eq(nc.to_lowercase()) => end = Some(j + tc.len_utf8()),
+                    Some((j, tc)) if tc.to_lowercase().eq(nc.to_lowercase()) => {
+                        end = Some(j + tc.len_utf8())
+                    }
                     _ => {
                         end = None;
                         break;
@@ -203,7 +221,14 @@ pub fn find_mention(text: &str, name: &str) -> Vec<std::ops::Range<usize>> {
             }
             if let Some(e) = end {
                 let next = rest[e..].chars().next();
-                if next.is_none_or(|n| !is_word_char(n) || (n == '.' && rest[e + 1..].chars().next().is_none_or(|x| !is_word_char(x)))) {
+                if next.is_none_or(|n| {
+                    !is_word_char(n)
+                        || (n == '.'
+                            && rest[e + 1..]
+                                .chars()
+                                .next()
+                                .is_none_or(|x| !is_word_char(x)))
+                }) {
                     out.push(i..i + 1 + e);
                 }
             }
@@ -251,7 +276,10 @@ pub fn apply_reaction(list: &mut Vec<Reaction>, emoji: &str, user: UserId, add: 
             changed
         }
         None if add => {
-            list.push(Reaction { emoji: emoji.to_string(), users: vec![user] });
+            list.push(Reaction {
+                emoji: emoji.to_string(),
+                users: vec![user],
+            });
             true
         }
         None => false,
@@ -272,12 +300,29 @@ mod tests {
 
     #[test]
     fn single_emoji_only() {
-        for ok in ["👍", "❤", "❤️", "👍🏽", "🇧🇷", "👨‍👩‍👧", "1️⃣", "✅", " 🎉 "] {
+        for ok in ["👍", "❤", "❤️", "👍🏽", "🇧🇷", "👨‍👩‍👧", "1️⃣", "✅", " 🎉 "]
+        {
             assert!(clean_reaction_emoji(ok).is_some(), "{ok:?}");
         }
         assert_eq!(clean_reaction_emoji(" 🎉 ").as_deref(), Some("🎉"));
         let long = "👍🏽".repeat(6);
-        for bad in ["", " ", "a", "ok", "👍👍", "👍a", "😀😀😀", "🇧🇷🇧", "🇧🇷🇧🇷", "\u{200B}👍", "👍\u{200D}", "1", "é", "🎉 🎉", long.as_str()] {
+        for bad in [
+            "",
+            " ",
+            "a",
+            "ok",
+            "👍👍",
+            "👍a",
+            "😀😀😀",
+            "🇧🇷🇧",
+            "🇧🇷🇧🇷",
+            "\u{200B}👍",
+            "👍\u{200D}",
+            "1",
+            "é",
+            "🎉 🎉",
+            long.as_str(),
+        ] {
             assert!(clean_reaction_emoji(bad).is_none(), "{bad:?}");
         }
     }
@@ -285,7 +330,13 @@ mod tests {
     #[test]
     fn mentions_are_found_as_words_in_any_case() {
         let t = "oi @Tati, e @joao.silva! tati@x.com @TatiAna @todos.";
-        assert_eq!(find_mention(t, "tati").iter().map(|r| &t[r.clone()]).collect::<Vec<_>>(), ["@Tati"]);
+        assert_eq!(
+            find_mention(t, "tati")
+                .iter()
+                .map(|r| &t[r.clone()])
+                .collect::<Vec<_>>(),
+            ["@Tati"]
+        );
         assert_eq!(find_mention(t, "Joao.Silva").len(), 1);
         assert_eq!(find_mention(t, "joao").len(), 0, "a longer name follows");
         assert_eq!(find_mention(t, "tatiana").len(), 1);
@@ -318,11 +369,29 @@ mod tests {
         assert!(!apply_reaction(&mut l, "👍", 1, true));
         assert!(apply_reaction(&mut l, "👍", 2, true));
         assert!(apply_reaction(&mut l, "🎉", 1, true));
-        assert_eq!(l, vec![Reaction { emoji: "👍".into(), users: vec![1, 2] }, Reaction { emoji: "🎉".into(), users: vec![1] }]);
+        assert_eq!(
+            l,
+            vec![
+                Reaction {
+                    emoji: "👍".into(),
+                    users: vec![1, 2]
+                },
+                Reaction {
+                    emoji: "🎉".into(),
+                    users: vec![1]
+                }
+            ]
+        );
         assert!(apply_reaction(&mut l, "👍", 1, false));
         assert!(!apply_reaction(&mut l, "👍", 1, false));
         assert!(apply_reaction(&mut l, "🎉", 1, false));
-        assert_eq!(l, vec![Reaction { emoji: "👍".into(), users: vec![2] }]);
+        assert_eq!(
+            l,
+            vec![Reaction {
+                emoji: "👍".into(),
+                users: vec![2]
+            }]
+        );
         assert!(!apply_reaction(&mut l, "😀", 3, false));
     }
 
@@ -343,15 +412,53 @@ mod tests {
 
     #[test]
     fn a_plain_message_is_byte_identical_to_v070() {
-        assert_eq!(serde_json::to_string(&msg()).unwrap(), r#"{"id":9,"channel_id":2,"author":{"id":3,"username":"Tati"},"content":"@Joao olha","created_at_ms":4}"#);
-        let line = DmMessage { id: 1, dm_id: 2, author: User::new(3, "a"), content: "oi".into(), created_at_ms: 4, kind: DmMessageKind::Text, call_secs: 0, attachments: vec![], reply: None, reactions: vec![] };
-        assert_eq!(serde_json::to_string(&line).unwrap(), r#"{"id":1,"dm_id":2,"author":{"id":3,"username":"a"},"content":"oi","created_at_ms":4}"#);
         assert_eq!(
-            serde_json::to_string(&crate::ClientEvent::SendMessage { channel_id: 1, content: "oi".into(), mentions: vec![], reply_to: None, reply_mention: false }).unwrap(),
+            serde_json::to_string(&msg()).unwrap(),
+            r#"{"id":9,"channel_id":2,"author":{"id":3,"username":"Tati"},"content":"@Joao olha","created_at_ms":4}"#
+        );
+        let line = DmMessage {
+            id: 1,
+            dm_id: 2,
+            author: User::new(3, "a"),
+            content: "oi".into(),
+            created_at_ms: 4,
+            kind: DmMessageKind::Text,
+            call_secs: 0,
+            attachments: vec![],
+            reply: None,
+            reactions: vec![],
+        };
+        assert_eq!(
+            serde_json::to_string(&line).unwrap(),
+            r#"{"id":1,"dm_id":2,"author":{"id":3,"username":"a"},"content":"oi","created_at_ms":4}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&crate::ClientEvent::SendMessage {
+                channel_id: 1,
+                content: "oi".into(),
+                mentions: vec![],
+                reply_to: None,
+                reply_mention: false
+            })
+            .unwrap(),
             r#"{"type":"send_message","channel_id":1,"content":"oi"}"#
         );
-        assert_eq!(serde_json::to_string(&crate::SendMessageRequest { content: "oi".into(), ..Default::default() }).unwrap(), r#"{"content":"oi"}"#);
-        assert_eq!(serde_json::to_string(&crate::DmSendRequest { content: "oi".into(), ..Default::default() }).unwrap(), r#"{"content":"oi"}"#);
+        assert_eq!(
+            serde_json::to_string(&crate::SendMessageRequest {
+                content: "oi".into(),
+                ..Default::default()
+            })
+            .unwrap(),
+            r#"{"content":"oi"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&crate::DmSendRequest {
+                content: "oi".into(),
+                ..Default::default()
+            })
+            .unwrap(),
+            r#"{"content":"oi"}"#
+        );
     }
 
     /// The shapes exactly as v0.7.0 had them (a subset is enough: unknown tags fail to parse).
@@ -383,17 +490,34 @@ mod tests {
         #[serde(tag = "type", rename_all = "snake_case")]
         #[allow(dead_code)]
         pub enum ServerEvent {
-            Ready { user: User, channels: Vec<crate::Channel>, online: Vec<User>, voice: Vec<crate::VoiceMember> },
-            MessageCreated { message: Message },
-            MessageDeleted { channel_id: ChannelId, message_id: MessageId },
-            DmMessageCreated { message: DmMessage },
-            UserOffline { user_id: UserId },
+            Ready {
+                user: User,
+                channels: Vec<crate::Channel>,
+                online: Vec<User>,
+                voice: Vec<crate::VoiceMember>,
+            },
+            MessageCreated {
+                message: Message,
+            },
+            MessageDeleted {
+                channel_id: ChannelId,
+                message_id: MessageId,
+            },
+            DmMessageCreated {
+                message: DmMessage,
+            },
+            UserOffline {
+                user_id: UserId,
+            },
         }
 
         #[derive(Debug, Clone, Serialize, Deserialize)]
         #[serde(tag = "type", rename_all = "snake_case")]
         pub enum ClientEvent {
-            SendMessage { channel_id: ChannelId, content: String },
+            SendMessage {
+                channel_id: ChannelId,
+                content: String,
+            },
         }
     }
 
@@ -402,39 +526,113 @@ mod tests {
         let mut m = msg();
         m.mentions = vec![5, 6];
         m.mention_everyone = true;
-        m.reply = Some(ReplyRef { id: 3, author: Some(User::new(5, "Joao")), excerpt: "oi".into(), images: 1, deleted: false });
-        m.reactions = vec![Reaction { emoji: "👍".into(), users: vec![5] }];
-        let json = serde_json::to_string(&ServerEvent::MessageCreated { message: m.clone() }).unwrap();
+        m.reply = Some(ReplyRef {
+            id: 3,
+            author: Some(User::new(5, "Joao")),
+            excerpt: "oi".into(),
+            images: 1,
+            deleted: false,
+        });
+        m.reactions = vec![Reaction {
+            emoji: "👍".into(),
+            users: vec![5],
+        }];
+        let json =
+            serde_json::to_string(&ServerEvent::MessageCreated { message: m.clone() }).unwrap();
         assert!(json.contains(r#""mentions":[5,6],"mention_everyone":true,"reply":{"id":3,"author":{"id":5,"username":"Joao"},"excerpt":"oi","images":1},"reactions":[{"emoji":"👍","users":[5]}]"#), "{json}");
-        let v070::ServerEvent::MessageCreated { message } = serde_json::from_str::<v070::ServerEvent>(&json).unwrap() else { panic!() };
-        assert_eq!(message.content, "@Joao olha", "an old app shows the text as typed");
-        let ServerEvent::MessageCreated { message } = serde_json::from_str::<ServerEvent>(&json).unwrap() else { panic!() };
+        let v070::ServerEvent::MessageCreated { message } =
+            serde_json::from_str::<v070::ServerEvent>(&json).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            message.content, "@Joao olha",
+            "an old app shows the text as typed"
+        );
+        let ServerEvent::MessageCreated { message } =
+            serde_json::from_str::<ServerEvent>(&json).unwrap()
+        else {
+            panic!()
+        };
         assert_eq!(message, m);
-        assert!(message.mentions_me(5) && message.mentions_me(7), "@todos reaches everybody");
+        assert!(
+            message.mentions_me(5) && message.mentions_me(7),
+            "@todos reaches everybody"
+        );
         assert!(!message.mentions_me(3), "never my own message");
         // A DM reply reads as a plain line in the old app.
-        let line = DmMessage { id: 1, dm_id: 2, author: User::new(3, "a"), content: "oi".into(), created_at_ms: 4, kind: DmMessageKind::Text, call_secs: 0, attachments: vec![], reply: Some(ReplyRef::gone(7)), reactions: vec![] };
+        let line = DmMessage {
+            id: 1,
+            dm_id: 2,
+            author: User::new(3, "a"),
+            content: "oi".into(),
+            created_at_ms: 4,
+            kind: DmMessageKind::Text,
+            call_secs: 0,
+            attachments: vec![],
+            reply: Some(ReplyRef::gone(7)),
+            reactions: vec![],
+        };
         let json = serde_json::to_string(&ServerEvent::DmMessageCreated { message: line }).unwrap();
-        assert!(json.contains(r#""reply":{"id":7,"deleted":true}"#), "{json}");
-        assert!(matches!(serde_json::from_str::<v070::ServerEvent>(&json), Ok(v070::ServerEvent::DmMessageCreated { .. })));
+        assert!(
+            json.contains(r#""reply":{"id":7,"deleted":true}"#),
+            "{json}"
+        );
+        assert!(matches!(
+            serde_json::from_str::<v070::ServerEvent>(&json),
+            Ok(v070::ServerEvent::DmMessageCreated { .. })
+        ));
         // The new events are unknown to it (it logs and skips them); a new app reads them.
         for ev in [
-            ServerEvent::ReactionChanged { channel_id: 1, message_id: 2, emoji: "👍".into(), user_id: 3, added: true },
-            ServerEvent::DmReactionChanged { dm_id: 1, message_id: 2, emoji: "👍".into(), user_id: 3, added: false },
+            ServerEvent::ReactionChanged {
+                channel_id: 1,
+                message_id: 2,
+                emoji: "👍".into(),
+                user_id: 3,
+                added: true,
+            },
+            ServerEvent::DmReactionChanged {
+                dm_id: 1,
+                message_id: 2,
+                emoji: "👍".into(),
+                user_id: 3,
+                added: false,
+            },
         ] {
             let json = serde_json::to_string(&ev).unwrap();
-            assert!(serde_json::from_str::<v070::ServerEvent>(&json).is_err(), "{json}");
+            assert!(
+                serde_json::from_str::<v070::ServerEvent>(&json).is_err(),
+                "{json}"
+            );
             assert!(serde_json::from_str::<ServerEvent>(&json).is_ok(), "{json}");
         }
         assert_eq!(
-            serde_json::to_string(&ServerEvent::ReactionChanged { channel_id: 1, message_id: 2, emoji: "🎉".into(), user_id: 3, added: true }).unwrap(),
+            serde_json::to_string(&ServerEvent::ReactionChanged {
+                channel_id: 1,
+                message_id: 2,
+                emoji: "🎉".into(),
+                user_id: 3,
+                added: true
+            })
+            .unwrap(),
             r#"{"type":"reaction_changed","channel_id":1,"message_id":2,"emoji":"🎉","user_id":3,"added":true}"#
         );
         // `Ready` with the feature flags still parses in the old shape.
-        let ready = ServerEvent::Ready { user: User::new(1, "a"), channels: vec![], online: vec![], voice: vec![], account: None, chat: Some(ChatFeatures::ALL), server_id: None };
+        let ready = ServerEvent::Ready {
+            user: User::new(1, "a"),
+            channels: vec![],
+            online: vec![],
+            voice: vec![],
+            account: None,
+            chat: Some(ChatFeatures::ALL),
+            server_id: None,
+        };
         let json = serde_json::to_string(&ready).unwrap();
         assert!(json.contains(r#""chat":{"mentions":true,"replies":true,"reactions":true,"private_channels":true}"#), "{json}");
-        assert!(matches!(serde_json::from_str::<v070::ServerEvent>(&json), Ok(v070::ServerEvent::Ready { .. })));
+        assert!(matches!(
+            serde_json::from_str::<v070::ServerEvent>(&json),
+            Ok(v070::ServerEvent::Ready { .. })
+        ));
     }
 
     #[test]
@@ -443,19 +641,41 @@ mod tests {
         let m: Message = serde_json::from_str(r#"{"id":9,"channel_id":2,"author":{"id":3,"username":"Tati"},"content":"@Joao olha","created_at_ms":4}"#).unwrap();
         assert_eq!(m, msg());
         let ready: ServerEvent = serde_json::from_str(r#"{"type":"ready","user":{"id":1,"username":"a"},"channels":[],"online":[],"voice":[]}"#).unwrap();
-        assert!(matches!(ready, ServerEvent::Ready { chat: None, .. }), "an old hub: the app hides replies and reactions");
+        assert!(
+            matches!(ready, ServerEvent::Ready { chat: None, .. }),
+            "an old hub: the app hides replies and reactions"
+        );
         let line: DmMessage = serde_json::from_str(r#"{"id":1,"dm_id":2,"author":{"id":3,"username":"a"},"content":"oi","created_at_ms":4}"#).unwrap();
         assert!(line.reply.is_none() && line.reactions.is_empty());
         // What a v0.7.0 app sends: no mentions, no reply.
-        let old = serde_json::to_string(&v070::ClientEvent::SendMessage { channel_id: 1, content: "@todos oi".into() }).unwrap();
+        let old = serde_json::to_string(&v070::ClientEvent::SendMessage {
+            channel_id: 1,
+            content: "@todos oi".into(),
+        })
+        .unwrap();
         let ev: crate::ClientEvent = serde_json::from_str(&old).unwrap();
-        assert!(matches!(ev, crate::ClientEvent::SendMessage { mentions, reply_to: None, reply_mention: false, .. } if mentions.is_empty()));
-        let req: crate::SendMessageRequest = serde_json::from_str(r#"{"content":"oi","attachments":[1]}"#).unwrap();
+        assert!(
+            matches!(ev, crate::ClientEvent::SendMessage { mentions, reply_to: None, reply_mention: false, .. } if mentions.is_empty())
+        );
+        let req: crate::SendMessageRequest =
+            serde_json::from_str(r#"{"content":"oi","attachments":[1]}"#).unwrap();
         assert!(req.mentions.is_empty() && req.reply_to.is_none() && !req.reply_mention);
         // A partial feature list from a newer hub reads with the rest off.
         let f: ChatFeatures = serde_json::from_str(r#"{"reactions":true,"polls":true}"#).unwrap();
-        assert_eq!(f, ChatFeatures { reactions: true, ..Default::default() });
+        assert_eq!(
+            f,
+            ChatFeatures {
+                reactions: true,
+                ..Default::default()
+            }
+        );
         // A quote of a deleted message, as small as it gets.
-        assert_eq!(serde_json::from_str::<ReplyRef>(r#"{"id":4}"#).unwrap(), ReplyRef { id: 4, ..Default::default() });
+        assert_eq!(
+            serde_json::from_str::<ReplyRef>(r#"{"id":4}"#).unwrap(),
+            ReplyRef {
+                id: 4,
+                ..Default::default()
+            }
+        );
     }
 }

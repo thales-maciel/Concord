@@ -1,4 +1,4 @@
-//! Server soundboard UI: the "Sons" panel of the voice bar, adding / renaming / deleting sounds,
+//! Server soundboard UI: the "Sounds" panel of the voice bar, adding / renaming / deleting sounds,
 //! the settings section, and the brief flash on the tile of whoever played a sound.
 //!
 //! The network and audio side lives in `backend/sounds.rs`: it keeps the list, downloads and
@@ -11,10 +11,15 @@ use std::path::PathBuf;
 use std::sync::mpsc as std_mpsc;
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, Align2, Color32, FontId, Margin, Pos2, Rect, RichText, Sense, Stroke, Vec2};
+use eframe::egui::{
+    self, Align2, Color32, FontId, Margin, Pos2, Rect, RichText, Sense, Stroke, Vec2,
+};
 use serde::{Deserialize, Serialize};
 use vox_client_core::soundboard::Trim;
-use vox_proto::{clean_sound_emoji, clean_sound_name, may_edit_sound, Sound, SoundId, User, UserId, SOUND_MAX_COUNT, SOUND_NAME_MAX};
+use vox_proto::{
+    clean_sound_emoji, clean_sound_name, may_edit_sound, Sound, SoundId, User, UserId,
+    SOUND_MAX_COUNT, SOUND_NAME_MAX,
+};
 
 use crate::app::App;
 use crate::backend::Cmd;
@@ -26,7 +31,10 @@ use crate::ui_kit::{self, IconState, Kind, Size};
 /// Shown on a sound that has no emoji.
 const DEFAULT_EMOJI: &str = "🔊";
 /// A few emojis to pick from when adding or renaming (any emoji can be typed or pasted too).
-const QUICK_EMOJI: [&str; 20] = ["🎺", "🥁", "🎸", "😂", "🤣", "😎", "🔥", "💩", "👏", "😱", "🤔", "🙈", "🚨", "🔔", "💥", "👀", "🎉", "😭", "🐔", "🦆"];
+const QUICK_EMOJI: [&str; 20] = [
+    "🎺", "🥁", "🎸", "😂", "🤣", "😎", "🔥", "💩", "👏", "😱", "🤔", "🙈", "🚨", "🔔", "💥", "👀",
+    "🎉", "😭", "🐔", "🦆",
+];
 /// The tile of whoever played a sound lights up for this long.
 const FLASH_SECS: f32 = 2.5;
 /// Clicking sounds faster than this does nothing (the hub would refuse it anyway).
@@ -40,13 +48,13 @@ const TILE_H: f32 = 40.0;
 
 // ---------------------------------------------------------------- settings
 
-/// "Soundboard" in Configurações. Saved in settings.json (older files get the defaults).
+/// "Soundboard" in Settings. Saved in settings.json (older files get the defaults).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SoundboardSettings {
     /// 0..=100, default 50.
     pub volume_pct: u32,
-    /// "Silenciar soundboard": nobody's sounds are heard (the panel still works).
+    /// "Mute soundboard": nobody's sounds are heard (the panel still works).
     pub muted: bool,
     /// Sounds silenced one by one, per server (ids are per server).
     pub muted_sounds: BTreeMap<String, Vec<SoundId>>,
@@ -54,7 +62,11 @@ pub struct SoundboardSettings {
 
 impl Default for SoundboardSettings {
     fn default() -> Self {
-        Self { volume_pct: 50, muted: false, muted_sounds: BTreeMap::new() }
+        Self {
+            volume_pct: 50,
+            muted: false,
+            muted_sounds: BTreeMap::new(),
+        }
     }
 }
 
@@ -63,17 +75,34 @@ impl Default for SoundboardSettings {
 #[derive(Debug, Clone)]
 pub enum SoundCmd {
     /// What the backend needs to decide whether and how loud to play (sent whenever it changes).
-    Prefs { volume_pct: u32, muted: bool, muted_sounds: Vec<SoundId> },
+    Prefs {
+        volume_pct: u32,
+        muted: bool,
+        muted_sounds: Vec<SoundId>,
+    },
     /// Ask the hub to play a sound for the room.
     Play(SoundId),
     /// Hear a sound only here.
     Preview(SoundId),
     /// Decode, trim, normalise and upload an audio file. `trim`: only that part of the file (the
     /// trim editor's selection); `None`: the whole file, which must fit the 5 s limit.
-    Upload { path: PathBuf, name: String, emoji: String, trim: Option<Trim> },
-    /// "Ouvir trecho": cut the clip the way an upload would and play it here only.
-    PreviewClip { path: PathBuf, trim: Trim, output_device: Option<String> },
-    Rename { id: SoundId, name: String, emoji: String },
+    Upload {
+        path: PathBuf,
+        name: String,
+        emoji: String,
+        trim: Option<Trim>,
+    },
+    /// "Listen to clip": cut the clip the way an upload would and play it here only.
+    PreviewClip {
+        path: PathBuf,
+        trim: Trim,
+        output_device: Option<String>,
+    },
+    Rename {
+        id: SoundId,
+        name: String,
+        emoji: String,
+    },
     Delete(SoundId),
 }
 
@@ -84,7 +113,7 @@ pub enum Heard {
     Playing,
     /// Not downloaded yet: it starts as soon as it arrives.
     Downloading,
-    /// "Silenciar soundboard".
+    /// "Mute soundboard".
     Muted,
     /// This one sound is silenced.
     SoundMuted,
@@ -106,25 +135,37 @@ pub enum SoundEv {
     /// The whole soundboard state after a login, a reconnect or a change. `supported: false` is a
     /// hub without a soundboard.
     List { supported: bool, sounds: Vec<Sound> },
-    Played { sound_id: SoundId, by: User, heard: Heard },
-    /// An upload / rename / delete finished; the error is Portuguese, ready to show.
-    Done { op: SoundOp, result: Result<(), String> },
-    /// "Ouvir trecho" started (its length in ms) or could not (Portuguese text). In headless runs
+    Played {
+        sound_id: SoundId,
+        by: User,
+        heard: Heard,
+    },
+    /// An upload / rename / delete finished; the error is English, ready to show.
+    Done {
+        op: SoundOp,
+        result: Result<(), String>,
+    },
+    /// "Listen to clip" started (its length in ms) or could not (English text). In headless runs
     /// nothing is played and this is the only sign of it.
     ClipPreview(Result<u32, String>),
     /// Headless runs (`VOX_NO_PLAYBACK`): what the playback mixer produced for a sound.
-    MixerHeard { sound_id: SoundId, rms_dbfs: f32, peak: f32, ms: u32 },
+    MixerHeard {
+        sound_id: SoundId,
+        rms_dbfs: f32,
+        peak: f32,
+        ms: u32,
+    },
 }
 
-/// A hub error text for a sound action, in Portuguese (anything else keeps the generic form).
+/// A hub error text for a sound action, in English (anything else keeps the generic form).
 pub fn server_error_text(error: &str) -> String {
     use vox_proto::*;
     match error {
-        ERR_SOUND_RATE_LIMITED => "Calma: espere um instante para tocar outro som.".into(),
-        ERR_SOUND_NOT_IN_VOICE => "Entre em um canal de voz para tocar sons.".into(),
-        ERR_SOUND_UNKNOWN => "Esse som não existe mais.".into(),
-        ERR_SOUND_SERVER_MUTED => "Você está silenciado pelo servidor: os sons também ficam desligados.".into(),
-        other => format!("Servidor: {other}"),
+        ERR_SOUND_RATE_LIMITED => "Slow down: wait a moment before playing another sound.".into(),
+        ERR_SOUND_NOT_IN_VOICE => "Join a voice channel to play sounds.".into(),
+        ERR_SOUND_UNKNOWN => "This sound no longer exists.".into(),
+        ERR_SOUND_SERVER_MUTED => "You are server-muted: sounds are disabled too.".into(),
+        other => format!("Server: {other}"),
     }
 }
 
@@ -136,7 +177,7 @@ pub struct Flash {
     name: String,
 }
 
-/// The "Adicionar som" dialog.
+/// The "Add sound" dialog.
 pub struct AddForm {
     pub path: String,
     pub name: String,
@@ -200,12 +241,21 @@ impl App {
     }
 
     fn sound_is_muted(&self, id: SoundId) -> bool {
-        self.settings.soundboard.muted_sounds.get(&self.sound_server_key()).is_some_and(|l| l.contains(&id))
+        self.settings
+            .soundboard
+            .muted_sounds
+            .get(&self.sound_server_key())
+            .is_some_and(|l| l.contains(&id))
     }
 
     fn set_sound_muted(&mut self, id: SoundId, muted: bool) {
         let key = self.sound_server_key();
-        let list = self.settings.soundboard.muted_sounds.entry(key.clone()).or_default();
+        let list = self
+            .settings
+            .soundboard
+            .muted_sounds
+            .entry(key.clone())
+            .or_default();
         list.retain(|s| *s != id);
         if muted {
             list.push(id);
@@ -218,11 +268,25 @@ impl App {
 
     /// Tell the backend the soundboard settings when they changed. Cheap: called every frame.
     pub fn sound_tick(&mut self) {
-        let mut muted_list = self.settings.soundboard.muted_sounds.get(&self.sound_server_key()).cloned().unwrap_or_default();
+        let mut muted_list = self
+            .settings
+            .soundboard
+            .muted_sounds
+            .get(&self.sound_server_key())
+            .cloned()
+            .unwrap_or_default();
         muted_list.sort_unstable();
-        let now = (self.settings.soundboard.volume_pct.min(100), self.settings.soundboard.muted, muted_list);
+        let now = (
+            self.settings.soundboard.volume_pct.min(100),
+            self.settings.soundboard.muted,
+            muted_list,
+        );
         if self.sb.prefs_sent.as_ref() != Some(&now) {
-            self.backend.send(Cmd::Sound(SoundCmd::Prefs { volume_pct: now.0, muted: now.1, muted_sounds: now.2.clone() }));
+            self.backend.send(Cmd::Sound(SoundCmd::Prefs {
+                volume_pct: now.0,
+                muted: now.1,
+                muted_sounds: now.2.clone(),
+            }));
             self.sb.prefs_sent = Some(now);
         }
     }
@@ -233,7 +297,10 @@ impl App {
 
     pub fn on_sound_event(&mut self, ev: SoundEv) {
         match ev {
-            SoundEv::List { supported, mut sounds } => {
+            SoundEv::List {
+                supported,
+                mut sounds,
+            } => {
                 sounds.sort_by_key(|s| (s.name.to_lowercase(), s.id));
                 tracing::info!(supported, sounds = sounds.len(), "soundboard list");
                 self.sb.supported = supported;
@@ -242,16 +309,37 @@ impl App {
                     self.sb.open = false;
                 }
             }
-            SoundEv::Played { sound_id, by, heard } => {
+            SoundEv::Played {
+                sound_id,
+                by,
+                heard,
+            } => {
                 tracing::info!(sound_id, by = %by.username, ?heard, "sound played in my room");
                 self.sb.played.push((sound_id, by.id, heard));
-                let found = self.sb.find(sound_id).map(|s| (s.emoji.clone(), s.name.clone()));
+                let found = self
+                    .sb
+                    .find(sound_id)
+                    .map(|s| (s.emoji.clone(), s.name.clone()));
                 let (emoji, name) = match (found, self.repaint.ctx()) {
                     (Some((e, n)), Some(ctx)) => (shown_emoji(&ctx, &e), n),
-                    (Some((e, n)), None) => (if e.is_empty() { DEFAULT_EMOJI.to_string() } else { e }, n),
+                    (Some((e, n)), None) => (
+                        if e.is_empty() {
+                            DEFAULT_EMOJI.to_string()
+                        } else {
+                            e
+                        },
+                        n,
+                    ),
                     (None, _) => (DEFAULT_EMOJI.to_string(), String::new()),
                 };
-                self.sb.flashes.insert(by.id, Flash { at: Instant::now(), emoji, name });
+                self.sb.flashes.insert(
+                    by.id,
+                    Flash {
+                        at: Instant::now(),
+                        emoji,
+                        name,
+                    },
+                );
                 self.repaint.wake();
             }
             SoundEv::Done { op, result } => {
@@ -261,7 +349,7 @@ impl App {
                         if op == SoundOp::Upload {
                             self.sb.uploaded_ok += 1;
                             self.sb.add = None;
-                            self.sb.message = Some((true, "Som adicionado.".into()));
+                            self.sb.message = Some((true, "Sound added.".into()));
                         } else {
                             self.sb.edit = None;
                             self.sb.message = None;
@@ -284,7 +372,12 @@ impl App {
                     ed.preview_result(r);
                 }
             }
-            SoundEv::MixerHeard { sound_id, rms_dbfs, peak, ms } => {
+            SoundEv::MixerHeard {
+                sound_id,
+                rms_dbfs,
+                peak,
+                ms,
+            } => {
                 tracing::info!(target: "autotest", "AUTOTEST soundboard: mixer got sound {sound_id}: rms {rms_dbfs:.1} dBFS, peak {peak:.3}, {ms} ms");
                 self.sb.mixer_heard.push((sound_id, rms_dbfs, peak, ms));
             }
@@ -299,7 +392,10 @@ impl App {
             return;
         }
         if self.sb.last_click.is_some_and(|t| t.elapsed() < CLICK_GAP) {
-            self.sb.message = Some((false, "Calma: espere um instante para tocar outro som.".into()));
+            self.sb.message = Some((
+                false,
+                "Slow down: wait a moment before playing another sound.".into(),
+            ));
             return;
         }
         self.sb.last_click = Some(Instant::now());
@@ -316,15 +412,29 @@ impl App {
         self.add_sound_trimmed(path, name, emoji, None)
     }
 
-    /// The dialog's "Adicionar": upload `path` (or just the `trim` part of it) as `name`.
-    pub fn add_sound_trimmed(&mut self, path: PathBuf, name: &str, emoji: &str, trim: Option<Trim>) -> Result<(), String> {
-        let name = clean_sound_name(name).ok_or_else(|| format!("O nome precisa ter de 1 a {SOUND_NAME_MAX} letras."))?;
-        let emoji = clean_sound_emoji(emoji).ok_or("O emoji é inválido (só um emoji, sem espaços).")?;
+    /// The dialog's "Add": upload `path` (or just the `trim` part of it) as `name`.
+    pub fn add_sound_trimmed(
+        &mut self,
+        path: PathBuf,
+        name: &str,
+        emoji: &str,
+        trim: Option<Trim>,
+    ) -> Result<(), String> {
+        let name = clean_sound_name(name)
+            .ok_or_else(|| format!("Names must contain 1 to {SOUND_NAME_MAX} characters."))?;
+        let emoji = clean_sound_emoji(emoji).ok_or("Invalid emoji (one emoji only, no spaces).")?;
         if self.sb.sounds.len() >= SOUND_MAX_COUNT {
-            return Err(format!("O soundboard está cheio ({SOUND_MAX_COUNT} sons). Apague algum antes."));
+            return Err(format!(
+                "The soundboard is full ({SOUND_MAX_COUNT} sounds). Delete a sound first."
+            ));
         }
         self.sb.busy = true;
-        self.backend.send(Cmd::Sound(SoundCmd::Upload { path, name, emoji, trim }));
+        self.backend.send(Cmd::Sound(SoundCmd::Upload {
+            path,
+            name,
+            emoji,
+            trim,
+        }));
         Ok(())
     }
 
@@ -343,7 +453,8 @@ impl App {
     }
 
     fn can_edit_sound(&self, s: &Sound) -> bool {
-        self.my_id().is_some_and(|me| may_edit_sound(self.my_role(), me, s.uploader.id))
+        self.my_id()
+            .is_some_and(|me| may_edit_sound(self.my_role(), me, s.uploader.id))
     }
 
     // ------------------------------------------------------------ windows
@@ -359,7 +470,7 @@ impl App {
     }
 
     /// The soundboard popup above the voice dock: a search, the grid of sounds, the volume and
-    /// "Adicionar".
+    /// "Add".
     fn soundboard_panel(&mut self, ctx: &egui::Context) {
         if !self.sb.open {
             return;
@@ -392,16 +503,16 @@ impl App {
                     ui.spacing_mut().item_spacing.y = 8.0;
                     // Header: the title, how many sounds, the ✕.
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Sons").font(theme::display(size::TITLE)).color(theme::GIZ));
+                        ui.label(RichText::new("Sounds").font(theme::display(size::TITLE)).color(theme::GIZ));
                         ui.label(RichText::new(format!("{}/{SOUND_MAX_COUNT}", self.sb.sounds.len())).font(theme::body(size::SMALL)).color(theme::NEVOA));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui_kit::icon_button(ui, ph::X, "Fechar", IconState::Normal).clicked() {
+                            if ui_kit::icon_button(ui, ph::X, "Close", IconState::Normal).clicked() {
                                 close = true;
                             }
                         });
                     });
                     if !self.sb.sounds.is_empty() {
-                        ui.add(ui_kit::field(&mut self.sb.search).hint_text(format!("{}  Buscar som", ph::MAGNIFYING_GLASS)).desired_width(f32::INFINITY));
+                        ui.add(ui_kit::field(&mut self.sb.search).hint_text(format!("{}  Search sounds", ph::MAGNIFYING_GLASS)).desired_width(f32::INFINITY));
                     }
                     if let Some((ok, text)) = self.sb.message.clone() {
                         let (icon, color) = if ok { (ph::CHECK, theme::ONLINE) } else { (ph::WARNING, theme::AO_VIVO) };
@@ -410,7 +521,7 @@ impl App {
                     if self.sb.sounds.is_empty() {
                         ui.add(
                             egui::Label::new(
-                                RichText::new("Nenhum som ainda. Adicione o primeiro: um arquivo WAV, MP3, OGG, OPUS, M4A, WEBM ou FLAC (até 10 minutos); você escolhe o trecho de até 5 segundos.")
+                                RichText::new("No sounds yet. Add the first: a WAV, MP3, OGG, OPUS, M4A, WEBM or FLAC file (up to 10 minutes); choose a clip of up to 5 seconds.")
                                     .color(theme::NEVOA),
                             )
                             .wrap(),
@@ -419,7 +530,7 @@ impl App {
                     let query = self.sb.search.trim().to_lowercase();
                     let shown: Vec<usize> = (0..self.sb.sounds.len()).filter(|&i| query.is_empty() || self.sb.sounds[i].name.to_lowercase().contains(&query)).collect();
                     if shown.is_empty() && !self.sb.sounds.is_empty() {
-                        ui.label(RichText::new("Nenhum som com esse nome.").color(theme::NEVOA));
+                        ui.label(RichText::new("No sound with that name.").color(theme::NEVOA));
                     }
                     egui::ScrollArea::vertical().id_salt("soundboard_grid").auto_shrink([false, true]).max_height((screen.height() - 260.0).clamp(120.0, 330.0)).show(ui, |ui| {
                         let ctx = ui.ctx().clone();
@@ -434,11 +545,11 @@ impl App {
                                     let emoji = shown_emoji(&ctx, &s.emoji);
                                     let (tile, listen) = sound_tile(ui, tile_w, &emoji, &s.name, muted_here);
                                     let tile = tile.on_hover_text(format!(
-                                        "{}\npor {} · {}{}\nClique: toca para a sala · botão direito: mais opções",
+                                        "{}\nby {} · {}{}\nClick: play to room · right-click: more options",
                                         s.name,
                                         s.uploader.shown_name(),
                                         dur_text(s.duration_ms),
-                                        if muted_here { "\n(silenciado só para você)" } else { "" }
+                                        if muted_here { "\n(muted only for you)" } else { "" }
                                     ));
                                     if listen {
                                         preview = Some(s.id);
@@ -448,22 +559,22 @@ impl App {
                                     tile.context_menu(|ui| {
                                         ui.set_min_width(220.0);
                                         ui.label(RichText::new(&s.name).font(theme::semibold(size::BUTTON)).color(theme::GIZ));
-                                        if ui_kit::menu_row(ui, ph::HEADPHONES, "Ouvir só aqui", false).clicked() {
+                                        if ui_kit::menu_row(ui, ph::HEADPHONES, "Listen locally", false).clicked() {
                                             preview = Some(s.id);
                                             ui.close();
                                         }
-                                        let (icon, text) = if muted_here { (ph::SPEAKER_HIGH, "Reativar este som") } else { (ph::SPEAKER_SLASH, "Silenciar este som (só para mim)") };
+                                        let (icon, text) = if muted_here { (ph::SPEAKER_HIGH, "Unmute this sound") } else { (ph::SPEAKER_SLASH, "Mute this sound (only for me)") };
                                         if ui_kit::menu_row(ui, icon, text, false).clicked() {
                                             mute_toggle = Some((s.id, !muted_here));
                                             ui.close();
                                         }
                                         if can_edit {
                                             ui.separator();
-                                            if ui_kit::menu_row(ui, ph::PENCIL_SIMPLE, "Renomear…", false).clicked() {
+                                            if ui_kit::menu_row(ui, ph::PENCIL_SIMPLE, "Rename…", false).clicked() {
                                                 edit = Some(s.clone());
                                                 ui.close();
                                             }
-                                            if ui_kit::menu_row(ui, ph::TRASH, "Apagar", true).clicked() {
+                                            if ui_kit::menu_row(ui, ph::TRASH, "Delete", true).clicked() {
                                                 delete = Some((s.id, s.name.clone()));
                                                 ui.close();
                                             }
@@ -473,15 +584,15 @@ impl App {
                             });
                         }
                     });
-                    // Footer: my volume for everybody's sounds, and "Adicionar".
+                    // Footer: my volume for everybody's sounds, and "Add".
                     let (r, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), egui::Sense::hover());
                     ui.painter().hline(r.x_range(), r.center().y, Stroke::new(theme::stroke::HAIRLINE, theme::RISCO));
                     ui.horizontal(|ui| {
                         let muted = self.settings.soundboard.muted;
                         let (icon, hover, state) = if muted {
-                            (ph::SPEAKER_SLASH, "Ouvir o soundboard de novo", IconState::Off)
+                            (ph::SPEAKER_SLASH, "Unmute soundboard", IconState::Off)
                         } else {
-                            (ph::SPEAKER_HIGH, "Silenciar soundboard: só você deixa de ouvir os sons; os outros continuam ouvindo", IconState::Normal)
+                            (ph::SPEAKER_HIGH, "Mute soundboard: only you stop hearing sounds; others still hear them", IconState::Normal)
                         };
                         if ui_kit::icon_button(ui, icon, hover, state).clicked() {
                             self.settings.soundboard.muted = !muted;
@@ -489,12 +600,12 @@ impl App {
                         }
                         ui.spacing_mut().slider_width = 110.0;
                         ui.add_enabled_ui(!muted, |ui| {
-                            prefs_changed |= ui.add(egui::Slider::new(&mut self.settings.soundboard.volume_pct, 0..=100).suffix("%")).on_hover_text("Volume do soundboard (só para você)").changed();
+                            prefs_changed |= ui.add(egui::Slider::new(&mut self.settings.soundboard.volume_pct, 0..=100).suffix("%")).on_hover_text("Soundboard volume (only for you)").changed();
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let full = self.sb.sounds.len() >= SOUND_MAX_COUNT;
-                            let r = ui.add_enabled_ui(!full && !self.sb.busy, |ui| ui_kit::button_sized(ui, Kind::Secondary, Size::Small, Some(ph::UPLOAD_SIMPLE), "Adicionar")).inner;
-                            if r.on_disabled_hover_text(if full { "O soundboard está cheio: apague algum som antes" } else { "Enviando..." }).clicked() {
+                            let r = ui.add_enabled_ui(!full && !self.sb.busy, |ui| ui_kit::button_sized(ui, Kind::Secondary, Size::Small, Some(ph::UPLOAD_SIMPLE), "Add")).inner;
+                            if r.on_disabled_hover_text(if full { "The soundboard is full: delete a sound first" } else { "Sending..." }).clicked() {
                                 want_add = true;
                             }
                         });
@@ -502,8 +613,12 @@ impl App {
                 });
             });
         // Esc closes it (not while a dialog of its own, or a menu, is open over it).
-        let dialogs = self.sb.add.is_some() || self.sb.edit.is_some() || self.sb.confirm_delete.is_some();
-        if !dialogs && ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !egui::Popup::is_any_open(ctx) {
+        let dialogs =
+            self.sb.add.is_some() || self.sb.edit.is_some() || self.sb.confirm_delete.is_some();
+        if !dialogs
+            && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+            && !egui::Popup::is_any_open(ctx)
+        {
             close = true;
         }
         if want_add {
@@ -526,7 +641,11 @@ impl App {
             self.set_sound_muted(id, m);
         }
         if let Some(s) = edit {
-            self.sb.edit = Some(EditForm { id: s.id, name: s.name, emoji: s.emoji });
+            self.sb.edit = Some(EditForm {
+                id: s.id,
+                name: s.name,
+                emoji: s.emoji,
+            });
         }
         if let Some(d) = delete {
             self.sb.confirm_delete = Some(d);
@@ -534,14 +653,22 @@ impl App {
     }
 
     fn add_sound_window(&mut self, ctx: &egui::Context) {
-        let Some(mut form) = self.sb.add.take() else { return };
+        let Some(mut form) = self.sb.add.take() else {
+            return;
+        };
         let mut submit = false;
         let mut cancel = false;
         let mut pick = false;
         let mut preview = false;
         let busy = self.sb.busy;
         // A file dropped on the window.
-        let dropped = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).next_back());
+        let dropped = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .map(|f| f.path().to_path_buf())
+                .next_back()
+        });
         if let Some(p) = dropped {
             set_path(&mut form, p);
         }
@@ -559,25 +686,30 @@ impl App {
         if form.want_analyze {
             form.want_analyze = false;
             form.analyzed = form.path.clone();
-            form.trim = Some(TrimEditor::start(PathBuf::from(form.path.trim().trim_matches('"')), &self.repaint));
+            form.trim = Some(TrimEditor::start(
+                PathBuf::from(form.path.trim().trim_matches('"')),
+                &self.repaint,
+            ));
         }
         if let Some(ed) = form.trim.as_mut() {
             ed.poll();
         }
-        // Esc stays with the text fields (the ✕ and "Cancelar" close it).
-        let mut dialog = forms::Dialog::new("sound_add", "Adicionar som").icon(ph::UPLOAD_SIMPLE).width(620.0);
+        // Esc stays with the text fields (the ✕ and "Cancel" close it).
+        let mut dialog = forms::Dialog::new("sound_add", "Add sound")
+            .icon(ph::UPLOAD_SIMPLE)
+            .width(620.0);
         dialog.esc_closes = false;
         let open = dialog.show(ctx, |ui| {
-            forms::note(ui, "Escolha um arquivo de áudio (WAV, MP3, OGG, OPUS, M4A, WEBM ou FLAC) de até 10 minutos. Você marca o trecho de até 5 segundos que vira o som; o app ajusta o volume e envia.", false);
+            forms::note(ui, "Choose an audio file (WAV, MP3, OGG, OPUS, M4A, WEBM or FLAC) up to 10 minutes long. Select a clip of up to 5 seconds; the app normalizes its volume and uploads it.", false);
             ui.add_space(space::S);
             ui.horizontal(|ui| {
                 let field_w = ui.available_width() - 150.0;
-                let r = ui.add_enabled(!busy, ui_kit::field(&mut form.path).hint_text("Caminho do arquivo (ou arraste o arquivo para cá)").desired_width(field_w));
+                let r = ui.add_enabled(!busy, ui_kit::field(&mut form.path).hint_text("File path (or drag the file here)").desired_width(field_w));
                 // A typed path is read when the box is left, not on every keystroke.
                 if r.lost_focus() && !form.path.trim().is_empty() && form.path != form.analyzed {
                     form.want_analyze = true;
                 }
-                if ui.add_enabled_ui(!busy && form.picking.is_none(), |ui| ui_kit::button(ui, Kind::Secondary, Some(ph::FOLDER_OPEN), "Escolher…")).inner.clicked() {
+                if ui.add_enabled_ui(!busy && form.picking.is_none(), |ui| ui_kit::button(ui, Kind::Secondary, Some(ph::FOLDER_OPEN), "Choose…")).inner.clicked() {
                     pick = true;
                 }
             });
@@ -592,7 +724,7 @@ impl App {
                 }
             }
             forms::divider(ui);
-            forms::row(ui, "Nome e emoji", |ui| {
+            forms::row(ui, "Name and emoji", |ui| {
                 if ui.add_enabled(!busy, ui_kit::field(&mut form.name).char_limit(SOUND_NAME_MAX).desired_width(240.0)).changed() {
                     form.name_edited = true;
                 }
@@ -604,16 +736,16 @@ impl App {
             }
             forms::footer(ui, |ui| {
                 let ready = form.trim.as_ref().is_some_and(|t| t.ready()) && !form.name.trim().is_empty();
-                let r = ui.add_enabled_ui(ready && !busy, |ui| ui_kit::button(ui, Kind::Primary, Some(ph::UPLOAD_SIMPLE), "Adicionar")).inner;
-                if r.on_disabled_hover_text(if busy { "Enviando..." } else { "Escolha um arquivo e um nome" }).clicked() {
+                let r = ui.add_enabled_ui(ready && !busy, |ui| ui_kit::button(ui, Kind::Primary, Some(ph::UPLOAD_SIMPLE), "Add")).inner;
+                if r.on_disabled_hover_text(if busy { "Sending..." } else { "Choose a file and a name" }).clicked() {
                     submit = true;
                 }
-                if ui_kit::button(ui, Kind::Ghost, None, "Cancelar").clicked() {
+                if ui_kit::button(ui, Kind::Ghost, None, "Cancel").clicked() {
                     cancel = true;
                 }
                 if busy {
                     ui.spinner();
-                    ui.label(RichText::new("Processando e enviando...").color(theme::NEVOA));
+                    ui.label(RichText::new("Processing and uploading...").color(theme::NEVOA));
                 }
             });
         });
@@ -631,7 +763,12 @@ impl App {
         if submit {
             form.error = None;
             self.sb.add = Some(form);
-            let (name, emoji) = self.sb.add.as_ref().map(|f| (f.name.clone(), f.emoji.clone())).unwrap_or_default();
+            let (name, emoji) = self
+                .sb
+                .add
+                .as_ref()
+                .map(|f| (f.name.clone(), f.emoji.clone()))
+                .unwrap_or_default();
             let r = self.trim_submit(&name, &emoji);
             if let (Err(e), Some(f)) = (r, self.sb.add.as_mut()) {
                 f.error = Some(e);
@@ -650,34 +787,62 @@ impl App {
     }
 
     fn edit_sound_window(&mut self, ctx: &egui::Context) {
-        let Some(mut form) = self.sb.edit.take() else { return };
+        let Some(mut form) = self.sb.edit.take() else {
+            return;
+        };
         let mut save = false;
         let mut cancel = false;
         let busy = self.sb.busy;
-        let open = forms::Dialog::new("sound_edit", "Renomear som").icon(ph::PENCIL_SIMPLE).width(460.0).show(ctx, |ui| {
-            forms::row(ui, "Nome", |ui| {
-                ui.add(ui_kit::field(&mut form.name).char_limit(SOUND_NAME_MAX).desired_width(220.0));
-            });
-            forms::row(ui, "Emoji", |ui| {
-                ui.add(ui_kit::field(&mut form.emoji).char_limit(vox_proto::SOUND_EMOJI_MAX_CHARS).desired_width(56.0));
-            });
-            forms::indented(ui, |ui| emoji_row(ui, &mut form.emoji, false));
-            if clean_sound_name(&form.name).is_none() {
-                forms::note_colored(ui, format!("O nome precisa ter de 1 a {SOUND_NAME_MAX} letras."), true, theme::AVISO);
-            }
-            forms::footer(ui, |ui| {
-                let ok = clean_sound_name(&form.name).is_some() && clean_sound_emoji(&form.emoji).is_some() && !busy;
-                if ui.add_enabled_ui(ok, |ui| ui_kit::button(ui, Kind::Primary, None, "Salvar")).inner.clicked() {
-                    save = true;
+        let open = forms::Dialog::new("sound_edit", "Rename sound")
+            .icon(ph::PENCIL_SIMPLE)
+            .width(460.0)
+            .show(ctx, |ui| {
+                forms::row(ui, "Name", |ui| {
+                    ui.add(
+                        ui_kit::field(&mut form.name)
+                            .char_limit(SOUND_NAME_MAX)
+                            .desired_width(220.0),
+                    );
+                });
+                forms::row(ui, "Emoji", |ui| {
+                    ui.add(
+                        ui_kit::field(&mut form.emoji)
+                            .char_limit(vox_proto::SOUND_EMOJI_MAX_CHARS)
+                            .desired_width(56.0),
+                    );
+                });
+                forms::indented(ui, |ui| emoji_row(ui, &mut form.emoji, false));
+                if clean_sound_name(&form.name).is_none() {
+                    forms::note_colored(
+                        ui,
+                        format!("Names must contain 1 to {SOUND_NAME_MAX} characters."),
+                        true,
+                        theme::AVISO,
+                    );
                 }
-                if ui_kit::button(ui, Kind::Ghost, None, "Cancelar").clicked() {
-                    cancel = true;
-                }
+                forms::footer(ui, |ui| {
+                    let ok = clean_sound_name(&form.name).is_some()
+                        && clean_sound_emoji(&form.emoji).is_some()
+                        && !busy;
+                    if ui
+                        .add_enabled_ui(ok, |ui| ui_kit::button(ui, Kind::Primary, None, "Save"))
+                        .inner
+                        .clicked()
+                    {
+                        save = true;
+                    }
+                    if ui_kit::button(ui, Kind::Ghost, None, "Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
             });
-        });
         if save {
             self.sb.busy = true;
-            self.backend.send(Cmd::Sound(SoundCmd::Rename { id: form.id, name: form.name.trim().to_string(), emoji: form.emoji.trim().to_string() }));
+            self.backend.send(Cmd::Sound(SoundCmd::Rename {
+                id: form.id,
+                name: form.name.trim().to_string(),
+                emoji: form.emoji.trim().to_string(),
+            }));
         }
         if open && !cancel {
             self.sb.edit = Some(form);
@@ -685,21 +850,34 @@ impl App {
     }
 
     fn delete_sound_window(&mut self, ctx: &egui::Context) {
-        let Some((id, name)) = self.sb.confirm_delete.clone() else { return };
+        let Some((id, name)) = self.sb.confirm_delete.clone() else {
+            return;
+        };
         let mut done = false;
-        let open = forms::Dialog::new("sound_delete", "Apagar som").icon(ph::TRASH).width(400.0).show(ctx, |ui| {
-            ui.add(egui::Label::new(RichText::new(format!("Apagar o som \"{name}\" para todo mundo? Não dá para desfazer.")).color(theme::TEXTO)).wrap());
-            forms::footer(ui, |ui| {
-                if ui_kit::button(ui, Kind::Danger, Some(ph::TRASH), "Apagar").clicked() {
-                    self.sb.busy = true;
-                    self.backend.send(Cmd::Sound(SoundCmd::Delete(id)));
-                    done = true;
-                }
-                if ui_kit::button(ui, Kind::Ghost, None, "Cancelar").clicked() {
-                    done = true;
-                }
+        let open = forms::Dialog::new("sound_delete", "Delete sound")
+            .icon(ph::TRASH)
+            .width(400.0)
+            .show(ctx, |ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!(
+                            "Delete sound \"{name}\" for everyone? This cannot be undone."
+                        ))
+                        .color(theme::TEXTO),
+                    )
+                    .wrap(),
+                );
+                forms::footer(ui, |ui| {
+                    if ui_kit::button(ui, Kind::Danger, Some(ph::TRASH), "Delete").clicked() {
+                        self.sb.busy = true;
+                        self.backend.send(Cmd::Sound(SoundCmd::Delete(id)));
+                        done = true;
+                    }
+                    if ui_kit::button(ui, Kind::Ghost, None, "Cancel").clicked() {
+                        done = true;
+                    }
+                });
             });
-        });
         if done || !open {
             self.sb.confirm_delete = None;
         }
@@ -707,48 +885,83 @@ impl App {
 
     // ------------------------------------------------------------ settings section
 
-    /// Configurações → Sons. Returns whether a setting changed.
+    /// Settings → Sounds. Returns whether a setting changed.
     pub fn soundboard_settings(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        forms::group(ui, "Soundboard do servidor");
+        forms::group(ui, "Server soundboard");
         if !self.sb.supported {
             let text = if self.me.is_none() {
-                "Entre num servidor para usar o soundboard: os sons ficam guardados em cada servidor."
+                "Join a server to use the soundboard: sounds are stored on each server."
             } else {
-                "Este servidor é de uma versão antiga: não tem soundboard."
+                "This server is an older version without a soundboard."
             };
             forms::note(ui, text, false);
             ui.add_space(space::M);
         }
-        forms::row(ui, "Ouvir", |ui| {
-            changed |= ui.checkbox(&mut self.settings.soundboard.muted, "Silenciar soundboard").on_hover_text("Você deixa de ouvir os sons que os outros tocam").changed();
+        forms::row(ui, "Listen", |ui| {
+            changed |= ui
+                .checkbox(&mut self.settings.soundboard.muted, "Mute soundboard")
+                .on_hover_text("Stop hearing sounds played by others")
+                .changed();
         });
         ui.add_enabled_ui(!self.settings.soundboard.muted, |ui| {
-            forms::row(ui, "Volume do soundboard", |ui| {
-                changed |= ui.add(egui::Slider::new(&mut self.settings.soundboard.volume_pct, 0..=100).suffix("%")).changed();
+            forms::row(ui, "Soundboard volume", |ui| {
+                changed |= ui
+                    .add(
+                        egui::Slider::new(&mut self.settings.soundboard.volume_pct, 0..=100)
+                            .suffix("%"),
+                    )
+                    .changed();
             });
         });
-        forms::note(ui, "Só para você: os outros ouvem no volume deles.", true);
+        forms::note(
+            ui,
+            "Only for you: others use their own volume settings.",
+            true,
+        );
         let key = self.sound_server_key();
-        let n = self.settings.soundboard.muted_sounds.get(&key).map_or(0, Vec::len);
+        let n = self
+            .settings
+            .soundboard
+            .muted_sounds
+            .get(&key)
+            .map_or(0, Vec::len);
         if n > 0 {
-            forms::row(ui, "Sons silenciados", |ui| {
-                ui.label(RichText::new(format!("{n} som(ns) silenciado(s) só para você")).color(theme::TEXTO));
-                if ui_kit::button_sized(ui, Kind::Secondary, Size::Small, Some(ph::SPEAKER_HIGH), "Reativar todos").clicked() {
+            forms::row(ui, "Muted sounds", |ui| {
+                ui.label(
+                    RichText::new(format!("{n} sound(s) muted only for you")).color(theme::TEXTO),
+                );
+                if ui_kit::button_sized(
+                    ui,
+                    Kind::Secondary,
+                    Size::Small,
+                    Some(ph::SPEAKER_HIGH),
+                    "Unmute all",
+                )
+                .clicked()
+                {
                     self.settings.soundboard.muted_sounds.remove(&key);
                     changed = true;
                 }
             });
         }
-        forms::note(ui, "Para tocar, adicionar ou silenciar um som, use o botão Sons na barra da chamada (botão direito num som: mais opções).", false);
+        forms::note(ui, "To play, add or mute a sound, use Sounds on the call bar (right-click a sound for more options).", false);
         changed
     }
 
     // ------------------------------------------------------------ tile flash
 
     /// Light up the tile of someone who just played a sound (drawn under the tile's content).
-    pub fn paint_sound_flash(&self, painter: &egui::Painter, rect: Rect, user: UserId, with_picture_space: bool) {
-        let Some(f) = self.sb.flashes.get(&user) else { return };
+    pub fn paint_sound_flash(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        user: UserId,
+        with_picture_space: bool,
+    ) {
+        let Some(f) = self.sb.flashes.get(&user) else {
+            return;
+        };
         let age = f.at.elapsed().as_secs_f32();
         if age >= FLASH_SECS {
             return;
@@ -756,17 +969,36 @@ impl App {
         let fade = 1.0 - age / FLASH_SECS;
         let alpha = (255.0 * fade.powf(0.7)) as u8;
         let accent = theme::GIZ.gamma_multiply(alpha as f32 / 255.0);
-        painter.rect_stroke(rect.shrink(1.0), 8.0, Stroke::new(4.0, accent), egui::StrokeKind::Inside);
+        painter.rect_stroke(
+            rect.shrink(1.0),
+            8.0,
+            Stroke::new(4.0, accent),
+            egui::StrokeKind::Inside,
+        );
         let size = (rect.height() * 0.22).clamp(14.0, 40.0);
         let white = Color32::from_rgba_unmultiplied(255, 255, 255, alpha);
         if with_picture_space {
-            painter.text(Pos2::new(rect.center().x, rect.top() + size * 0.9), Align2::CENTER_CENTER, &f.emoji, FontId::proportional(size), white);
+            painter.text(
+                Pos2::new(rect.center().x, rect.top() + size * 0.9),
+                Align2::CENTER_CENTER,
+                &f.emoji,
+                FontId::proportional(size),
+                white,
+            );
         }
         if !f.name.is_empty() && rect.width() > 110.0 {
             let tag = format!("{} {}", f.emoji, f.name);
-            painter.text(rect.right_bottom() - Vec2::new(8.0, 6.0), Align2::RIGHT_BOTTOM, tag, FontId::proportional(12.0), white);
+            painter.text(
+                rect.right_bottom() - Vec2::new(8.0, 6.0),
+                Align2::RIGHT_BOTTOM,
+                tag,
+                FontId::proportional(12.0),
+                white,
+            );
         }
-        painter.ctx().request_repaint_after(Duration::from_millis(40));
+        painter
+            .ctx()
+            .request_repaint_after(Duration::from_millis(40));
     }
 }
 
@@ -776,7 +1008,9 @@ impl App {
 fn has_glyphs(ctx: &egui::Context, s: &str) -> bool {
     ctx.fonts_mut(|f| {
         let font = FontId::proportional(14.0);
-        s.chars().all(|c| matches!(c, '\u{200d}' | '\u{fe0f}' | '\u{fe0e}') || f.glyph_width(&font, c) > 0.0)
+        s.chars().all(|c| {
+            matches!(c, '\u{200d}' | '\u{fe0f}' | '\u{fe0e}') || f.glyph_width(&font, c) > 0.0
+        })
     })
 }
 
@@ -795,7 +1029,10 @@ pub(crate) fn set_path(form: &mut AddForm, p: PathBuf) {
     form.error = None;
     form.want_analyze = true;
     if !form.name_edited || form.name.trim().is_empty() {
-        let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let stem = p
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
         form.name = stem.chars().take(SOUND_NAME_MAX).collect();
         form.name_edited = false;
     }
@@ -814,10 +1051,21 @@ fn emoji_row(ui: &mut egui::Ui, emoji: &mut String, disabled: bool) {
                     if chosen {
                         ui.painter().rect_filled(rect, radius::ROW, theme::MOVEL);
                     } else if r.hovered() && ui.is_enabled() {
-                        ui.painter().rect_filled(rect, radius::ROW, theme::ROW_HOVER);
+                        ui.painter()
+                            .rect_filled(rect, radius::ROW, theme::ROW_HOVER);
                     }
-                    let fg = if ui.is_enabled() { theme::GIZ } else { theme::NEVOA };
-                    ui.painter().text(rect.center(), Align2::CENTER_CENTER, *e, FontId::proportional(16.0), fg);
+                    let fg = if ui.is_enabled() {
+                        theme::GIZ
+                    } else {
+                        theme::NEVOA
+                    };
+                    ui.painter().text(
+                        rect.center(),
+                        Align2::CENTER_CENTER,
+                        *e,
+                        FontId::proportional(16.0),
+                        fg,
+                    );
                 }
                 if r.clicked() {
                     *emoji = e.to_string();
@@ -828,11 +1076,20 @@ fn emoji_row(ui: &mut egui::Ui, emoji: &mut String, disabled: bool) {
 }
 
 /// One sound of the popup's grid: its emoji and name on [`theme::MOVEL`] (dimmed and struck
-/// through when silenced for me). On hover a small headphones button appears on the right ("Ouvir
-/// só aqui"). Returns the tile's response and whether that button was clicked.
-fn sound_tile(ui: &mut egui::Ui, w: f32, emoji: &str, name: &str, muted: bool) -> (egui::Response, bool) {
+/// through when silenced for me). On hover a small Listen locally headphones button appears
+/// on the right. Returns the tile's response and whether that button was clicked.
+fn sound_tile(
+    ui: &mut egui::Ui,
+    w: f32,
+    emoji: &str,
+    name: &str,
+    muted: bool,
+) -> (egui::Response, bool) {
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, TILE_H), Sense::click());
-    let listen_rect = Rect::from_center_size(Pos2::new(rect.right() - 18.0, rect.center().y), Vec2::splat(26.0));
+    let listen_rect = Rect::from_center_size(
+        Pos2::new(rect.right() - 18.0, rect.center().y),
+        Vec2::splat(26.0),
+    );
     let hovered = resp.hovered() || ui.rect_contains_pointer(listen_rect);
     let mut listen = false;
     if ui.is_rect_visible(rect) {
@@ -847,10 +1104,23 @@ fn sound_tile(ui: &mut egui::Ui, w: f32, emoji: &str, name: &str, muted: bool) -
         let p = ui.painter();
         p.rect_filled(rect, radius::BUTTON, fill);
         let fg = if muted { theme::NEVOA } else { theme::GIZ };
-        p.text(Pos2::new(rect.left() + 12.0, rect.center().y), Align2::LEFT_CENTER, emoji, FontId::proportional(17.0), fg);
+        p.text(
+            Pos2::new(rect.left() + 12.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            emoji,
+            FontId::proportional(17.0),
+            fg,
+        );
         let name_x = rect.left() + 38.0;
-        let right = if hovered { listen_rect.left() - 4.0 } else { rect.right() - 8.0 };
-        let mut job = egui::text::LayoutJob::single_section(name.to_string(), egui::TextFormat::simple(theme::semibold(size::BUTTON), fg));
+        let right = if hovered {
+            listen_rect.left() - 4.0
+        } else {
+            rect.right() - 8.0
+        };
+        let mut job = egui::text::LayoutJob::single_section(
+            name.to_string(),
+            egui::TextFormat::simple(theme::semibold(size::BUTTON), fg),
+        );
         job.wrap.max_width = (right - name_x).max(10.0);
         job.wrap.max_rows = 1;
         job.wrap.break_anywhere = true;
@@ -860,17 +1130,41 @@ fn sound_tile(ui: &mut egui::Ui, w: f32, emoji: &str, name: &str, muted: bool) -
         let gw = g.size().x;
         p.galley(Pos2::new(name_x, gy), g, fg);
         if muted {
-            p.hline(name_x..=name_x + gw, rect.center().y, Stroke::new(1.0, theme::NEVOA));
+            p.hline(
+                name_x..=name_x + gw,
+                rect.center().y,
+                Stroke::new(1.0, theme::NEVOA),
+            );
         }
     }
     if hovered {
         // A child over the tile (it does not move the row's cursor); added last, it takes the click.
-        let mut c = ui.new_child(egui::UiBuilder::new().id_salt(("sound_listen", name)).max_rect(listen_rect));
+        let mut c = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt(("sound_listen", name))
+                .max_rect(listen_rect),
+        );
         let (r, b) = c.allocate_exact_size(listen_rect.size(), Sense::click());
-        let fill = if b.hovered() { theme::MOVEL_PRESSED } else { Color32::TRANSPARENT };
+        let fill = if b.hovered() {
+            theme::MOVEL_PRESSED
+        } else {
+            Color32::TRANSPARENT
+        };
         c.painter().rect_filled(r, radius::ROW, fill);
-        c.painter().text(r.center(), Align2::CENTER_CENTER, ph::HEADPHONES, theme::body(15.0), if b.hovered() { theme::GIZ } else { theme::NEVOA });
-        listen = b.on_hover_text("Ouvir só aqui (a sala não ouve)").clicked();
+        c.painter().text(
+            r.center(),
+            Align2::CENTER_CENTER,
+            ph::HEADPHONES,
+            theme::body(15.0),
+            if b.hovered() {
+                theme::GIZ
+            } else {
+                theme::NEVOA
+            },
+        );
+        listen = b
+            .on_hover_text("Listen locally (the room does not hear it)")
+            .clicked();
     }
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), name));
     (resp, listen)
@@ -880,10 +1174,16 @@ fn sound_tile(ui: &mut egui::Ui, w: f32, emoji: &str, name: &str, muted: bool) -
 #[cfg(windows)]
 fn open_file_dialog(owner: Option<isize>) -> Option<PathBuf> {
     use std::os::windows::ffi::OsStringExt;
-    use windows_sys::Win32::UI::Controls::Dialogs::{GetOpenFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW};
+    use windows_sys::Win32::UI::Controls::Dialogs::{
+        GetOpenFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST,
+        OPENFILENAMEW,
+    };
     let mut file = [0u16; 2048];
-    let filter: Vec<u16> = "Áudio (wav, mp3, ogg, flac)\0*.wav;*.mp3;*.ogg;*.flac\0Todos os arquivos\0*.*\0\0".encode_utf16().collect();
-    let title: Vec<u16> = "Escolher o som\0".encode_utf16().collect();
+    let filter: Vec<u16> =
+        "Audio (wav, mp3, ogg, flac)\0*.wav;*.mp3;*.ogg;*.flac\0All files\0*.*\0\0"
+            .encode_utf16()
+            .collect();
+    let title: Vec<u16> = "Choose sound\0".encode_utf16().collect();
     // SAFETY: a zeroed OPENFILENAMEW is the documented starting point; every pointer set below
     // outlives the call, and the dialog only writes into `file` (its length is passed in).
     let ok = unsafe {
@@ -907,7 +1207,15 @@ fn open_file_dialog(owner: Option<isize>) -> Option<PathBuf> {
 
 #[cfg(target_os = "macos")]
 fn open_file_dialog(owner: Option<isize>) -> Option<PathBuf> {
-    crate::filedlg::open(owner, "Escolher o som", ("Áudio", "*.wav;*.mp3;*.ogg;*.flac"), false).ok()?.into_iter().next()
+    crate::filedlg::open(
+        owner,
+        "Choose sound",
+        ("Audio", "*.wav;*.mp3;*.ogg;*.flac"),
+        false,
+    )
+    .ok()?
+    .into_iter()
+    .next()
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
@@ -925,16 +1233,20 @@ mod tests {
         assert_eq!((s.volume_pct, s.muted), (50, false));
         // An old settings.json without the section gets the defaults.
         let old: crate::settings::Settings = serde_json::from_str(r#"{"server":"x"}"#).unwrap();
-        assert_eq!((old.soundboard.volume_pct, old.soundboard.muted), (50, false));
-        let round: SoundboardSettings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(
+            (old.soundboard.volume_pct, old.soundboard.muted),
+            (50, false)
+        );
+        let round: SoundboardSettings =
+            serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(round.volume_pct, 50);
     }
 
     #[test]
     fn hub_errors_are_translated() {
-        assert!(server_error_text(vox_proto::ERR_SOUND_RATE_LIMITED).starts_with("Calma"));
-        assert!(server_error_text(vox_proto::ERR_SOUND_NOT_IN_VOICE).contains("voz"));
-        assert_eq!(server_error_text("boom"), "Servidor: boom");
+        assert!(server_error_text(vox_proto::ERR_SOUND_RATE_LIMITED).starts_with("Slow down"));
+        assert!(server_error_text(vox_proto::ERR_SOUND_NOT_IN_VOICE).contains("voice"));
+        assert_eq!(server_error_text("boom"), "Server: boom");
     }
 
     #[test]
@@ -951,17 +1263,26 @@ mod tests {
             want_analyze: false,
         };
         set_path(&mut f, PathBuf::from("sons/buzina de carro.mp3"));
-        assert_eq!((f.name.as_str(), f.error.is_none()), ("buzina de carro", true));
+        assert_eq!(
+            (f.name.as_str(), f.error.is_none()),
+            ("buzina de carro", true)
+        );
         set_path(&mut f, PathBuf::from("sons/outra.wav"));
         assert_eq!(f.name, "outra", "still the file's name: nobody typed one");
         f.name = "meu nome".into();
         f.name_edited = true;
         set_path(&mut f, PathBuf::from("sons/terceira.ogg"));
         assert_eq!(f.name, "meu nome");
-        set_path(&mut f, PathBuf::from(format!("sons/{}.wav", "x".repeat(60))));
+        set_path(
+            &mut f,
+            PathBuf::from(format!("sons/{}.wav", "x".repeat(60))),
+        );
         assert_eq!(f.name, "meu nome");
         f.name_edited = false;
-        set_path(&mut f, PathBuf::from(format!("sons/{}.wav", "x".repeat(60))));
+        set_path(
+            &mut f,
+            PathBuf::from(format!("sons/{}.wav", "x".repeat(60))),
+        );
         assert_eq!(f.name.chars().count(), SOUND_NAME_MAX);
     }
 }

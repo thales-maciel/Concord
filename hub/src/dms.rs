@@ -108,7 +108,11 @@ impl ConvRow {
     }
 
     pub fn peer_of(&self, me: UserId) -> UserId {
-        if me == self.lo { self.hi } else { self.lo }
+        if me == self.lo {
+            self.hi
+        } else {
+            self.lo
+        }
     }
 
     pub fn members(&self) -> [UserId; 2] {
@@ -116,25 +120,53 @@ impl ConvRow {
     }
 
     fn read_of(&self, me: UserId) -> DmMessageId {
-        if me == self.lo { self.lo_read } else { self.hi_read }
+        if me == self.lo {
+            self.lo_read
+        } else {
+            self.hi_read
+        }
     }
 }
 
 const CONV_COLS: &str = "id, user_lo, user_hi, last_activity_ms, lo_read_id, hi_read_id";
 
 fn conv_row(r: &rusqlite::Row) -> rusqlite::Result<ConvRow> {
-    Ok(ConvRow { id: r.get(0)?, lo: r.get(1)?, hi: r.get(2)?, last_activity_ms: r.get(3)?, lo_read: r.get(4)?, hi_read: r.get(5)? })
+    Ok(ConvRow {
+        id: r.get(0)?,
+        lo: r.get(1)?,
+        hi: r.get(2)?,
+        last_activity_ms: r.get(3)?,
+        lo_read: r.get(4)?,
+        hi_read: r.get(5)?,
+    })
 }
 
 pub fn get_conv(conn: &Connection, id: DmId) -> rusqlite::Result<Option<ConvRow>> {
-    conn.query_row(&format!("SELECT {CONV_COLS} FROM dm_conversations WHERE id = ?"), [id], conv_row).optional()
+    conn.query_row(
+        &format!("SELECT {CONV_COLS} FROM dm_conversations WHERE id = ?"),
+        [id],
+        conv_row,
+    )
+    .optional()
 }
 
 /// The conversation of `a` and `b`, created when there is none; `opener` marks it open on their side.
-pub fn open_conv(conn: &Connection, a: UserId, b: UserId, opener: UserId) -> rusqlite::Result<ConvRow> {
+pub fn open_conv(
+    conn: &Connection,
+    a: UserId,
+    b: UserId,
+    opener: UserId,
+) -> rusqlite::Result<ConvRow> {
     let (lo, hi) = if a < b { (a, b) } else { (b, a) };
     let now = now_ms();
-    let exists = conn.query_row("SELECT 1 FROM dm_conversations WHERE user_lo = ? AND user_hi = ?", params![lo, hi], |_| Ok(())).optional()?.is_some();
+    let exists = conn
+        .query_row(
+            "SELECT 1 FROM dm_conversations WHERE user_lo = ? AND user_hi = ?",
+            params![lo, hi],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
     if !exists {
         crate::ids::insert_with(conn, crate::ids::Seq::DmConversations, |id| {
             conn.execute(
@@ -144,8 +176,15 @@ pub fn open_conv(conn: &Connection, a: UserId, b: UserId, opener: UserId) -> rus
         })?;
     }
     let side = if opener == lo { "lo_open" } else { "hi_open" };
-    conn.execute(&format!("UPDATE dm_conversations SET {side} = 1 WHERE user_lo = ? AND user_hi = ?"), params![lo, hi])?;
-    conn.query_row(&format!("SELECT {CONV_COLS} FROM dm_conversations WHERE user_lo = ? AND user_hi = ?"), params![lo, hi], conv_row)
+    conn.execute(
+        &format!("UPDATE dm_conversations SET {side} = 1 WHERE user_lo = ? AND user_hi = ?"),
+        params![lo, hi],
+    )?;
+    conn.query_row(
+        &format!("SELECT {CONV_COLS} FROM dm_conversations WHERE user_lo = ? AND user_hi = ?"),
+        params![lo, hi],
+        conv_row,
+    )
 }
 
 /// My conversations: those with at least one line, plus the empty ones I opened myself.
@@ -162,9 +201,13 @@ fn my_convs(conn: &Connection, me: UserId) -> rusqlite::Result<Vec<ConvRow>> {
 
 /// Has `blocker` blocked `blocked`?
 pub fn is_blocked(conn: &Connection, blocker: UserId, blocked: UserId) -> rusqlite::Result<bool> {
-    conn.query_row("SELECT 1 FROM dm_blocks WHERE blocker_id = ? AND blocked_id = ?", params![blocker, blocked], |_| Ok(()))
-        .optional()
-        .map(|r| r.is_some())
+    conn.query_row(
+        "SELECT 1 FROM dm_blocks WHERE blocker_id = ? AND blocked_id = ?",
+        params![blocker, blocked],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|r| r.is_some())
 }
 
 /// Either of the two blocked the other.
@@ -172,11 +215,19 @@ pub fn blocked_between(conn: &Connection, a: UserId, b: UserId) -> rusqlite::Res
     Ok(is_blocked(conn, a, b)? || is_blocked(conn, b, a)?)
 }
 
-pub fn set_block(conn: &Connection, blocker: UserId, blocked: UserId, on: bool) -> rusqlite::Result<()> {
+pub fn set_block(
+    conn: &Connection,
+    blocker: UserId,
+    blocked: UserId,
+    on: bool,
+) -> rusqlite::Result<()> {
     if on {
         conn.execute("INSERT OR IGNORE INTO dm_blocks (blocker_id, blocked_id, created_at_ms) VALUES (?, ?, ?)", params![blocker, blocked, now_ms()])?;
     } else {
-        conn.execute("DELETE FROM dm_blocks WHERE blocker_id = ? AND blocked_id = ?", params![blocker, blocked])?;
+        conn.execute(
+            "DELETE FROM dm_blocks WHERE blocker_id = ? AND blocked_id = ?",
+            params![blocker, blocked],
+        )?;
     }
     Ok(())
 }
@@ -190,13 +241,22 @@ struct Pair {
 impl Pair {
     fn load(conn: &Connection, c: &ConvRow, owner: &str) -> rusqlite::Result<Pair> {
         let user = |id: UserId| -> rusqlite::Result<User> {
-            Ok(db::get_user(conn, id)?.map(|r| r.user(owner)).unwrap_or_else(|| User::new(id, format!("#{id}"))))
+            Ok(db::get_user(conn, id)?
+                .map(|r| r.user(owner))
+                .unwrap_or_else(|| User::new(id, format!("#{id}"))))
         };
-        Ok(Pair { lo: user(c.lo)?, hi: user(c.hi)? })
+        Ok(Pair {
+            lo: user(c.lo)?,
+            hi: user(c.hi)?,
+        })
     }
 
     fn get(&self, id: UserId) -> User {
-        if id == self.lo.id { self.lo.clone() } else { self.hi.clone() }
+        if id == self.lo.id {
+            self.lo.clone()
+        } else {
+            self.hi.clone()
+        }
     }
 }
 
@@ -222,8 +282,17 @@ fn msg_row(pair: &Pair) -> impl Fn(&rusqlite::Row) -> rusqlite::Result<DmMessage
 
 /// Add a line (a message, or a call line written by the hub) and move the conversation up; the
 /// author has read their own line.
-pub fn insert_line(conn: &mut Connection, c: &ConvRow, author: UserId, kind: DmMessageKind, body: &str, call_secs: u32, owner: &str) -> rusqlite::Result<DmMessage> {
-    insert_line_with(conn, c, author, kind, body, call_secs, owner, &[], None).map(|r| r.expect("no attachments to check"))
+pub fn insert_line(
+    conn: &mut Connection,
+    c: &ConvRow,
+    author: UserId,
+    kind: DmMessageKind,
+    body: &str,
+    call_secs: u32,
+    owner: &str,
+) -> rusqlite::Result<DmMessage> {
+    insert_line_with(conn, c, author, kind, body, call_secs, owner, &[], None)
+        .map(|r| r.expect("no attachments to check"))
 }
 
 /// [`insert_line`] with images: `attachments` must be the author's pending uploads (checked in the
@@ -256,20 +325,46 @@ pub fn insert_line_with(
         )?;
         Ok(id)
     })?;
-    let side = if author == c.lo { "lo_read_id" } else { "hi_read_id" };
+    let side = if author == c.lo {
+        "lo_read_id"
+    } else {
+        "hi_read_id"
+    };
     tx.execute(&format!("UPDATE dm_conversations SET last_activity_ms = ?, {side} = MAX({side}, ?) WHERE id = ?"), params![now, id, c.id])?;
     let pair = Pair::load(&tx, c, owner)?;
     let linked = crate::attachments::link(&tx, attachments, crate::attachments::Owner::Dm(id))?;
-    let msg = DmMessage { id, dm_id: c.id, author: pair.get(author), content: body.to_string(), created_at_ms: now, kind, call_secs, attachments: linked, reply, reactions: Vec::new() };
+    let msg = DmMessage {
+        id,
+        dm_id: c.id,
+        author: pair.get(author),
+        content: body.to_string(),
+        created_at_ms: now,
+        kind,
+        call_secs,
+        attachments: linked,
+        reply,
+        reactions: Vec::new(),
+    };
     tx.commit()?;
     Ok(Ok(msg))
 }
 
 /// Newest first; `before` is an exclusive id cursor.
-pub fn list_lines(conn: &Connection, c: &ConvRow, before: Option<DmMessageId>, limit: i64, owner: &str) -> rusqlite::Result<Vec<DmMessage>> {
+pub fn list_lines(
+    conn: &Connection,
+    c: &ConvRow,
+    before: Option<DmMessageId>,
+    limit: i64,
+    owner: &str,
+) -> rusqlite::Result<Vec<DmMessage>> {
     let pair = Pair::load(conn, c, owner)?;
-    let mut st = conn.prepare(&format!("SELECT {MSG_COLS} FROM dm_messages WHERE dm_id = ?1 AND id < ?2 ORDER BY id DESC LIMIT ?3"))?;
-    let rows = st.query_map(params![c.id, before.unwrap_or(i64::MAX), limit], msg_row(&pair))?;
+    let mut st = conn.prepare(&format!(
+        "SELECT {MSG_COLS} FROM dm_messages WHERE dm_id = ?1 AND id < ?2 ORDER BY id DESC LIMIT ?3"
+    ))?;
+    let rows = st.query_map(
+        params![c.id, before.unwrap_or(i64::MAX), limit],
+        msg_row(&pair),
+    )?;
     let mut lines = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     crate::attachments::fill_dm_messages(conn, &mut lines)?;
     crate::chat::fill_dm_lines(conn, &mut lines, owner)?;
@@ -277,10 +372,19 @@ pub fn list_lines(conn: &Connection, c: &ConvRow, before: Option<DmMessageId>, l
 }
 
 /// The conversation as `me` sees it.
-fn view(conn: &Connection, c: &ConvRow, me: UserId, owner: &str) -> rusqlite::Result<DmConversation> {
+fn view(
+    conn: &Connection,
+    c: &ConvRow,
+    me: UserId,
+    owner: &str,
+) -> rusqlite::Result<DmConversation> {
     let pair = Pair::load(conn, c, owner)?;
     let mut last_message = conn
-        .query_row(&format!("SELECT {MSG_COLS} FROM dm_messages WHERE dm_id = ? ORDER BY id DESC LIMIT 1"), [c.id], msg_row(&pair))
+        .query_row(
+            &format!("SELECT {MSG_COLS} FROM dm_messages WHERE dm_id = ? ORDER BY id DESC LIMIT 1"),
+            [c.id],
+            msg_row(&pair),
+        )
         .optional()?;
     if let Some(m) = last_message.as_mut() {
         crate::attachments::fill_dm_messages(conn, std::slice::from_mut(m))?;
@@ -323,7 +427,9 @@ pub async fn conversation_of(s: &AppState, me: UserId, id: DmId) -> Result<ConvR
 }
 
 async fn user_row(s: &AppState, id: UserId) -> Result<UserRow, ApiErr> {
-    s.db.call(move |c| db::get_user(c, id)).await?.ok_or_else(|| ApiErr::new(StatusCode::NOT_FOUND, "user not found"))
+    s.db.call(move |c| db::get_user(c, id))
+        .await?
+        .ok_or_else(|| ApiErr::new(StatusCode::NOT_FOUND, "user not found"))
 }
 
 /// Tell the two people of `c` (and nobody else).
@@ -332,10 +438,25 @@ pub fn tell_both(s: &AppState, c: &ConvRow, ev: &ServerEvent) {
 }
 
 /// Write a line and tell both people about it.
-pub async fn add_line(s: &AppState, c: &ConvRow, author: UserId, kind: DmMessageKind, body: String, call_secs: u32) -> Result<DmMessage, ApiErr> {
+pub async fn add_line(
+    s: &AppState,
+    c: &ConvRow,
+    author: UserId,
+    kind: DmMessageKind,
+    body: String,
+    call_secs: u32,
+) -> Result<DmMessage, ApiErr> {
     let (conv, owner) = (c.clone(), s.owner());
-    let message = s.db.call(move |db| insert_line(db, &conv, author, kind, &body, call_secs, &owner)).await?;
-    tell_both(s, c, &ServerEvent::DmMessageCreated { message: message.clone() });
+    let message =
+        s.db.call(move |db| insert_line(db, &conv, author, kind, &body, call_secs, &owner))
+            .await?;
+    tell_both(
+        s,
+        c,
+        &ServerEvent::DmMessageCreated {
+            message: message.clone(),
+        },
+    );
     Ok(message)
 }
 
@@ -344,11 +465,13 @@ pub async fn add_line(s: &AppState, c: &ConvRow, author: UserId, kind: DmMessage
 /// `GET /api/dms`
 async fn list(State(s): State<AppState>, AuthUser(me): AuthUser) -> ApiResult<Vec<DmConversation>> {
     let owner = s.owner();
-    let list = s
-        .db
-        .call(move |c| {
+    let list =
+        s.db.call(move |c| {
             let convs = my_convs(c, me.id)?;
-            convs.iter().map(|conv| view(c, conv, me.id, &owner)).collect::<rusqlite::Result<Vec<_>>>()
+            convs
+                .iter()
+                .map(|conv| view(c, conv, me.id, &owner))
+                .collect::<rusqlite::Result<Vec<_>>>()
         })
         .await?;
     Ok(Json(list))
@@ -358,19 +481,27 @@ async fn list(State(s): State<AppState>, AuthUser(me): AuthUser) -> ApiResult<Ve
 async fn people(State(s): State<AppState>, AuthUser(me): AuthUser) -> ApiResult<Vec<User>> {
     let owner = s.owner();
     let rows = s.db.call(|c| db::list_users(c)).await?;
-    Ok(Json(rows.into_iter().filter(|r| r.id != me.id).map(|r| r.user(&owner)).collect()))
+    Ok(Json(
+        rows.into_iter()
+            .filter(|r| r.id != me.id)
+            .map(|r| r.user(&owner))
+            .collect(),
+    ))
 }
 
 /// `POST /api/dms/{user_id}`: my conversation with that person (created if needed).
-async fn open(State(s): State<AppState>, AuthUser(me): AuthUser, Path(other): Path<UserId>) -> ApiResult<DmConversation> {
+async fn open(
+    State(s): State<AppState>,
+    AuthUser(me): AuthUser,
+    Path(other): Path<UserId>,
+) -> ApiResult<DmConversation> {
     if other == me.id {
         return Err(ApiErr::new(StatusCode::BAD_REQUEST, "that is you"));
     }
     user_row(&s, other).await?;
     let owner = s.owner();
-    let conv = s
-        .db
-        .call(move |c| {
+    let conv =
+        s.db.call(move |c| {
             let row = open_conv(c, me.id, other, me.id)?;
             view(c, &row, me.id, &owner)
         })
@@ -386,21 +517,37 @@ struct PageQuery {
 }
 
 /// `GET /api/dms/{id}/messages?before=&limit=`
-async fn messages(State(s): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<DmId>, Query(q): Query<PageQuery>) -> ApiResult<Vec<DmMessage>> {
+async fn messages(
+    State(s): State<AppState>,
+    AuthUser(me): AuthUser,
+    Path(id): Path<DmId>,
+    Query(q): Query<PageQuery>,
+) -> ApiResult<Vec<DmMessage>> {
     let conv = conversation_of(&s, me.id, id).await?;
     let limit = q.limit.unwrap_or(50).clamp(1, DM_PAGE_MAX as i64);
     let owner = s.owner();
-    Ok(Json(s.db.call(move |c| list_lines(c, &conv, q.before, limit, &owner)).await?))
+    Ok(Json(
+        s.db.call(move |c| list_lines(c, &conv, q.before, limit, &owner))
+            .await?,
+    ))
 }
 
 /// `POST /api/dms/{id}/messages`
-async fn send(State(s): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<DmId>, body: Result<Json<DmSendRequest>, JsonRejection>) -> ApiResult<DmMessage> {
+async fn send(
+    State(s): State<AppState>,
+    AuthUser(me): AuthUser,
+    Path(id): Path<DmId>,
+    body: Result<Json<DmSendRequest>, JsonRejection>,
+) -> ApiResult<DmMessage> {
     let Json(req) = body?;
     let conv = conversation_of(&s, me.id, id).await?;
     let content = req.content.trim().to_string();
     let n = content.chars().count();
     if (n == 0 && req.attachments.is_empty()) || n > DM_MESSAGE_MAX_CHARS {
-        return Err(ApiErr::new(StatusCode::BAD_REQUEST, format!("message must be 1-{DM_MESSAGE_MAX_CHARS} characters")));
+        return Err(ApiErr::new(
+            StatusCode::BAD_REQUEST,
+            format!("message must be 1-{DM_MESSAGE_MAX_CHARS} characters"),
+        ));
     }
     let (a, b) = (me.id, conv.peer_of(me.id));
     if s.db.call(move |c| blocked_between(c, a, b)).await? {
@@ -408,27 +555,63 @@ async fn send(State(s): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<
     }
     // The same bucket as the channels: ~5 messages a second per person, wherever they go.
     if !s.allow_message(me.id) {
-        return Err(ApiErr::new(StatusCode::TOO_MANY_REQUESTS, "rate limited: slow down"));
+        return Err(ApiErr::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate limited: slow down",
+        ));
     }
-    let (c2, owner, me_id, ids, reply_to) = (conv.clone(), s.owner(), me.id, req.attachments.clone(), req.reply_to);
-    let message = s
-        .db
-        .call(move |db| insert_line_with(db, &c2, me_id, DmMessageKind::Text, &content, 0, &owner, &ids, reply_to))
+    let (c2, owner, me_id, ids, reply_to) = (
+        conv.clone(),
+        s.owner(),
+        me.id,
+        req.attachments.clone(),
+        req.reply_to,
+    );
+    let message =
+        s.db.call(move |db| {
+            insert_line_with(
+                db,
+                &c2,
+                me_id,
+                DmMessageKind::Text,
+                &content,
+                0,
+                &owner,
+                &ids,
+                reply_to,
+            )
+        })
         .await?
         .map_err(crate::attachments::link_err)?;
-    tell_both(&s, &conv, &ServerEvent::DmMessageCreated { message: message.clone() });
+    tell_both(
+        &s,
+        &conv,
+        &ServerEvent::DmMessageCreated {
+            message: message.clone(),
+        },
+    );
     Ok(Json(message))
 }
 
 /// `POST /api/dms/{id}/messages/{message_id}/delete`: only my own messages (call lines stay).
-async fn delete(State(s): State<AppState>, AuthUser(me): AuthUser, Path((id, message_id)): Path<(DmId, DmMessageId)>) -> ApiResult<OkResponse> {
+async fn delete(
+    State(s): State<AppState>,
+    AuthUser(me): AuthUser,
+    Path((id, message_id)): Path<(DmId, DmMessageId)>,
+) -> ApiResult<OkResponse> {
     let conv = conversation_of(&s, me.id, id).await?;
-    let found = s
-        .db
-        .call(move |c| {
-            c.query_row("SELECT author_id, kind FROM dm_messages WHERE id = ? AND dm_id = ?", params![message_id, id], |r| {
-                Ok((r.get::<_, UserId>(0)?, DmMessageKind::from_wire(&r.get::<_, String>(1)?)))
-            })
+    let found =
+        s.db.call(move |c| {
+            c.query_row(
+                "SELECT author_id, kind FROM dm_messages WHERE id = ? AND dm_id = ?",
+                params![message_id, id],
+                |r| {
+                    Ok((
+                        r.get::<_, UserId>(0)?,
+                        DmMessageKind::from_wire(&r.get::<_, String>(1)?),
+                    ))
+                },
+            )
             .optional()
         })
         .await?;
@@ -439,14 +622,20 @@ async fn delete(State(s): State<AppState>, AuthUser(me): AuthUser, Path((id, mes
         return Err(ApiErr::new(StatusCode::FORBIDDEN, "only your own messages"));
     }
     let dir = s.attachments.dir.clone();
-    s.db
-        .call(move |c| {
-            crate::attachments::unlink_dm_message(c, message_id)?;
-            c.execute("DELETE FROM dm_messages WHERE id = ?", [message_id])?;
-            crate::attachments::collect_garbage(c, &dir)
-        })
-        .await?;
-    tell_both(&s, &conv, &ServerEvent::DmMessageDeleted { dm_id: id, message_id });
+    s.db.call(move |c| {
+        crate::attachments::unlink_dm_message(c, message_id)?;
+        c.execute("DELETE FROM dm_messages WHERE id = ?", [message_id])?;
+        crate::attachments::collect_garbage(c, &dir)
+    })
+    .await?;
+    tell_both(
+        &s,
+        &conv,
+        &ServerEvent::DmMessageDeleted {
+            dm_id: id,
+            message_id,
+        },
+    );
     Ok(Json(OkResponse { ok: true }))
 }
 
@@ -466,10 +655,16 @@ async fn react(
         return Err(blocked_err());
     }
     let (e, add, me_id) = (emoji.clone(), req.add, me.id);
-    let t = s
-        .db
-        .call(move |c| {
-            let text_line = c.query_row("SELECT 1 FROM dm_messages WHERE id = ? AND dm_id = ? AND kind = 'text'", params![message_id, id], |_| Ok(())).optional()?.is_some();
+    let t =
+        s.db.call(move |c| {
+            let text_line = c
+                .query_row(
+                    "SELECT 1 FROM dm_messages WHERE id = ? AND dm_id = ? AND kind = 'text'",
+                    params![message_id, id],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
             if !text_line {
                 return Ok(crate::chat::Toggled::NoMessage);
             }
@@ -480,23 +675,52 @@ async fn react(
         return Err(err);
     }
     if t == crate::chat::Toggled::Changed {
-        tell_both(&s, &conv, &ServerEvent::DmReactionChanged { dm_id: id, message_id, emoji, user_id: me.id, added: add });
+        tell_both(
+            &s,
+            &conv,
+            &ServerEvent::DmReactionChanged {
+                dm_id: id,
+                message_id,
+                emoji,
+                user_id: me.id,
+                added: add,
+            },
+        );
     }
     Ok(Json(OkResponse { ok: true }))
 }
 
 /// `POST /api/dms/{id}/read`: my read pointer moves forward (never back, never past the end).
-async fn read(State(s): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<DmId>, body: Result<Json<DmReadRequest>, JsonRejection>) -> ApiResult<OkResponse> {
+async fn read(
+    State(s): State<AppState>,
+    AuthUser(me): AuthUser,
+    Path(id): Path<DmId>,
+    body: Result<Json<DmReadRequest>, JsonRejection>,
+) -> ApiResult<OkResponse> {
     let Json(req) = body?;
     let conv = conversation_of(&s, me.id, id).await?;
-    let side = if me.id == conv.lo { "lo_read_id" } else { "hi_read_id" };
-    let up_to = s
-        .db
-        .call(move |c| {
-            let last: i64 = c.query_row("SELECT COALESCE(MAX(id), 0) FROM dm_messages WHERE dm_id = ?", [id], |r| r.get(0))?;
+    let side = if me.id == conv.lo {
+        "lo_read_id"
+    } else {
+        "hi_read_id"
+    };
+    let up_to =
+        s.db.call(move |c| {
+            let last: i64 = c.query_row(
+                "SELECT COALESCE(MAX(id), 0) FROM dm_messages WHERE dm_id = ?",
+                [id],
+                |r| r.get(0),
+            )?;
             let to = req.up_to.clamp(0, last);
-            c.execute(&format!("UPDATE dm_conversations SET {side} = MAX({side}, ?) WHERE id = ?"), params![to, id])?;
-            c.query_row(&format!("SELECT {side} FROM dm_conversations WHERE id = ?"), [id], |r| r.get::<_, i64>(0))
+            c.execute(
+                &format!("UPDATE dm_conversations SET {side} = MAX({side}, ?) WHERE id = ?"),
+                params![to, id],
+            )?;
+            c.query_row(
+                &format!("SELECT {side} FROM dm_conversations WHERE id = ?"),
+                [id],
+                |r| r.get::<_, i64>(0),
+            )
         })
         .await?;
     s.send_to(me.id, &ServerEvent::DmRead { dm_id: id, up_to });
@@ -504,14 +728,20 @@ async fn read(State(s): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<
 }
 
 /// `POST /api/dms/blocks/{user_id}`: block (or unblock) someone. Blocking also ends a call with them.
-async fn block(State(s): State<AppState>, AuthUser(me): AuthUser, Path(other): Path<UserId>, body: Result<Json<DmBlockRequest>, JsonRejection>) -> ApiResult<OkResponse> {
+async fn block(
+    State(s): State<AppState>,
+    AuthUser(me): AuthUser,
+    Path(other): Path<UserId>,
+    body: Result<Json<DmBlockRequest>, JsonRejection>,
+) -> ApiResult<OkResponse> {
     let Json(req) = body?;
     if other == me.id {
         return Err(ApiErr::new(StatusCode::BAD_REQUEST, "that is you"));
     }
     user_row(&s, other).await?;
     let me_id = me.id;
-    s.db.call(move |c| set_block(c, me_id, other, req.blocked)).await?;
+    s.db.call(move |c| set_block(c, me_id, other, req.blocked))
+        .await?;
     tracing::info!(user = %me.username, other, blocked = req.blocked, "dm block changed");
     if req.blocked {
         crate::calls::end_between(&s, me.id, other).await;

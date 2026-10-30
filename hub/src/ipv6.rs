@@ -24,13 +24,19 @@ pub struct V6Addr {
 /// (2002::/16): an address friends on the internet can reach (if no firewall is in the way).
 pub fn is_global_v6(v6: Ipv6Addr) -> bool {
     let s = v6.segments();
-    (s[0] & 0xe000) == 0x2000 && !(s[0] == 0x2001 && (s[1] == 0x0db8 || s[1] == 0)) && s[0] != 0x2002
+    (s[0] & 0xe000) == 0x2000
+        && !(s[0] == 0x2001 && (s[1] == 0x0db8 || s[1] == 0))
+        && s[0] != 0x2002
 }
 
 /// The best global address for friends to use: current before deprecated, stable before
 /// temporary, then the system's order.
 pub fn pick(addrs: &[V6Addr]) -> Option<Ipv6Addr> {
-    addrs.iter().filter(|a| is_global_v6(a.ip)).min_by_key(|a| (a.deprecated, a.temporary)).map(|a| a.ip)
+    addrs
+        .iter()
+        .filter(|a| is_global_v6(a.ip))
+        .min_by_key(|a| (a.deprecated, a.temporary))
+        .map(|a| a.ip)
 }
 
 /// This PC's stable global IPv6, if it has one.
@@ -43,7 +49,11 @@ pub fn stable_ipv6() -> Option<Ipv6Addr> {
 /// `vox1-` code as one more address to try, so the code carries the IPv6 with no app update.
 /// A `public_host` the owner set (a DDNS name, the public IPv4) is kept: it is the address they
 /// chose.
-pub fn with_ipv6(mut hints: InviteHints, listens_on_ipv6: bool, v6: Option<Ipv6Addr>) -> InviteHints {
+pub fn with_ipv6(
+    mut hints: InviteHints,
+    listens_on_ipv6: bool,
+    v6: Option<Ipv6Addr>,
+) -> InviteHints {
     if listens_on_ipv6 && hints.public_host.is_empty() {
         if let Some(ip) = v6.filter(|ip| is_global_v6(*ip)) {
             hints.public_host = ip.to_string();
@@ -56,13 +66,18 @@ pub fn with_ipv6(mut hints: InviteHints, listens_on_ipv6: bool, v6: Option<Ipv6A
 #[cfg(windows)]
 pub fn addresses() -> Vec<V6Addr> {
     use windows::Win32::NetworkManagement::IpHelper::{
-        GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_FRIENDLY_NAME, GAA_FLAG_SKIP_MULTICAST,
-        IP_ADAPTER_ADDRESSES_LH,
+        GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
+        GAA_FLAG_SKIP_FRIENDLY_NAME, GAA_FLAG_SKIP_MULTICAST, IP_ADAPTER_ADDRESSES_LH,
     };
     use windows::Win32::NetworkManagement::Ndis::IfOperStatusUp;
-    use windows::Win32::Networking::WinSock::{IpDadStateDeprecated, IpSuffixOriginRandom, AF_INET6, SOCKADDR_IN6};
+    use windows::Win32::Networking::WinSock::{
+        IpDadStateDeprecated, IpSuffixOriginRandom, AF_INET6, SOCKADDR_IN6,
+    };
     const ERROR_BUFFER_OVERFLOW: u32 = 111;
-    let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER | GAA_FLAG_SKIP_FRIENDLY_NAME;
+    let flags = GAA_FLAG_SKIP_ANYCAST
+        | GAA_FLAG_SKIP_MULTICAST
+        | GAA_FLAG_SKIP_DNS_SERVER
+        | GAA_FLAG_SKIP_FRIENDLY_NAME;
     let mut out = Vec::new();
     let mut size: u32 = 32 * 1024;
     for _ in 0..4 {
@@ -71,7 +86,9 @@ pub fn addresses() -> Vec<V6Addr> {
         let first = buf.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
         // SAFETY: `buf` is writable for `size` bytes and suitably aligned; the API fills it with
         // a linked list of adapters that only points inside it.
-        let r = unsafe { GetAdaptersAddresses(u32::from(AF_INET6.0), flags, None, Some(first), &mut size) };
+        let r = unsafe {
+            GetAdaptersAddresses(u32::from(AF_INET6.0), flags, None, Some(first), &mut size)
+        };
         if r == ERROR_BUFFER_OVERFLOW {
             continue;
         }
@@ -112,7 +129,11 @@ pub fn addresses() -> Vec<V6Addr> {
     crate::linkpreview::ssrf::interface_addresses()
         .into_iter()
         .filter_map(|(ip, _)| match ip {
-            std::net::IpAddr::V6(ip) => Some(V6Addr { ip, temporary: false, deprecated: false }),
+            std::net::IpAddr::V6(ip) => Some(V6Addr {
+                ip,
+                temporary: false,
+                deprecated: false,
+            }),
             _ => None,
         })
         .collect()
@@ -123,7 +144,11 @@ mod tests {
     use super::*;
 
     fn a(ip: &str, temporary: bool, deprecated: bool) -> V6Addr {
-        V6Addr { ip: ip.parse().unwrap(), temporary, deprecated }
+        V6Addr {
+            ip: ip.parse().unwrap(),
+            temporary,
+            deprecated,
+        }
     }
 
     #[test]
@@ -141,9 +166,26 @@ mod tests {
         // Only temporary ones: the current one.
         assert_eq!(pick(&list[..4]), Some("3fff:0:0:1::bbbb".parse().unwrap()));
         assert_eq!(pick(&list[..3]), Some("3fff:0:0:1::aaaa".parse().unwrap()));
-        assert_eq!(pick(&list[..2]), None, "link-local and ULA are not reachable from the internet");
-        assert_eq!(pick(&[a("2001:db8::1", false, false), a("2002::1", false, false), a("2001::1", false, false)]), None);
-        for (ip, global) in [("2001:4860::1", true), ("2001:db8::1", false), ("fe80::1", false), ("fd00::1", false), ("::1", false)] {
+        assert_eq!(
+            pick(&list[..2]),
+            None,
+            "link-local and ULA are not reachable from the internet"
+        );
+        assert_eq!(
+            pick(&[
+                a("2001:db8::1", false, false),
+                a("2002::1", false, false),
+                a("2001::1", false, false)
+            ]),
+            None
+        );
+        for (ip, global) in [
+            ("2001:4860::1", true),
+            ("2001:db8::1", false),
+            ("fe80::1", false),
+            ("fd00::1", false),
+            ("::1", false),
+        ] {
             assert_eq!(is_global_v6(ip.parse().unwrap()), global, "{ip}");
         }
     }
@@ -151,15 +193,24 @@ mod tests {
     #[test]
     fn invites_get_the_ipv6_only_when_nothing_else_is_known() {
         let v6: Option<Ipv6Addr> = Some("3fff::10".parse().unwrap());
-        let empty = InviteHints { hub_port: 7890, ..Default::default() };
+        let empty = InviteHints {
+            hub_port: 7890,
+            ..Default::default()
+        };
         assert_eq!(with_ipv6(empty.clone(), true, v6).public_host, "3fff::10");
         // The owner's own public_host stays.
-        let set = InviteHints { public_host: "meuservidor.example.org".into(), ..empty.clone() };
+        let set = InviteHints {
+            public_host: "meuservidor.example.org".into(),
+            ..empty.clone()
+        };
         assert_eq!(with_ipv6(set.clone(), true, v6), set);
         // A hub that does not listen on IPv6 (ipv6 = false, or bound to one IPv4 address).
         assert_eq!(with_ipv6(empty.clone(), false, v6), empty);
         assert_eq!(with_ipv6(empty.clone(), true, None), empty);
-        assert_eq!(with_ipv6(empty.clone(), true, Some("fd00::1".parse().unwrap())), empty);
+        assert_eq!(
+            with_ipv6(empty.clone(), true, Some("fd00::1".parse().unwrap())),
+            empty
+        );
     }
 
     /// Whatever this machine has, the pick is a global address or nothing.

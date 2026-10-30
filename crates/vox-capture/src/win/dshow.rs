@@ -8,23 +8,35 @@
 use windows::core::{Interface, GUID, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Media::DirectShow::{IBaseFilter, ICreateDevEnum};
-use windows::Win32::Media::MediaFoundation::{CLSID_SystemDeviceEnum, CLSID_VideoInputDeviceCategory};
+use windows::Win32::Media::MediaFoundation::{
+    CLSID_SystemDeviceEnum, CLSID_VideoInputDeviceCategory,
+};
 use windows::Win32::System::Com::StructuredStorage::IPropertyBag;
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IEnumMoniker, IMoniker, CLSCTX_INPROC_SERVER,
-    COINIT_APARTMENTTHREADED,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IEnumMoniker, IMoniker,
+    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
 };
-use windows::Win32::System::Ole::{OleCreatePropertyFrame, ISpecifyPropertyPages};
+use windows::Win32::System::Ole::{ISpecifyPropertyPages, OleCreatePropertyFrame};
 use windows::Win32::System::Variant::{VariantClear, VARIANT, VT_BSTR};
 
 use crate::{CameraError, CameraFault, SYNTHETIC_CAMERA_ID};
 
 fn err(fault: CameraFault, detail: impl Into<String>) -> CameraError {
-    CameraError { fault, detail: detail.into() }
+    CameraError {
+        fault,
+        detail: detail.into(),
+    }
 }
 
 fn com_err(ctx: &str, e: windows_core::Error) -> CameraError {
-    err(CameraFault::Other, format!("{ctx} failed: hr=0x{:08X} {}", e.code().0 as u32, e.message()))
+    err(
+        CameraFault::Other,
+        format!(
+            "{ctx} failed: hr=0x{:08X} {}",
+            e.code().0 as u32,
+            e.message()
+        ),
+    )
 }
 
 /// The part of a device interface path that names the device itself. Media Foundation lists a
@@ -63,7 +75,8 @@ fn bag_string(bag: &IPropertyBag, name: &str) -> Option<String> {
     unsafe {
         let mut v = VARIANT::default();
         bag.Read(PCWSTR(wname.as_ptr()), &mut v, None).ok()?;
-        let out = (v.Anonymous.Anonymous.vt == VT_BSTR).then(|| v.Anonymous.Anonymous.Anonymous.bstrVal.to_string());
+        let out = (v.Anonymous.Anonymous.vt == VT_BSTR)
+            .then(|| v.Anonymous.Anonymous.Anonymous.bstrVal.to_string());
         let _ = VariantClear(&mut v);
         out
     }
@@ -73,13 +86,15 @@ fn bag_string(bag: &IPropertyBag, name: &str) -> Option<String> {
 /// its interface class swapped), else by friendly name.
 unsafe fn find_filter(device: &str) -> Result<(IBaseFilter, String), CameraError> {
     let devenum: ICreateDevEnum =
-        CoCreateInstance(&CLSID_SystemDeviceEnum, None, CLSCTX_INPROC_SERVER).map_err(|e| com_err("CoCreateInstance(SystemDeviceEnum)", e))?;
+        CoCreateInstance(&CLSID_SystemDeviceEnum, None, CLSCTX_INPROC_SERVER)
+            .map_err(|e| com_err("CoCreateInstance(SystemDeviceEnum)", e))?;
     let mut list: Option<IEnumMoniker> = None;
     devenum
         .CreateClassEnumerator(&CLSID_VideoInputDeviceCategory, &mut list, 0)
         .map_err(|e| com_err("CreateClassEnumerator(VideoInputDeviceCategory)", e))?;
     // S_FALSE (no devices) leaves the list empty.
-    let list = list.ok_or_else(|| err(CameraFault::NotFound, "no DirectShow video input device"))?;
+    let list =
+        list.ok_or_else(|| err(CameraFault::NotFound, "no DirectShow video input device"))?;
     let want_key = device_instance_key(device);
     let mut by_name: Option<(IMoniker, String)> = None;
     loop {
@@ -88,20 +103,31 @@ unsafe fn find_filter(device: &str) -> Result<(IBaseFilter, String), CameraError
             break;
         }
         let Some(m) = m[0].take() else { break };
-        let Ok(bag) = m.BindToStorage::<_, _, IPropertyBag>(None, None) else { continue };
+        let Ok(bag) = m.BindToStorage::<_, _, IPropertyBag>(None, None) else {
+            continue;
+        };
         let name = bag_string(&bag, "FriendlyName").unwrap_or_default();
         let path = bag_string(&bag, "DevicePath").unwrap_or_default();
         tracing::debug!(%name, %path, "DirectShow video input device");
         if !path.is_empty() && device_instance_key(&path) == want_key {
-            let f = m.BindToObject::<_, _, IBaseFilter>(None, None).map_err(|e| com_err("IMoniker::BindToObject(filter)", e))?;
+            let f = m
+                .BindToObject::<_, _, IBaseFilter>(None, None)
+                .map_err(|e| com_err("IMoniker::BindToObject(filter)", e))?;
             return Ok((f, name));
         }
         if by_name.is_none() && !name.is_empty() && name.eq_ignore_ascii_case(device.trim()) {
             by_name = Some((m, name));
         }
     }
-    let (m, name) = by_name.ok_or_else(|| err(CameraFault::NotFound, format!("no DirectShow filter for {device:?}")))?;
-    let f = m.BindToObject::<_, _, IBaseFilter>(None, None).map_err(|e| com_err("IMoniker::BindToObject(filter)", e))?;
+    let (m, name) = by_name.ok_or_else(|| {
+        err(
+            CameraFault::NotFound,
+            format!("no DirectShow filter for {device:?}"),
+        )
+    })?;
+    let f = m
+        .BindToObject::<_, _, IBaseFilter>(None, None)
+        .map_err(|e| com_err("IMoniker::BindToObject(filter)", e))?;
     Ok((f, name))
 }
 
@@ -109,7 +135,10 @@ unsafe fn find_filter(device: &str) -> Result<(IBaseFilter, String), CameraError
 /// the dialog is closed). Returns how many pages the driver has.
 pub fn camera_property_pages(device: &str, title: Option<&str>) -> Result<u32, CameraError> {
     if device == SYNTHETIC_CAMERA_ID {
-        return Err(err(CameraFault::Unsupported, "the synthetic camera has no driver dialog"));
+        return Err(err(
+            CameraFault::Unsupported,
+            "the synthetic camera has no driver dialog",
+        ));
     }
     let device = device.to_string();
     let title = title.map(str::to_string);
@@ -156,12 +185,18 @@ mod tests {
         let mf = r"\\?\usb#vid_046d&pid_082d&mi_00#8&1a2b3c4d&0&0000#{e5323777-f976-4f5b-9b55-b94699c46e44}\global";
         let ds = r"\\?\USB#VID_046D&PID_082D&MI_00#8&1a2b3c4d&0&0000#{65e8773d-8f56-11d0-a3b9-00a0c9223196}\global";
         assert_eq!(device_instance_key(mf), device_instance_key(ds));
-        assert_eq!(device_instance_key(mf), "usb#vid_046d&pid_082d&mi_00#8&1a2b3c4d&0&0000");
+        assert_eq!(
+            device_instance_key(mf),
+            "usb#vid_046d&pid_082d&mi_00#8&1a2b3c4d&0&0000"
+        );
         // Another port is another device instance.
         let other = r"\\?\usb#vid_046d&pid_082d&mi_00#7&2b3c4d5e&0&0000#{65e8773d-8f56-11d0-a3b9-00a0c9223196}\global";
         assert_ne!(device_instance_key(mf), device_instance_key(other));
         // A friendly name is left as it is (lowercased).
-        assert_eq!(device_instance_key("HD Pro Webcam C920"), "hd pro webcam c920");
+        assert_eq!(
+            device_instance_key("HD Pro Webcam C920"),
+            "hd pro webcam c920"
+        );
     }
 
     #[test]

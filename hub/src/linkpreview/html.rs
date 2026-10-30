@@ -90,8 +90,12 @@ pub fn parse(html: &str) -> PageMeta {
 
 fn meta(attrs: &[(String, String)], raw: &mut Raw) {
     let get = |k: &str| attrs.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
-    let (Some(content), Some(key)) = (get("content"), get("property").or_else(|| get("name")).or_else(|| get("itemprop")))
-    else {
+    let (Some(content), Some(key)) = (
+        get("content"),
+        get("property")
+            .or_else(|| get("name"))
+            .or_else(|| get("itemprop")),
+    ) else {
         return;
     };
     match key.trim().to_ascii_lowercase().as_str() {
@@ -109,12 +113,19 @@ fn meta(attrs: &[(String, String)], raw: &mut Raw) {
 
 fn finish(raw: Raw) -> PageMeta {
     let first = |opts: [Option<String>; 3], max: usize| {
-        opts.into_iter().flatten().map(|s| clean_text(&s, max)).find(|s| !s.is_empty()).unwrap_or_default()
+        opts.into_iter()
+            .flatten()
+            .map(|s| clean_text(&s, max))
+            .find(|s| !s.is_empty())
+            .unwrap_or_default()
     };
     PageMeta {
         title: first([raw.og_title, raw.tw_title, raw.html_title], MAX_TITLE),
         description: first([raw.og_desc, raw.tw_desc, raw.meta_desc], MAX_DESCRIPTION),
-        site_name: raw.og_site.map(|s| clean_text(&s, MAX_SITE_NAME)).unwrap_or_default(),
+        site_name: raw
+            .og_site
+            .map(|s| clean_text(&s, MAX_SITE_NAME))
+            .unwrap_or_default(),
         image: raw
             .og_image
             .or(raw.tw_image)
@@ -162,7 +173,10 @@ fn attributes(b: &[u8], mut i: usize) -> (Vec<(String, String)>, usize) {
             if i < b.len() && (b[i] == b'"' || b[i] == b'\'') {
                 let q = b[i];
                 let vs = i + 1;
-                let ve = b[vs..].iter().position(|&c| c == q).map_or(b.len(), |p| vs + p);
+                let ve = b[vs..]
+                    .iter()
+                    .position(|&c| c == q)
+                    .map_or(b.len(), |p| vs + p);
                 value = String::from_utf8_lossy(&b[vs..ve]).into_owned();
                 i = (ve + 1).min(b.len());
             } else {
@@ -183,14 +197,20 @@ fn find(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     if from >= hay.len() {
         return None;
     }
-    hay[from..].windows(needle.len()).position(|w| w == needle).map(|p| from + p)
+    hay[from..]
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map(|p| from + p)
 }
 
 fn find_ci(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     if from >= hay.len() {
         return None;
     }
-    hay[from..].windows(needle.len()).position(|w| w.eq_ignore_ascii_case(needle)).map(|p| from + p)
+    hay[from..]
+        .windows(needle.len())
+        .position(|w| w.eq_ignore_ascii_case(needle))
+        .map(|p| from + p)
 }
 
 /// Entities decoded, whitespace collapsed, control / bidi / zero-width characters dropped, at
@@ -241,7 +261,11 @@ pub fn decode_entities(s: &str) -> String {
         out.push_str(&rest[..p]);
         rest = &rest[p..];
         // An entity is at most ~10 characters long; look for ';' nearby.
-        let semi = rest.char_indices().take(12).find(|(_, c)| *c == ';').map(|(i, _)| i);
+        let semi = rest
+            .char_indices()
+            .take(12)
+            .find(|(_, c)| *c == ';')
+            .map(|(i, _)| i);
         let decoded = semi.and_then(|e| entity(&rest[1..e]).map(|c| (c, e)));
         match decoded {
             Some((c, e)) => {
@@ -318,9 +342,10 @@ pub fn decode_body(body: &[u8], content_type: &str) -> String {
         charset_of(&lower[p..])
     });
     match charset.as_deref() {
-        Some("iso-8859-1" | "latin1" | "latin-1" | "windows-1252" | "cp1252" | "us-ascii" | "iso-8859-15") => {
-            body.iter().map(|&c| cp1252(c)).collect()
-        }
+        Some(
+            "iso-8859-1" | "latin1" | "latin-1" | "windows-1252" | "cp1252" | "us-ascii"
+            | "iso-8859-15",
+        ) => body.iter().map(|&c| cp1252(c)).collect(),
         _ => String::from_utf8_lossy(body).into_owned(),
     }
 }
@@ -330,14 +355,17 @@ fn charset_of(s: &str) -> Option<String> {
     let p = lower.find("charset")?;
     let v = lower[p + 7..].trim_start().strip_prefix('=')?.trim_start();
     let v = v.trim_start_matches(['"', '\'']);
-    let end = v.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_')).unwrap_or(v.len());
+    let end = v
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+        .unwrap_or(v.len());
     (end > 0).then(|| v[..end].to_string())
 }
 
 fn cp1252(c: u8) -> char {
     const HIGH: [char; 32] = [
-        '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8d}', 'Ž', '\u{8f}', '\u{90}', '‘', '’',
-        '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{9d}', 'ž', 'Ÿ',
+        '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8d}', 'Ž',
+        '\u{8f}', '\u{90}', '‘', '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{9d}',
+        'ž', 'Ÿ',
     ];
     match c {
         0x80..=0x9f => HIGH[(c - 0x80) as usize],
@@ -350,19 +378,19 @@ mod tests {
     use super::*;
 
     const NEWS: &str = r#"<!DOCTYPE html>
-<html lang="pt-BR" prefix="og: https://ogp.me/ns#"><head>
+<html lang="en" prefix="og: https://ogp.me/ns#"><head>
 <meta charset="utf-8">
-<title>Título da página &#8211; Portal de Notícias</title>
+<title>Page title &#8211; News Portal</title>
 <!-- <meta property="og:title" content="commented out"> -->
-<meta name="description" content="Descrição simples da página.">
-<meta property="og:site_name" content="Portal de Notícias">
+<meta name="description" content="A simple page description.">
+<meta property="og:site_name" content="News Portal">
 <meta property="og:type" content="article" />
-<meta property="og:title" content="Governo anuncia &quot;novo plano&quot; para 2027">
-<meta property="og:description" content="Medida deve atingir  milhões
-  de brasileiros &amp; empresas.">
+<meta property="og:title" content="Government announces &quot;new plan&quot; for 2027">
+<meta property="og:description" content="Measure expected to reach  millions
+  of people &amp; businesses.">
 <meta property="og:image" content="https://cdn.portal.example/img/capa.jpg?w=1200&amp;h=630">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Outro título (twitter)">
+<meta name="twitter:title" content="Another title (twitter)">
 <script type="application/ld+json">{"headline": "<meta property='og:title' content='from script'>"}</script>
 <style>body > meta { display:none }</style>
 </head><body><h1>Oi</h1><meta property="og:title" content="from body"></body></html>"#;
@@ -370,16 +398,24 @@ mod tests {
     #[test]
     fn parses_a_news_page() {
         let m = parse(NEWS);
-        assert_eq!(m.title, "Governo anuncia \"novo plano\" para 2027");
-        assert_eq!(m.description, "Medida deve atingir milhões de brasileiros & empresas.");
-        assert_eq!(m.site_name, "Portal de Notícias");
-        assert_eq!(m.image.as_deref(), Some("https://cdn.portal.example/img/capa.jpg?w=1200&h=630"));
+        assert_eq!(m.title, "Government announces \"new plan\" for 2027");
+        assert_eq!(
+            m.description,
+            "Measure expected to reach millions of people & businesses."
+        );
+        assert_eq!(m.site_name, "News Portal");
+        assert_eq!(
+            m.image.as_deref(),
+            Some("https://cdn.portal.example/img/capa.jpg?w=1200&h=630")
+        );
     }
 
     #[test]
     fn falls_back_to_twitter_then_title_tag() {
-        let m = parse(r#"<head><title>Só o título</title><meta name="twitter:description" content="tw desc"><meta name="twitter:image" content="/a.png"></head>"#);
-        assert_eq!(m.title, "Só o título");
+        let m = parse(
+            r#"<head><title>Title only</title><meta name="twitter:description" content="tw desc"><meta name="twitter:image" content="/a.png"></head>"#,
+        );
+        assert_eq!(m.title, "Title only");
         assert_eq!(m.description, "tw desc");
         assert_eq!(m.image.as_deref(), Some("/a.png"));
         let m = parse(r#"<meta name="twitter:title" content="tw"><title>t</title>"#);
@@ -393,7 +429,16 @@ mod tests {
         assert_eq!(m.title, "Meu Site");
         assert_eq!(m.description, "desc");
         // Garbage and truncated input never panic.
-        for s in ["", "<", "<meta", "<meta property=\"og:title\" content=\"abc", "<!--", "<title>", "<<<>>>&&&;", "<meta content=>"] {
+        for s in [
+            "",
+            "<",
+            "<meta",
+            "<meta property=\"og:title\" content=\"abc",
+            "<!--",
+            "<title>",
+            "<<<>>>&&&;",
+            "<meta content=>",
+        ] {
             let _ = parse(s);
         }
     }
@@ -412,31 +457,57 @@ mod tests {
         assert_eq!(m.site_name, "YouTube");
         assert!(m.title.starts_with("Rick Astley"));
         assert!(m.description.contains("Never Gonna Give You Up"));
-        assert_eq!(m.image.as_deref(), Some("https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg"));
+        assert_eq!(
+            m.image.as_deref(),
+            Some("https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg")
+        );
     }
 
     #[test]
     fn text_is_cleaned_and_capped() {
         assert_eq!(clean_text("  a \t b\n\nc  ", 50), "a b c");
-        assert_eq!(clean_text("evil\u{202E}txt\u{200B}\u{0007}!", 50), "eviltxt!");
+        assert_eq!(
+            clean_text("evil\u{202E}txt\u{200B}\u{0007}!", 50),
+            "eviltxt!"
+        );
         let long = "palavra ".repeat(100);
         let c = clean_text(&long, 40);
         assert!(c.chars().count() <= 41 && c.ends_with('…'), "{c:?}");
-        assert_eq!(clean_text("&lt;b&gt; &amp;amp; &#x41;&#66; &unknown; &", 50), "<b> &amp; AB &unknown; &");
+        assert_eq!(
+            clean_text("&lt;b&gt; &amp;amp; &#x41;&#66; &unknown; &", 50),
+            "<b> &amp; AB &unknown; &"
+        );
     }
 
     #[test]
     fn bodies_are_decoded_by_charset() {
-        let latin1 = b"<meta charset=\"iso-8859-1\"><title>Informa\xe7\xe3o</title>";
-        assert!(decode_body(latin1, "text/html").contains("Informação"));
-        assert!(decode_body(b"<title>Informa\xe7\xe3o</title>", "text/html; charset=ISO-8859-1").contains("Informação"));
-        assert!(decode_body("<title>Informação</title>".as_bytes(), "text/html; charset=utf-8").contains("Informação"));
-        assert!(decode_body("<title>Informação</title>".as_bytes(), "text/html").contains("Informação"));
+        let latin1 = b"<meta charset=\"iso-8859-1\"><title>Caf\xe9</title>";
+        assert!(decode_body(latin1, "text/html").contains("Café"));
+        assert!(
+            decode_body(b"<title>Caf\xe9</title>", "text/html; charset=ISO-8859-1")
+                .contains("Café")
+        );
+        assert!(
+            decode_body("<title>Café</title>".as_bytes(), "text/html; charset=utf-8")
+                .contains("Café")
+        );
+        assert!(
+            decode_body("<title>Information</title>".as_bytes(), "text/html")
+                .contains("Information")
+        );
     }
 
     #[test]
     fn relative_image_is_kept_raw() {
-        assert_eq!(parse(r#"<meta property="og:image" content=" //cdn.example/x.png ">"#).image.as_deref(), Some("//cdn.example/x.png"));
-        assert_eq!(parse(r#"<meta property="og:image" content="">"#).image, None);
+        assert_eq!(
+            parse(r#"<meta property="og:image" content=" //cdn.example/x.png ">"#)
+                .image
+                .as_deref(),
+            Some("//cdn.example/x.png")
+        );
+        assert_eq!(
+            parse(r#"<meta property="og:image" content="">"#).image,
+            None
+        );
     }
 }

@@ -51,8 +51,11 @@ fn api() -> Result<&'static Api> {
         // System32 only: never pick up a planted DLL from the working directory.
         let lib = LoadLibraryExW(w!("nvEncodeAPI64.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32)
             .map_err(|e| format!("nvEncodeAPI64.dll not loadable (no NVIDIA driver?): {e}"))?;
-        let max_ver = GetProcAddress(lib, PCSTR(c"NvEncodeAPIGetMaxSupportedVersion".as_ptr().cast()))
-            .ok_or("NvEncodeAPIGetMaxSupportedVersion missing")?;
+        let max_ver = GetProcAddress(
+            lib,
+            PCSTR(c"NvEncodeAPIGetMaxSupportedVersion".as_ptr().cast()),
+        )
+        .ok_or("NvEncodeAPIGetMaxSupportedVersion missing")?;
         let create = GetProcAddress(lib, PCSTR(c"NvEncodeAPICreateInstance".as_ptr().cast()))
             .ok_or("NvEncodeAPICreateInstance missing")?;
         let max_ver: PNvEncodeAPIGetMaxSupportedVersion = std::mem::transmute(max_ver);
@@ -60,7 +63,10 @@ fn api() -> Result<&'static Api> {
         let mut v = 0u32;
         let st = max_ver(&mut v);
         if st != NV_ENC_SUCCESS {
-            return Err(format!("NvEncodeAPIGetMaxSupportedVersion: {}", status_name(st)));
+            return Err(format!(
+                "NvEncodeAPIGetMaxSupportedVersion: {}",
+                status_name(st)
+            ));
         }
         let need = (NVENCAPI_MAJOR_VERSION << 4) | NVENCAPI_MINOR_VERSION;
         if v < need {
@@ -101,7 +107,11 @@ macro_rules! nv {
 enum Stage {
     Idle,
     /// Blit queued; waiting for the fence before submitting to NVENC.
-    WaitGpu { ts_us: i64, force_idr: bool, value: u64 },
+    WaitGpu {
+        ts_us: i64,
+        force_idr: bool,
+        value: u64,
+    },
     /// Submitted to NVENC; waiting for the completion event.
     Encoding,
 }
@@ -193,7 +203,10 @@ impl NvEncoder {
         cp.capsToQuery = cap;
         let mut v = 0i32;
         let st = unsafe {
-            nv!(self.api, nvEncGetEncodeCaps(self.enc, NV_ENC_CODEC_H264_GUID, &mut cp, &mut v))
+            nv!(
+                self.api,
+                nvEncGetEncodeCaps(self.enc, NV_ENC_CODEC_H264_GUID, &mut cp, &mut v)
+            )
         };
         if st == NV_ENC_SUCCESS {
             v
@@ -234,10 +247,14 @@ impl NvEncoder {
             );
             self.check("GetEncodeGUIDs", st)?;
             if !guids[..(n as usize).min(16)].contains(&NV_ENC_CODEC_H264_GUID) {
-                return Err(CaptureError::Unsupported("NVENC: no H.264 on this GPU".into()));
+                return Err(CaptureError::Unsupported(
+                    "NVENC: no H.264 on this GPU".into(),
+                ));
             }
             if self.caps(NV_ENC_CAPS_ASYNC_ENCODE_SUPPORT) == 0 {
-                return Err(CaptureError::Unsupported("NVENC: async mode unsupported".into()));
+                return Err(CaptureError::Unsupported(
+                    "NVENC: async mode unsupported".into(),
+                ));
             }
             let (cw, ch) = (
                 self.caps(NV_ENC_CAPS_WIDTH_MAX).max(0) as u32,
@@ -250,7 +267,11 @@ impl NvEncoder {
                 )));
             }
             let max_w = p.max_width.max(p.width).min(if cw > 0 { cw } else { 4096 }) & !1;
-            let max_h = p.max_height.max(p.height).min(if ch > 0 { ch } else { 4096 }) & !1;
+            let max_h = p
+                .max_height
+                .max(p.height)
+                .min(if ch > 0 { ch } else { 4096 })
+                & !1;
             self.params.max_width = max_w;
             self.params.max_height = max_h;
 
@@ -397,7 +418,10 @@ impl NvEncoder {
         self.unregister();
         unsafe {
             if !self.bitstream.is_null() {
-                let _ = nv!(self.api, nvEncDestroyBitstreamBuffer(self.enc, self.bitstream));
+                let _ = nv!(
+                    self.api,
+                    nvEncDestroyBitstreamBuffer(self.enc, self.bitstream)
+                );
                 self.bitstream = null_mut();
             }
             if self.event_registered {
@@ -470,14 +494,19 @@ fn create_fence(device: &ID3D11Device) -> Option<(ID3D11Fence, ID3D11DeviceConte
         let ctx = device.GetImmediateContext().ok()?;
         let ctx4: ID3D11DeviceContext4 = ctx.cast().ok()?;
         let mut fence: Option<ID3D11Fence> = None;
-        dev5.CreateFence(0, D3D11_FENCE_FLAG_NONE, &mut fence).ok()?;
+        dev5.CreateFence(0, D3D11_FENCE_FLAG_NONE, &mut fence)
+            .ok()?;
         Some((fence?, ctx4))
     }
 }
 
 /// Rate-control mode, AQ, multipass, QP cap. Lookahead stays off (it adds frames of latency).
 fn apply_tuning(rc: &mut NV_ENC_RC_PARAMS, t: &NvTuning) {
-    rc.rateControlMode = if t.vbr { NV_ENC_PARAMS_RC_VBR } else { NV_ENC_PARAMS_RC_CBR };
+    rc.rateControlMode = if t.vbr {
+        NV_ENC_PARAMS_RC_VBR
+    } else {
+        NV_ENC_PARAMS_RC_CBR
+    };
     rc.flags &= !(RC_ENABLE_LOOKAHEAD
         | RC_ENABLE_AQ
         | RC_ENABLE_TEMPORAL_AQ
@@ -611,7 +640,9 @@ impl HwEncoder for NvEncoder {
                     self.params = p;
                     return Ok(());
                 }
-                Err(e) => tracing::warn!(error = %e, "NVENC reconfigure for resize failed; re-creating"),
+                Err(e) => {
+                    tracing::warn!(error = %e, "NVENC reconfigure for resize failed; re-creating")
+                }
             }
         }
         p.max_width = p.max_width.max(width);
@@ -620,7 +651,12 @@ impl HwEncoder for NvEncoder {
     }
 
     fn set_bitrate(&mut self, bps: u32) -> Result<()> {
-        set_rate(&mut self.cfg.rcParams, bps, self.params.fps, &self.params.tuning.nv);
+        set_rate(
+            &mut self.cfg.rcParams,
+            bps,
+            self.params.fps,
+            &self.params.tuning.nv,
+        );
         self.reconfigure(0)?;
         self.params.bitrate = bps;
         Ok(())
@@ -667,7 +703,10 @@ impl HwEncoder for NvEncoder {
                         let _ = nv!(api, nvEncUnlockBitstream(self.enc, self.bitstream));
                         Ok(())
                     } else {
-                        Err(CaptureError::Stopped(format!("{}", self.err("LockBitstream", st))))
+                        Err(CaptureError::Stopped(format!(
+                            "{}",
+                            self.err("LockBitstream", st)
+                        )))
                     }
                 };
                 self.stage = Stage::Idle;

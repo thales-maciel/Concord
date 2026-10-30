@@ -18,10 +18,13 @@ use vox_client_core::golive::{capture_call, SwitchRequest};
 use vox_client_core::hub::{HubClient, HubEvent, HubSender};
 use vox_client_core::stats::Reporter;
 use vox_client_core::{
-    AlertKind, JoinError, JoinStep, MicTest, MicTestConfig, NoiseControl, ShareOptions, ShareSource, UiPlayer, UserAudio, VoiceConfig, VoiceEvent, VoiceGate,
-    VoiceSession, WatchLimit,
+    AlertKind, JoinError, JoinStep, MicTest, MicTestConfig, NoiseControl, ShareOptions,
+    ShareSource, UiPlayer, UserAudio, VoiceConfig, VoiceEvent, VoiceGate, VoiceSession, WatchLimit,
 };
-use vox_proto::{ChannelId, ClientEvent, Message, MessageId, ServerEvent, User, UserId, PROTOCOL_VERSION, WATCH_STATE_REJECTED};
+use vox_proto::{
+    ChannelId, ClientEvent, Message, MessageId, ServerEvent, User, UserId, PROTOCOL_VERSION,
+    WATCH_STATE_REJECTED,
+};
 
 mod camera;
 mod sounds;
@@ -124,7 +127,7 @@ pub enum Cmd {
         identity: String,
         audio: UserAudio,
     },
-    /// "Silenciar todos": silence every other participant locally.
+    /// "Mute everyone": silence every other participant locally.
     SetOthersMuted(bool),
     /// Play a local alert sound (only the user hears it). `volume` is the alert gain (0..=1),
     /// `device` the selected output. `standalone` skips the voice session's mixer (used for the
@@ -170,14 +173,23 @@ pub enum Cmd {
     StopCamera,
     /// The camera tiles are on screen (call view shown, window not minimized).
     CamerasVisible(bool),
-    /// "Ocultar câmera para mim": hide / show one person's camera (voice identity) only for me.
-    CameraHidden { identity: String, hidden: bool },
+    /// "Hide camera for me": hide / show one person's camera (voice identity) only for me.
+    CameraHidden {
+        identity: String,
+        hidden: bool,
+    },
     /// Preview of our own Go Live in our stream tile (item 8a): on while the tile is visible,
     /// faster and bigger when it is focused.
     SharePreview(vox_capture::PreviewConfig),
     ListCameras,
     /// Settings' camera preview: `Some` = start (or restart) it with that camera, `None` = stop.
-    CameraPreview(Option<(Option<String>, Option<String>, crate::settings::CameraPreset)>),
+    CameraPreview(
+        Option<(
+            Option<String>,
+            Option<String>,
+            crate::settings::CameraPreset,
+        )>,
+    ),
     /// The saved setup (native format, image controls, mirror / rotation / zoom) of the camera
     /// chosen in the settings (v0.6). Changes go to the running camera at once; the rest waits
     /// for the next start.
@@ -186,7 +198,7 @@ pub enum Cmd {
         name: Option<String>,
         setup: vox_client_core::golive::camera::CameraSetup,
     },
-    /// "Restaurar padrão": every image control of that camera back to its default.
+    /// "Restore defaults": every image control of that camera back to its default.
     CameraResetControls {
         id: Option<String>,
         name: Option<String>,
@@ -197,12 +209,12 @@ pub enum Cmd {
         name: Option<String>,
         key: String,
     },
-    /// "Configurar câmera" is open (v0.8.1): read the running camera's controls back once a
+    /// "Configure camera" is open (v0.8.1): read the running camera's controls back once a
     /// second, so automatic values (exposure, white balance...) show as they move.
     CameraWatch(bool),
     /// Read the running camera's controls back now (after the driver's own dialog closed).
     CameraRefreshControls,
-    /// "Configurações avançadas do fabricante…": the driver's property pages for that camera
+    /// "Advanced manufacturer settings…": the driver's property pages for that camera
     /// (answer: `Ev::CameraNativeClosed` once the dialog is closed).
     CameraNativeDialog {
         id: Option<String>,
@@ -211,7 +223,7 @@ pub enum Cmd {
     /// Push-to-talk mode on/off (while on, the mic is only open while the key is held).
     SetPtt(bool),
     PttKey(bool),
-    /// "Testar microfone": open the mic and play it back locally with the gate applied.
+    /// "Test microphone": open the mic and play it back locally with the gate applied.
     /// Nothing is sent to the room, even when in voice.
     StartMicTest {
         input_device: Option<String>,
@@ -361,7 +373,7 @@ pub enum Ev {
         list: Vec<vox_capture::CameraInfo>,
         error: Option<String>,
     },
-    /// The settings preview started (`Ok`) or could not (`Err`, Portuguese).
+    /// The settings preview started (`Ok`) or could not (`Err`, English).
     CameraPreview(Result<(), String>),
     /// The native formats of the camera asked about with `Cmd::ListCameraFormats`.
     CameraFormats {
@@ -372,7 +384,7 @@ pub enum Ev {
     CameraLive(CameraLiveInfo),
     /// No camera is running any more.
     CameraLiveOff,
-    /// The driver's settings dialog was closed (`Err`: it could not be opened, Portuguese).
+    /// The driver's settings dialog was closed (`Err`: it could not be opened, English).
     CameraNativeClosed(Result<(), String>),
 }
 
@@ -393,7 +405,10 @@ pub struct AudioInfo {
 
 /// Wakes the egui loop from backend threads.
 #[derive(Clone, Default)]
-pub struct Repaint(Arc<OnceLock<eframe::egui::Context>>, Arc<std::sync::atomic::AtomicBool>);
+pub struct Repaint(
+    Arc<OnceLock<eframe::egui::Context>>,
+    Arc<std::sync::atomic::AtomicBool>,
+);
 
 impl Repaint {
     pub fn set(&self, ctx: eframe::egui::Context) {
@@ -429,7 +444,9 @@ impl Repaint {
     /// (nobody sees the meter).
     pub fn wake_if_shown(&self) {
         if let Some(c) = self.0.get() {
-            if !self.1.load(std::sync::atomic::Ordering::Relaxed) && !crate::app::window_minimized(c) {
+            if !self.1.load(std::sync::atomic::Ordering::Relaxed)
+                && !crate::app::window_minimized(c)
+            {
                 c.request_repaint();
             }
         }
@@ -513,7 +530,7 @@ enum Internal {
     Voice(u64, VoiceEvent),
     Relogin(u64),
     /// A background voice join finished (`join_gen`, channel, result). The error is already the
-    /// user-facing Portuguese message.
+    /// user-facing English message.
     Joined(u64, ChannelId, JoinOutcome),
     /// The mic test finished opening its devices (`mic_test_gen`, result).
     MicTestOpened(u64, Result<MicTest, String>),
@@ -557,7 +574,7 @@ struct Controller {
     voice_gen: u64,
     voice_channel: Option<ChannelId>,
     streaming: bool,
-    /// The running live is audio-only ("Só áudio"); announced as `audio_only` while `streaming`.
+    /// The running live is audio-only ("Audio only"); announced as `audio_only` while `streaming`.
     share_audio_only: bool,
     /// Our webcam is on in the current voice session (announced to the hub as `camera`).
     camera: bool,
@@ -596,7 +613,9 @@ struct Controller {
 }
 
 fn env_flag(name: &str) -> bool {
-    std::env::var(name).map(|v| !v.is_empty() && v != "0").unwrap_or(false)
+    std::env::var(name)
+        .map(|v| !v.is_empty() && v != "0")
+        .unwrap_or(false)
 }
 
 impl Controller {
@@ -683,12 +702,28 @@ impl Controller {
 
     async fn on_cmd(&mut self, cmd: Cmd) {
         match cmd {
-            Cmd::Connect { url, user, password, personal, device_token, remember_device, invite, guard } => {
+            Cmd::Connect {
+                url,
+                user,
+                password,
+                personal,
+                device_token,
+                remember_device,
+                invite,
+                guard,
+            } => {
                 let (url, invite) = match invite {
                     Some(join) => (pick(&join.urls, &guard).await.unwrap_or(url), join.token),
                     None => (url, None),
                 };
-                let creds = Creds { personal, device_token, user, password, invite, server_id: None };
+                let creds = Creds {
+                    personal,
+                    device_token,
+                    user,
+                    password,
+                    invite,
+                    server_id: None,
+                };
                 self.connect(url, creds, remember_device, &guard).await
             }
             Cmd::Admin(cmd) => self.admin(cmd).await,
@@ -703,10 +738,14 @@ impl Controller {
                 let out = self.out.clone();
                 tokio::spawn(async move {
                     match hub.messages(channel, before, 50).await {
-                        Ok(messages) => out.send(Ev::History { channel, before, messages }),
+                        Ok(messages) => out.send(Ev::History {
+                            channel,
+                            before,
+                            messages,
+                        }),
                         Err(e) => {
                             warn!(error = %format!("{e:#}"), channel, "loading history failed");
-                            out.send(Ev::Notice("Não foi possível carregar as mensagens.".into()));
+                            out.send(Ev::Notice("Could not load messages.".into()));
                         }
                     }
                 });
@@ -736,7 +775,10 @@ impl Controller {
             Cmd::LinkPreview { url } => {
                 let out = self.out.clone();
                 let Some(hub) = self.hub.clone() else {
-                    out.send(Ev::Preview { url, reply: vox_client_core::hub::PreviewReply::Failed("offline".into()) });
+                    out.send(Ev::Preview {
+                        url,
+                        reply: vox_client_core::hub::PreviewReply::Failed("offline".into()),
+                    });
                     return;
                 };
                 tokio::spawn(async move {
@@ -755,7 +797,11 @@ impl Controller {
                     out.send(Ev::PreviewImage { url, bytes });
                 });
             }
-            Cmd::SendMessage { channel, content, extras } => {
+            Cmd::SendMessage {
+                channel,
+                content,
+                extras,
+            } => {
                 let sent = self.hub_tx.as_ref().map(|tx| {
                     tx.send(ClientEvent::SendMessage {
                         channel_id: channel,
@@ -766,17 +812,27 @@ impl Controller {
                     })
                 });
                 if !matches!(sent, Some(Ok(()))) {
-                    self.out
-                        .send(Ev::Notice("Mensagem não enviada: sem conexão com o servidor.".into()));
+                    self.out.send(Ev::Notice(
+                        "Message not sent: not connected to the server.".into(),
+                    ));
                 }
             }
-            Cmd::React { target, message, emoji, add } => {
+            Cmd::React {
+                target,
+                message,
+                emoji,
+                add,
+            } => {
                 let Some(hub) = self.hub.clone() else { return };
                 let out = self.out.clone();
                 tokio::spawn(async move {
                     let r = match target {
-                        crate::chat_images::Target::Channel(_) => hub.react(message, &emoji, add).await,
-                        crate::chat_images::Target::Dm(dm) => hub.dm_react(dm, message, &emoji, add).await,
+                        crate::chat_images::Target::Channel(_) => {
+                            hub.react(message, &emoji, add).await
+                        }
+                        crate::chat_images::Target::Dm(dm) => {
+                            hub.dm_react(dm, message, &emoji, add).await
+                        }
                     };
                     if let Err(e) = r {
                         warn!(error = %format!("{e:#}"), "reaction failed");
@@ -785,7 +841,14 @@ impl Controller {
                 });
             }
             Cmd::JoinVoice { channel, opts } => self.join_voice(channel, opts).await,
-            Cmd::JoinDmCall { dm, accept, opts } => self.join_target(crate::app::dms::DM_CALL_CHANNEL, JoinVia::Dm { dm, accept }, opts).await,
+            Cmd::JoinDmCall { dm, accept, opts } => {
+                self.join_target(
+                    crate::app::dms::DM_CALL_CHANNEL,
+                    JoinVia::Dm { dm, accept },
+                    opts,
+                )
+                .await
+            }
             Cmd::Dm(cmd) => {
                 let out = self.out.clone();
                 let Some(hub) = self.hub.clone() else {
@@ -832,7 +895,13 @@ impl Controller {
                     t.set_volume(pct.min(200) as f32 / 100.0);
                 }
             }
-            Cmd::StartMicTest { input_device, output_device, volume_pct, gate, noise } => {
+            Cmd::StartMicTest {
+                input_device,
+                output_device,
+                volume_pct,
+                gate,
+                noise,
+            } => {
                 self.start_mic_test(input_device, output_device, volume_pct, gate, noise);
             }
             Cmd::StopMicTest => self.stop_mic_test(),
@@ -846,28 +915,42 @@ impl Controller {
                     v.set_others_muted(m);
                 }
             }
-            Cmd::PlayAlert { kind, volume, device, standalone } => self.play_alert(kind, volume, device, standalone),
+            Cmd::PlayAlert {
+                kind,
+                volume,
+                device,
+                standalone,
+            } => self.play_alert(kind, volume, device, standalone),
             Cmd::ListSources => {
                 let out = self.out.clone();
                 tokio::task::spawn_blocking(move || {
                     let mut error = None;
                     let mut unsupported = false;
-                    let windows = capture_call("list_windows", vox_capture::list_windows).unwrap_or_else(|e| {
-                        unsupported |= crate::platform::is_unsupported_any(&e);
-                        error = Some(format!("{e:#}"));
-                        Vec::new()
-                    });
-                    let monitors = capture_call("list_monitors", vox_capture::list_monitors).unwrap_or_else(|e| {
-                        unsupported |= crate::platform::is_unsupported_any(&e);
-                        error.get_or_insert(format!("{e:#}"));
-                        Vec::new()
-                    });
+                    let windows = capture_call("list_windows", vox_capture::list_windows)
+                        .unwrap_or_else(|e| {
+                            unsupported |= crate::platform::is_unsupported_any(&e);
+                            error = Some(format!("{e:#}"));
+                            Vec::new()
+                        });
+                    let monitors = capture_call("list_monitors", vox_capture::list_monitors)
+                        .unwrap_or_else(|e| {
+                            unsupported |= crate::platform::is_unsupported_any(&e);
+                            error.get_or_insert(format!("{e:#}"));
+                            Vec::new()
+                        });
                     // macOS before its capture backend: say what it is, not an error code.
                     crate::platform::note_screen_capture(unsupported);
                     if unsupported && crate::platform::screen_soon() {
-                        error = Some(format!("Transmitir a tela, uma janela ou o som de um app: {}.", crate::platform::SOON_MAC.to_lowercase()));
+                        error = Some(format!(
+                            "Share your screen, a window or an app's audio: {}.",
+                            crate::platform::SOON_MAC.to_lowercase()
+                        ));
                     }
-                    out.send(Ev::Sources { windows, monitors, error });
+                    out.send(Ev::Sources {
+                        windows,
+                        monitors,
+                        error,
+                    });
                 });
             }
             Cmd::ListDevices => {
@@ -875,10 +958,13 @@ impl Controller {
                 tokio::task::spawn_blocking(move || {
                     if crate::app::shot_privacy() {
                         // Screenshots that may be shared: generic devices, never the PC's own.
-                        let (mic, phones) = ("Microfone (headset USB)".to_string(), "Fones de ouvido (headset USB)".to_string());
+                        let (mic, phones) = (
+                            "Microphone (USB headset)".to_string(),
+                            "Headphones (USB headset)".to_string(),
+                        );
                         out.send(Ev::Devices {
-                            inputs: vec![mic.clone(), "Microfone da webcam".into()],
-                            outputs: vec![phones.clone(), "Alto-falantes".into()],
+                            inputs: vec![mic.clone(), "Webcam microphone".into()],
+                            outputs: vec![phones.clone(), "Speakers".into()],
                             default_input: Some(mic),
                             default_output: Some(phones),
                         });
@@ -894,8 +980,9 @@ impl Controller {
             }
             Cmd::StartShare { source, opts } => {
                 let Some(v) = &self.voice else {
-                    self.out
-                        .send(Ev::ShareFailed("Entre em um canal de voz antes de transmitir.".into()));
+                    self.out.send(Ev::ShareFailed(
+                        "Join a voice channel before streaming.".into(),
+                    ));
                     return;
                 };
                 match v.start_share(source.clone(), opts).await {
@@ -915,21 +1002,37 @@ impl Controller {
                             self.push_voice_state();
                         }
                         let text = format!("{e:#}");
-                        // Audio-only errors are already complete sentences in Portuguese.
-                        let msg = if source.is_audio_only() { text } else { format!("Não foi possível iniciar a transmissão: {text}") };
+                        // Audio-only errors are already complete sentences in English.
+                        let msg = if source.is_audio_only() {
+                            text
+                        } else {
+                            format!("Could not start streaming: {text}")
+                        };
                         self.out.send(Ev::ShareFailed(msg));
                     }
                 }
             }
             Cmd::SwitchShare { source, audio } => {
                 let Some(v) = &self.voice else {
-                    self.out.send(Ev::SwitchFailed("Entre em um canal de voz antes de transmitir.".into()));
+                    self.out.send(Ev::SwitchFailed(
+                        "Join a voice channel before streaming.".into(),
+                    ));
                     return;
                 };
-                match v.switch_share(SwitchRequest { source: source.clone(), audio, audio_pid: None }).await {
+                match v
+                    .switch_share(SwitchRequest {
+                        source: source.clone(),
+                        audio,
+                        audio_pid: None,
+                    })
+                    .await
+                {
                     Ok(r) => {
                         info!(from = ?r.from, to = ?source, path = ?r.path, gap_ms = r.gap.as_millis() as u64, total_ms = r.total.as_millis() as u64, audio = r.audio_after, "Go Live source switched");
-                        self.out.send(Ev::ShareSwitched { audio: r.audio_after, audio_error: r.audio_error });
+                        self.out.send(Ev::ShareSwitched {
+                            audio: r.audio_after,
+                            audio_error: r.audio_error,
+                        });
                         // (A switch can go between a screen and an audio-only live.)
                         if self.share_audio_only != source.is_audio_only() {
                             self.share_audio_only = source.is_audio_only();
@@ -938,7 +1041,9 @@ impl Controller {
                     }
                     Err(e) => {
                         warn!(error = %format!("{e:#}"), "Go Live source switch failed");
-                        self.out.send(Ev::SwitchFailed(format!("Não foi possível trocar a tela: {e:#}")));
+                        self.out.send(Ev::SwitchFailed(format!(
+                            "Could not switch the screen: {e:#}"
+                        )));
                     }
                 }
             }
@@ -966,7 +1071,8 @@ impl Controller {
                         }
                         Err(e) => {
                             warn!(error = %format!("{e:#}"), who, "watch failed");
-                            self.out.send(Ev::Notice("Não foi possível assistir essa transmissão.".into()));
+                            self.out
+                                .send(Ev::Notice("Could not watch this stream.".into()));
                             return;
                         }
                     }
@@ -1030,8 +1136,15 @@ impl Controller {
                     Err(e) => {
                         warn!(error = %e, "cannot list cameras");
                         crate::platform::note_camera(crate::platform::is_unsupported(&e));
-                        let error = if crate::platform::camera_soon() { format!("Câmera: {}.", crate::platform::SOON_MAC.to_lowercase()) } else { "Não foi possível listar as câmeras.".into() };
-                        out.send(Ev::Cameras { list: Vec::new(), error: Some(error) })
+                        let error = if crate::platform::camera_soon() {
+                            format!("Camera: {}.", crate::platform::SOON_MAC.to_lowercase())
+                        } else {
+                            "Could not list cameras.".into()
+                        };
+                        out.send(Ev::Cameras {
+                            list: Vec::new(),
+                            error: Some(error),
+                        })
                     }
                 });
             }
@@ -1083,25 +1196,42 @@ impl Controller {
         String::new()
     }
 
-    async fn start_camera(&mut self, id: Option<String>, name: Option<String>, preset: crate::settings::CameraPreset) {
+    async fn start_camera(
+        &mut self,
+        id: Option<String>,
+        name: Option<String>,
+        preset: crate::settings::CameraPreset,
+    ) {
         if self.voice.is_none() {
-            self.out.send(Ev::CameraFailed("Entre em um canal de voz antes de ligar a câmera.".into()));
+            self.out.send(Ev::CameraFailed(
+                "Join a voice channel before turning on your camera.".into(),
+            ));
             return;
         }
         // The settings preview holds the device: hand it over to the call.
         self.stop_camera_preview().await;
         let dev = (id.clone(), name.clone());
         let setup = self.cam.setup_for(&dev);
-        let device = tokio::task::spawn_blocking(move || Self::resolve_camera(id, name)).await.unwrap_or_default();
-        let opts = vox_client_core::golive::camera::CameraOptions::with_quality(device, preset.to_core()).with_setup(setup.clone());
+        let device = tokio::task::spawn_blocking(move || Self::resolve_camera(id, name))
+            .await
+            .unwrap_or_default();
+        let opts =
+            vox_client_core::golive::camera::CameraOptions::with_quality(device, preset.to_core())
+                .with_setup(setup.clone());
         let Some(v) = &self.voice else { return };
         match v.start_camera(opts).await {
             Ok(st) => {
                 self.cam.call_started(dev, setup);
                 let f = &st.format;
-                let info = format!("{} · {} {}x{} @ {:.0}", f.device, f.subtype, f.native_width, f.native_height, f.native_fps);
+                let info = format!(
+                    "{} · {} {}x{} @ {:.0}",
+                    f.device, f.subtype, f.native_width, f.native_height, f.native_fps
+                );
                 info!(encoder = %st.backend, %info, out = format!("{}x{}", f.width, f.height), "camera started");
-                self.out.send(Ev::CameraStarted { encoder: st.backend, info });
+                self.out.send(Ev::CameraStarted {
+                    encoder: st.backend,
+                    info,
+                });
             }
             Err(e) => self.out.send(Ev::CameraFailed(format!("{e:#}"))),
         }
@@ -1130,9 +1260,18 @@ impl Controller {
 
     /// Settings' preview. While the call camera is on, the settings show its self-view instead
     /// (one capture per device).
-    async fn camera_preview(&mut self, want: Option<(Option<String>, Option<String>, crate::settings::CameraPreset)>) {
+    async fn camera_preview(
+        &mut self,
+        want: Option<(
+            Option<String>,
+            Option<String>,
+            crate::settings::CameraPreset,
+        )>,
+    ) {
         self.stop_camera_preview().await;
-        let Some((id, name, preset)) = want else { return };
+        let Some((id, name, preset)) = want else {
+            return;
+        };
         if let Some(v) = &self.voice {
             if v.camera_on().await {
                 self.out.send(Ev::CameraPreview(Ok(())));
@@ -1145,7 +1284,11 @@ impl Controller {
         let started_with = setup.clone();
         let res = tokio::task::spawn_blocking(move || {
             let device = Self::resolve_camera(id, name);
-            vox_client_core::golive::camera::CameraPreview::start_with(&device, preset.to_core(), &setup)
+            vox_client_core::golive::camera::CameraPreview::start_with(
+                &device,
+                preset.to_core(),
+                &setup,
+            )
         })
         .await
         .unwrap_or_else(|e| Err(format!("{e}")));
@@ -1167,7 +1310,10 @@ impl Controller {
     /// it. With `VOX_NO_PLAYBACK` nothing is ever played; the alert is only logged.
     fn play_alert(&self, kind: AlertKind, volume: f32, device: Option<String>, standalone: bool) {
         if self.no_playback {
-            tracing::debug!(alert = kind.name(), "alert sound suppressed (VOX_NO_PLAYBACK)");
+            tracing::debug!(
+                alert = kind.name(),
+                "alert sound suppressed (VOX_NO_PLAYBACK)"
+            );
             return;
         }
         if !standalone {
@@ -1175,21 +1321,38 @@ impl Controller {
                 if v.play_alert(kind, volume) {
                     tracing::debug!(alert = kind.name(), path = "voice mixer", "alert sound");
                 } else {
-                    tracing::debug!(alert = kind.name(), "alert sound dropped: voice output unavailable");
+                    tracing::debug!(
+                        alert = kind.name(),
+                        "alert sound dropped: voice output unavailable"
+                    );
                 }
                 return;
             }
         }
         let queued = self.ui_player.play(kind, volume, device.as_deref());
-        tracing::debug!(alert = kind.name(), path = "standalone output", queued, "alert sound");
+        tracing::debug!(
+            alert = kind.name(),
+            path = "standalone output",
+            queued,
+            "alert sound"
+        );
     }
 
     /// Open the mic test on its own thread (opening a device can take a while); the result comes
     /// back as `Internal::MicTestOpened`. Restarting replaces a test that is running.
-    fn start_mic_test(&mut self, input_device: Option<String>, output_device: Option<String>, volume_pct: u32, gate: Arc<VoiceGate>, noise: Arc<NoiseControl>) {
+    fn start_mic_test(
+        &mut self,
+        input_device: Option<String>,
+        output_device: Option<String>,
+        volume_pct: u32,
+        gate: Arc<VoiceGate>,
+        noise: Arc<NoiseControl>,
+    ) {
         self.stop_mic_test();
         if self.no_mic {
-            self.out.send(Ev::MicTestFailed("O microfone está desativado neste PC (VOX_NO_MIC).".into()));
+            self.out.send(Ev::MicTestFailed(
+                "The microphone is disabled on this PC (VOX_NO_MIC).".into(),
+            ));
             return;
         }
         self.volume_pct = volume_pct;
@@ -1243,8 +1406,12 @@ impl Controller {
     }
 
     fn push_voice_state(&self) {
-        let (Some(tx), Some(v)) = (&self.hub_tx, &self.voice) else { return };
-        let Some(channel) = self.voice_channel else { return };
+        let (Some(tx), Some(v)) = (&self.hub_tx, &self.voice) else {
+            return;
+        };
+        let Some(channel) = self.voice_channel else {
+            return;
+        };
         if channel == crate::app::dms::DM_CALL_CHANNEL {
             // A DM call is private: the hub never hears about it as voice state.
             return;
@@ -1271,7 +1438,12 @@ impl Controller {
         if !force && self.watch_sent.as_ref() == Some(&self.watch_set) {
             return;
         }
-        if tx.send(ClientEvent::WatchState { watching: self.watch_set.clone() }).is_ok() {
+        if tx
+            .send(ClientEvent::WatchState {
+                watching: self.watch_set.clone(),
+            })
+            .is_ok()
+        {
             self.watch_sent = Some(self.watch_set.clone());
             self.watch_sent_at = Some(Instant::now());
         }
@@ -1323,7 +1495,10 @@ impl Controller {
 
     async fn connect(&mut self, url: String, creds: Creds, remember_device: bool, guard: &Guard) {
         self.teardown().await;
-        match self.login_and_listen(&url, &creds, remember_device, guard).await {
+        match self
+            .login_and_listen(&url, &creds, remember_device, guard)
+            .await
+        {
             Ok(done) => {
                 let mut creds = done.creds;
                 if done.device_token.is_some() {
@@ -1349,25 +1524,43 @@ impl Controller {
                 self.hub_tx = None;
                 self.out.send(match fail {
                     LoginFail::Msg(msg) => Ev::ConnectFailed(msg),
-                    LoginFail::Personal { message, forget_device } => Ev::NeedPersonalPassword { message, forget_device },
+                    LoginFail::Personal {
+                        message,
+                        forget_device,
+                    } => Ev::NeedPersonalPassword {
+                        message,
+                        forget_device,
+                    },
                     LoginFail::NotSameServer(msg) => Ev::NotSameServer(msg),
                 });
             }
         }
     }
 
-    /// Health check, login and event socket. Errors are user-facing Portuguese messages.
-    async fn login_and_listen(&mut self, url: &str, creds: &Creds, remember_device: bool, guard: &Guard) -> Result<LoggedIn, LoginFail> {
+    /// Health check, login and event socket. Errors are user-facing English messages.
+    async fn login_and_listen(
+        &mut self,
+        url: &str,
+        creds: &Creds,
+        remember_device: bool,
+        guard: &Guard,
+    ) -> Result<LoggedIn, LoginFail> {
         let (hub, done) = login_at(url, creds, remember_device, guard).await?;
         self.hub = Some(hub);
-        self.start_events().map_err(|e| LoginFail::Msg(friendly(&e)))?;
+        self.start_events()
+            .map_err(|e| LoginFail::Msg(friendly(&e)))?;
         Ok(done)
     }
 }
 
 /// Health check, the saved-data check ([`Guard`]) and the login itself, without the event socket
 /// (v1.0.1: a function of its own, so the check can be tested against real addresses).
-async fn login_at(url: &str, creds: &Creds, remember_device: bool, guard: &Guard) -> Result<(Arc<HubClient>, LoggedIn), LoginFail> {
+async fn login_at(
+    url: &str,
+    creds: &Creds,
+    remember_device: bool,
+    guard: &Guard,
+) -> Result<(Arc<HubClient>, LoggedIn), LoginFail> {
     let url = normalize_url(url);
     let hub = Arc::new(HubClient::new(&url).map_err(|e| LoginFail::Msg(friendly(&e)))?);
     let health = hub.health().await.map_err(|e| {
@@ -1380,10 +1573,15 @@ async fn login_at(url: &str, creds: &Creds, remember_device: bool, guard: &Guard
             client = PROTOCOL_VERSION,
             "protocol version mismatch"
         );
-        return Err(LoginFail::Msg("Versão incompatível com o servidor. Peça a versão mais recente do concord ao host.".into()));
+        return Err(LoginFail::Msg(
+            "Incompatible server version. Ask the host for the latest version of concord.".into(),
+        ));
     }
     // v1.0.1: a saved password / login token goes only to the server it was saved for.
-    let answered = health.server_id.as_deref().filter(|id| vox_proto::is_server_id(id));
+    let answered = health
+        .server_id
+        .as_deref()
+        .filter(|id| vox_proto::is_server_id(id));
     let verdict = guard.check(&url, answered);
     let creds = match verdict {
         Check::Ok => creds.clone(),
@@ -1397,13 +1595,28 @@ async fn login_at(url: &str, creds: &Creds, remember_device: bool, guard: &Guard
             return Err(LoginFail::NotSameServer(verdict.message().into()));
         }
     };
-    let login = hub.login_with(&creds.login_request(remember_device)).await.map_err(|e| {
-        warn!(error = %format!("{e:#}"), "login failed");
-        LoginFail::from_error(&e, &creds)
-    })?;
+    let login = hub
+        .login_with(&creds.login_request(remember_device))
+        .await
+        .map_err(|e| {
+            warn!(error = %format!("{e:#}"), "login failed");
+            LoginFail::from_error(&e, &creds)
+        })?;
     let pin = creds.invite.is_some() || guard.confirms(&url, answered);
     let server_id = answered.map(str::to_string);
-    Ok((hub, LoggedIn { server_name: login.server_name, user: login.user, url, livekit_ok: health.livekit_ok, device_token: login.device_token, server_id, pin, creds }))
+    Ok((
+        hub,
+        LoggedIn {
+            server_name: login.server_name,
+            user: login.user,
+            url,
+            livekit_ok: health.livekit_ok,
+            device_token: login.device_token,
+            server_id,
+            pin,
+            creds,
+        },
+    ))
 }
 
 impl Controller {
@@ -1411,7 +1624,10 @@ impl Controller {
     /// A v0.8 invite call (create, list, revoke), off the controller.
     fn invite(&mut self, cmd: crate::host::InviteCmd) {
         let Some(hub) = self.hub.clone() else {
-            self.out.send(Ev::Invite(crate::host::InviteEv { cmd, result: Err("Sem conexão com o servidor.".into()) }));
+            self.out.send(Ev::Invite(crate::host::InviteEv {
+                cmd,
+                result: Err("Not connected to the server.".into()),
+            }));
             return;
         };
         let out = self.out.clone();
@@ -1423,12 +1639,17 @@ impl Controller {
 
     async fn admin(&mut self, cmd: crate::roles::AdminCmd) {
         let Some(hub) = self.hub.clone() else {
-            self.out.send(Ev::Admin { cmd, result: Err("Sem conexão com o servidor.".into()) });
+            self.out.send(Ev::Admin {
+                cmd,
+                result: Err("Not connected to the server.".into()),
+            });
             return;
         };
         if let crate::roles::AdminCmd::SetPassword(req) = &cmd {
             let result = crate::roles::run_admin(&hub, &cmd).await;
-            if let (Ok(crate::roles::AdminReply::Password(resp)), Some(c)) = (&result, self.creds.as_mut()) {
+            if let (Ok(crate::roles::AdminReply::Password(resp)), Some(c)) =
+                (&result, self.creds.as_mut())
+            {
                 c.personal = req.new.clone();
                 c.device_token = resp.device_token.clone();
             }
@@ -1444,7 +1665,10 @@ impl Controller {
 
     /// (Re)open the event socket for the current session token.
     fn start_events(&mut self) -> anyhow::Result<()> {
-        let hub = self.hub.clone().ok_or_else(|| anyhow::anyhow!("not logged in"))?;
+        let hub = self
+            .hub
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("not logged in"))?;
         let (tx, mut rx) = hub.connect_events()?;
         self.hub_tx = Some(tx);
         self.hub_gen += 1;
@@ -1482,8 +1706,10 @@ impl Controller {
                 match res {
                     Ok(t) => {
                         let warning = match (&t.playback_error, t.playing) {
-                            (Some(e), _) => Some(format!("Sem saída de áudio: {}", output_reason(e))),
-                            (None, false) => Some("a reprodução está desativada; só o medidor funciona.".to_string()),
+                            (Some(e), _) => Some(format!("No audio output: {}", output_reason(e))),
+                            (None, false) => {
+                                Some("playback is disabled; only the meter works.".to_string())
+                            }
                             _ => None,
                         };
                         t.set_volume(self.volume_pct.min(200) as f32 / 100.0);
@@ -1492,7 +1718,10 @@ impl Controller {
                     }
                     Err(e) => {
                         warn!(error = %e, "mic test: cannot open the microphone");
-                        self.out.send(Ev::MicTestFailed(format!("Teste do microfone: {}", mic_reason(&e))));
+                        self.out.send(Ev::MicTestFailed(format!(
+                            "Microphone test: {}",
+                            mic_reason(&e)
+                        )));
                     }
                 }
             }
@@ -1504,7 +1733,7 @@ impl Controller {
                     HubEvent::AuthFailed => {
                         info!("hub rejected the session; logging in again");
                         self.out.send(Ev::Hub(HubEvent::Disconnected {
-                            reason: "sessão expirada".into(),
+                            reason: "session expired".into(),
                         }));
                         self.relogin().await;
                     }
@@ -1521,11 +1750,19 @@ impl Controller {
                         self.watch_heal = !self.watch_set.is_empty();
                         self.sounds_on_ready();
                     }
-                    HubEvent::Server(ServerEvent::SoundsChanged { sounds }) => self.sounds_changed(sounds),
-                    HubEvent::Server(ServerEvent::SoundPlayed { sound_id, by, channel_id }) => self.sound_played(sound_id, by, channel_id),
+                    HubEvent::Server(ServerEvent::SoundsChanged { sounds }) => {
+                        self.sounds_changed(sounds)
+                    }
+                    HubEvent::Server(ServerEvent::SoundPlayed {
+                        sound_id,
+                        by,
+                        channel_id,
+                    }) => self.sound_played(sound_id, by, channel_id),
                     HubEvent::Server(ServerEvent::Error { error })
                         if error == WATCH_STATE_REJECTED
-                            && self.watch_sent_at.is_some_and(|t| t.elapsed() < Duration::from_secs(10)) =>
+                            && self
+                                .watch_sent_at
+                                .is_some_and(|t| t.elapsed() < Duration::from_secs(10)) =>
                     {
                         // An older hub: it keeps the socket, we stop talking about watching.
                         info!("the hub does not know WatchState (older server); viewer lists are off for this connection");
@@ -1622,7 +1859,9 @@ impl Controller {
                 if h.server_id.as_deref() != Some(want) {
                     warn!("re-login refused: the address now answers as another server");
                     self.teardown().await;
-                    self.out.send(Ev::LoggedOut { reason: Some(Check::Mismatch.message().into()) });
+                    self.out.send(Ev::LoggedOut {
+                        reason: Some(Check::Mismatch.message().into()),
+                    });
                     return;
                 }
             }
@@ -1636,10 +1875,10 @@ impl Controller {
             Err(e) => {
                 let msg = match LoginFail::from_error(&e, &c) {
                     LoginFail::Msg(m) | LoginFail::NotSameServer(m) => m,
-                    LoginFail::Personal { message, .. } => format!("{message} Entre de novo."),
+                    LoginFail::Personal { message, .. } => format!("{message} Sign in again."),
                 };
                 warn!(error = %format!("{e:#}"), "re-login failed");
-                if msg.starts_with("Não foi possível conectar") {
+                if msg.starts_with("Could not connect") {
                     // Server still down: try again shortly.
                     self.hub_gen += 1;
                     let gen = self.hub_gen;
@@ -1668,7 +1907,7 @@ impl Controller {
         let Some(hub) = self.hub.clone() else {
             self.out.send(Ev::VoiceFailed {
                 channel: None,
-                message: "Sem conexão com o servidor.".into(),
+                message: "Not connected to the server.".into(),
             });
             return;
         };
@@ -1759,7 +1998,7 @@ impl Controller {
             }
             Err(message) => {
                 self.out.send(Ev::VoiceFailed {
-                    // A DM call is retried from its DM ("Ligar"), not from the voice bar.
+                    // A DM call is retried from its DM ("Call"), not from the voice bar.
                     channel: Some(channel).filter(|c| *c != crate::app::dms::DM_CALL_CHANNEL),
                     message,
                 });
@@ -1818,7 +2057,10 @@ impl Creds {
 /// Why a login failed: a message, or "this name needs its personal password".
 enum LoginFail {
     Msg(String),
-    Personal { message: String, forget_device: bool },
+    Personal {
+        message: String,
+        forget_device: bool,
+    },
     /// v1.0.1: saved login data was kept back (see [`Guard`]).
     NotSameServer(String),
 }
@@ -1842,18 +2084,30 @@ impl LoginFail {
         let typed = creds.personal.as_ref().is_some_and(|p| !p.is_empty());
         if l.contains(vox_proto::ERR_PERSONAL_PASSWORD_REQUIRED) {
             let message = if creds.device_token.is_some() && !typed {
-                "Este computador não está mais lembrado para esse nome. Digite sua senha pessoal."
+                "This computer is no longer remembered for this name. Enter your personal password."
             } else {
-                "Esse nome é protegido por uma senha pessoal. Digite-a no campo \"Senha pessoal\"."
+                "This name is protected by a personal password. Enter it in the \"Personal password\" field."
             };
-            LoginFail::Personal { message: message.into(), forget_device: creds.device_token.is_some() }
+            LoginFail::Personal {
+                message: message.into(),
+                forget_device: creds.device_token.is_some(),
+            }
         } else if l.contains(vox_proto::ERR_WRONG_PERSONAL_PASSWORD) {
-            LoginFail::Personal { message: "Senha pessoal incorreta.".into(), forget_device: false }
+            LoginFail::Personal {
+                message: "Incorrect personal password.".into(),
+                forget_device: false,
+            }
         } else if l.contains(vox_proto::ERR_RESET_CODE_EXPIRED) {
-            LoginFail::Personal { message: "Esse código de redefinição expirou. Peça um novo ao dono do servidor.".into(), forget_device: false }
-        } else if l.contains("wrong server password") && creds.password.is_empty() && creds.device_token.is_some() {
+            LoginFail::Personal {
+                message: "This reset code expired. Ask the server owner for a new one.".into(),
+                forget_device: false,
+            }
+        } else if l.contains("wrong server password")
+            && creds.password.is_empty()
+            && creds.device_token.is_some()
+        {
             // v0.8: somebody who joined with an invite and whose remembered computer was dropped.
-            LoginFail::Msg("Este computador não está mais lembrado neste servidor. Peça um convite novo (ou a senha do servidor).".into())
+            LoginFail::Msg("This computer is no longer remembered on this server. Ask for a new invite (or the server password).".into())
         } else {
             LoginFail::Msg(friendly(e))
         }
@@ -1923,12 +2177,12 @@ impl Check {
         match self {
             Check::Ok => "",
             Check::Mismatch => {
-                "Este endereço não é o mesmo servidor que você salvou. Por segurança, a senha e o login salvos não foram enviados. \
-                 Se você confia neste endereço, digite a senha do servidor (e a senha pessoal, se tiver) e entre de novo."
+                "This address is not the server you saved. For safety, your saved password and login were not sent. \
+                 If you trust this address, enter the server password (and personal password, if any) and sign in again."
             }
             Check::Unconfirmed => {
-                "Não deu para confirmar que este endereço é o mesmo servidor que você salvou. Por segurança, a senha e o login salvos \
-                 não foram enviados. Se você confia neste endereço, digite a senha do servidor (e a senha pessoal, se tiver) e entre de novo."
+                "Could not confirm that this address is the server you saved. For safety, your saved password and login \
+                 were not sent. If you trust this address, enter the server password (and personal password, if any) and sign in again."
             }
         }
     }
@@ -1939,7 +2193,9 @@ impl Binding {
         match &self.server_id {
             Some(id) if answered == Some(id.as_str()) => Check::Ok,
             Some(_) => Check::Mismatch,
-            None if normalize_url(url).eq_ignore_ascii_case(&normalize_url(&self.home)) => Check::Ok,
+            None if normalize_url(url).eq_ignore_ascii_case(&normalize_url(&self.home)) => {
+                Check::Ok
+            }
             None => Check::Unconfirmed,
         }
     }
@@ -1948,7 +2204,10 @@ impl Binding {
 impl Guard {
     /// The verdict for sending the saved data to `url`, whose hub answered `answered`.
     pub fn check(&self, url: &str, answered: Option<&str>) -> Check {
-        let all = [&self.token, &self.password].into_iter().flatten().map(|b| b.check(url, answered));
+        let all = [&self.token, &self.password]
+            .into_iter()
+            .flatten()
+            .map(|b| b.check(url, answered));
         all.fold(Check::Ok, |worst, c| match (worst, c) {
             (Check::Mismatch, _) | (_, Check::Mismatch) => Check::Mismatch,
             (Check::Unconfirmed, _) | (_, Check::Unconfirmed) => Check::Unconfirmed,
@@ -1971,8 +2230,15 @@ impl Guard {
     /// Did a login at `url` (answering `answered`) confirm which server this is? A saved identity
     /// that matched, or the address the user typed or picked.
     pub fn confirms(&self, url: &str, answered: Option<&str>) -> bool {
-        let matched = [&self.token, &self.password].into_iter().flatten().any(|b| b.server_id.is_some() && b.check(url, answered) == Check::Ok);
-        matched || self.confirmed.as_deref().is_some_and(|c| normalize_url(c).eq_ignore_ascii_case(&normalize_url(url)))
+        let matched = [&self.token, &self.password]
+            .into_iter()
+            .flatten()
+            .any(|b| b.server_id.is_some() && b.check(url, answered) == Check::Ok);
+        matched
+            || self
+                .confirmed
+                .as_deref()
+                .is_some_and(|c| normalize_url(c).eq_ignore_ascii_case(&normalize_url(url)))
     }
 }
 
@@ -1984,7 +2250,9 @@ impl Guard {
 async fn pick(urls: &[String], guard: &Guard) -> Option<String> {
     let mut first = None;
     for url in urls {
-        let Ok(hub) = HubClient::new(url) else { continue };
+        let Ok(hub) = HubClient::new(url) else {
+            continue;
+        };
         match tokio::time::timeout(Duration::from_secs(3), hub.health()).await {
             Ok(Ok(h)) => {
                 let verdict = guard.check(url, h.server_id.as_deref());
@@ -2030,18 +2298,31 @@ pub fn normalize_url(input: &str) -> String {
 enum JoinVia {
     Channel,
     /// `accept`: answer the ringing call (else ring it, or rejoin it).
-    Dm { dm: vox_proto::DmId, accept: bool },
+    Dm {
+        dm: vox_proto::DmId,
+        accept: bool,
+    },
 }
 
 /// Hub join request, then the LiveKit connection, with every step logged. The error is the
 /// user-facing message.
-async fn run_join(hub: &HubClient, channel: ChannelId, via: JoinVia, cfg: VoiceConfig) -> JoinOutcome {
+async fn run_join(
+    hub: &HubClient,
+    channel: ChannelId,
+    via: JoinVia,
+    cfg: VoiceConfig,
+) -> JoinOutcome {
     let started = std::time::Instant::now();
     let asked = match via {
         JoinVia::Channel => hub.voice_join(channel).await.map_err(|e| friendly(&e)),
         JoinVia::Dm { dm, accept } => {
-            let r = if accept { hub.dm_call_accept(dm).await } else { hub.dm_call(dm).await };
-            r.map(|c| c.join).map_err(|e| crate::app::dms::error_text(&e))
+            let r = if accept {
+                hub.dm_call_accept(dm).await
+            } else {
+                hub.dm_call(dm).await
+            };
+            r.map(|c| c.join)
+                .map_err(|e| crate::app::dms::error_text(&e))
         }
     };
     let resp = match asked {
@@ -2054,7 +2335,11 @@ async fn run_join(hub: &HubClient, channel: ChannelId, via: JoinVia, cfg: VoiceC
     info!(channel, hub_ms = started.elapsed().as_millis() as u64, url = %resp.livekit_url, "voice join: hub join ok");
     match VoiceSession::connect(&resp.livekit_url, &resp.livekit_token, cfg).await {
         Ok(ok) => {
-            info!(channel, total_ms = started.elapsed().as_millis() as u64, "voice join: complete");
+            info!(
+                channel,
+                total_ms = started.elapsed().as_millis() as u64,
+                "voice join: complete"
+            );
             Ok(ok)
         }
         // The core already logged the failing step and the full error chain.
@@ -2073,102 +2358,121 @@ async fn run_join(hub: &HubClient, channel: ChannelId, via: JoinVia, cfg: VoiceC
 /// Which step failed, in words for the colleagues.
 pub fn voice_error_message(e: &anyhow::Error) -> String {
     match e.downcast_ref::<JoinError>().map(|j| j.step) {
-        Some(JoinStep::Signal) => "Não foi possível conectar ao servidor de voz (etapa: conexão com a porta 7880). \
-             Verifique sua internet e se VPN, antivírus ou firewall não estão bloqueando o concord."
+        Some(JoinStep::Signal) => "Could not connect to the voice server (step: connecting to port 7880). \
+             Check your internet and whether a VPN, antivirus or firewall is blocking concord."
             .into(),
-        Some(JoinStep::Media) => "Não foi possível conectar o áudio da sala (etapa: conexão de mídia). \
-             A rede parece estar bloqueando a conexão de voz. Tente outra rede ou desligue VPN, antivírus ou firewall."
+        Some(JoinStep::Media) => "Could not connect room audio (step: media connection). \
+             The network appears to be blocking voice. Try another network or check your VPN, antivirus and firewall settings."
             .into(),
-        None => format!("Não foi possível entrar na voz: {e:#}"),
+        None => format!("Could not join voice: {e:#}"),
     }
 }
 
-/// "Entrou sem microfone: ..." / "Entrou sem saída de áudio: ..." for a join that worked with
+/// "Joined without a microphone: ..." / "Joined without audio output: ..." for a join that worked with
 /// limitations, `None` when everything opened.
 pub fn join_warning(report: &vox_client_core::JoinReport) -> Option<String> {
     let mut parts = Vec::new();
     if let Some(raw) = &report.mic_error {
-        parts.push(format!("Entrou sem microfone: {}", mic_reason(raw)));
+        parts.push(format!("Joined without a microphone: {}", mic_reason(raw)));
     }
     if let Some(raw) = &report.playback_error {
-        parts.push(format!("Entrou sem saída de áudio: {}", output_reason(raw)));
+        parts.push(format!(
+            "Joined without audio output: {}",
+            output_reason(raw)
+        ));
     }
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
 fn is_denied(l: &str) -> bool {
-    l.contains("denied") || l.contains("permission") || l.contains("0x80070005") || l.contains("not allowed")
+    l.contains("denied")
+        || l.contains("permission")
+        || l.contains("0x80070005")
+        || l.contains("not allowed")
 }
 
 fn mic_reason(raw: &str) -> String {
     let l = raw.to_lowercase();
     if l.contains("matching") {
-        "o microfone escolhido nas configurações não foi encontrado.".into()
+        "the microphone selected in settings was not found.".into()
     } else if l.contains("no default input device") {
-        "nenhum microfone foi encontrado. Conecte um microfone ou escolha outro em Configurações.".into()
+        "no microphone found. Connect a microphone or choose another in Settings.".into()
     } else if is_denied(&l) {
-        "o Windows bloqueou o acesso. Verifique as permissões de microfone do Windows (Configurações > Privacidade e segurança > Microfone).".into()
+        "Windows blocked access. Check Windows microphone permissions (Settings > Privacy & security > Microphone).".into()
     } else if l.contains("did not answer") {
-        "o dispositivo de áudio não respondeu. Verifique as permissões de microfone do Windows e se outro programa o está usando.".into()
+        "the audio device did not respond. Check Windows microphone permissions and whether another program is using it.".into()
     } else if l.contains("publish microphone") {
-        "o servidor não aceitou o áudio do microfone.".into()
-    } else if l.contains("not available") || l.contains("busy") || l.contains("in use") || l.contains("exclusive") {
-        "o microfone está em uso por outro programa (modo exclusivo) ou foi desconectado.".into()
+        "the server did not accept microphone audio.".into()
+    } else if l.contains("not available")
+        || l.contains("busy")
+        || l.contains("in use")
+        || l.contains("exclusive")
+    {
+        "the microphone is in use by another program (exclusive mode) or was disconnected.".into()
     } else {
-        format!("não foi possível abrir o microfone ({raw}). Verifique as permissões de microfone do Windows.")
+        format!("could not open the microphone ({raw}). Check Windows microphone permissions.")
     }
 }
 
 fn output_reason(raw: &str) -> String {
     let l = raw.to_lowercase();
     if l.contains("matching") {
-        "a saída escolhida nas configurações não foi encontrada.".into()
+        "the output selected in settings was not found.".into()
     } else if l.contains("no default output device") {
-        "nenhuma saída de áudio foi encontrada.".into()
+        "no audio output found.".into()
     } else if l.contains("did not answer") {
-        "o dispositivo de áudio não respondeu.".into()
-    } else if l.contains("not available") || l.contains("busy") || l.contains("in use") || l.contains("exclusive") {
-        "o dispositivo está em uso por outro programa (modo exclusivo) ou foi desconectado.".into()
+        "the audio device did not respond.".into()
+    } else if l.contains("not available")
+        || l.contains("busy")
+        || l.contains("in use")
+        || l.contains("exclusive")
+    {
+        "the device is in use by another program (exclusive mode) or was disconnected.".into()
     } else {
-        format!("não foi possível abrir a saída de áudio ({raw}).")
+        format!("could not open audio output ({raw}).")
     }
 }
 
-/// Map core/hub errors to messages for the colleagues (Portuguese, no jargon).
+/// Map core/hub errors to messages for the colleagues (English, no jargon).
 pub fn friendly(e: &anyhow::Error) -> String {
     let full = format!("{e:#}");
     let l = full.to_lowercase();
     if l.contains("wrong server password") {
-        "Senha do servidor incorreta.".into()
+        "Incorrect server password.".into()
     } else if l.contains(vox_proto::ERR_INVITE_INVALID) {
-        "Convite inválido: confira se copiou o código inteiro, ou peça um novo a quem te convidou.".into()
+        "Invalid invite: check that you copied the entire code, or ask the sender for a new one."
+            .into()
     } else if l.contains(vox_proto::ERR_INVITE_EXPIRED) {
-        "Este convite venceu. Peça um novo a quem te convidou.".into()
+        "This invite expired. Ask the sender for a new one.".into()
     } else if l.contains(vox_proto::ERR_INVITE_USED_UP) {
-        "Este convite já foi usado o máximo de vezes. Peça um novo a quem te convidou.".into()
+        "This invite reached its use limit. Ask the sender for a new one.".into()
     } else if l.contains(vox_proto::ERR_INVITE_REVOKED) {
-        "Este convite foi cancelado por quem cuida do servidor. Peça um novo.".into()
+        "This invite was revoked by a server administrator. Ask for a new one.".into()
     } else if l.contains(vox_proto::ERR_INVITE_NAME_TAKEN) {
         // v1.0.1: an invite only creates new accounts.
-        "Esse nome já existe neste servidor. Escolha outro nome ou peça a senha do servidor.".into()
+        "This name already exists on this server. Choose another name or ask for the server password.".into()
     } else if l.contains(vox_proto::ERR_TOO_MANY_MENTIONS) {
-        "Menções demais numa mensagem só.".into()
+        "Too many mentions in one message.".into()
     } else if l.contains("protocol version mismatch") {
-        "Versão incompatível com o servidor. Peça a versão mais recente do concord ao host.".into()
+        "Incompatible server version. Ask the host for the latest version of concord.".into()
     } else if l.contains(vox_proto::ERR_TOO_MANY_ATTEMPTS) {
-        "Muitas tentativas seguidas. Aguarde alguns segundos e tente de novo.".into()
+        "Too many attempts. Wait a few seconds and try again.".into()
     } else if l.contains("username must be") {
-        "O nome deve ter entre 2 e 32 caracteres.".into()
+        "The name must be between 2 and 32 characters.".into()
     } else if l.contains("invalid hub url") {
-        "Endereço do servidor inválido. Exemplo: http://192.168.0.10:7890".into()
+        "Invalid server address. Example: http://192.168.0.10:7890".into()
     } else if l.contains("http 401") {
-        "Sessão recusada pelo servidor.".into()
+        "Session rejected by the server.".into()
     } else if l.contains("http 5") {
-        "O servidor retornou um erro. Tente novamente em instantes.".into()
-    } else if l.contains("request") || l.contains("connect") || l.contains("timed out") || l.contains("dns") {
-        "Não foi possível conectar ao servidor. Confira o endereço e se o servidor está ligado (porta 7890).".into()
+        "The server returned an error. Try again shortly.".into()
+    } else if l.contains("request")
+        || l.contains("connect")
+        || l.contains("timed out")
+        || l.contains("dns")
+    {
+        "Could not connect to the server. Check the address and that the server is running (port 7890).".into()
     } else {
-        format!("Erro: {full}")
+        format!("Error: {full}")
     }
 }
 
@@ -2180,18 +2484,33 @@ mod tests {
     fn urls_get_scheme_and_default_port() {
         assert_eq!(normalize_url("1.2.3.4"), "http://1.2.3.4:7890");
         assert_eq!(normalize_url(" 1.2.3.4:9000/ "), "http://1.2.3.4:9000");
-        assert_eq!(normalize_url("https://hub.example/base"), "https://hub.example:7890/base");
+        assert_eq!(
+            normalize_url("https://hub.example/base"),
+            "https://hub.example:7890/base"
+        );
         assert_eq!(normalize_url("http://[::1]:7890"), "http://[::1]:7890");
         assert_eq!(normalize_url("localhost"), "http://localhost:7890");
     }
 
     #[test]
     fn voice_errors_name_the_failed_step() {
-        let join = |step| anyhow::Error::new(JoinError { step, elapsed: Duration::from_secs(15), source: anyhow::anyhow!("wait_pc_connection timed out") });
+        let join = |step| {
+            anyhow::Error::new(JoinError {
+                step,
+                elapsed: Duration::from_secs(15),
+                source: anyhow::anyhow!("wait_pc_connection timed out"),
+            })
+        };
         let media = voice_error_message(&join(JoinStep::Media));
-        assert!(media.contains("áudio da sala") && media.contains("bloqueando"), "{media}");
+        assert!(
+            media.contains("room audio") && media.contains("blocking"),
+            "{media}"
+        );
         let signal = voice_error_message(&join(JoinStep::Signal));
-        assert!(signal.contains("servidor de voz") && signal.contains("7880"), "{signal}");
+        assert!(
+            signal.contains("voice server") && signal.contains("7880"),
+            "{signal}"
+        );
         assert!(voice_error_message(&anyhow::anyhow!("boom")).contains("boom"));
     }
 
@@ -2201,25 +2520,40 @@ mod tests {
         assert_eq!(join_warning(&report), None);
         report.mic_error = Some("no default input device".into());
         let w = join_warning(&report).unwrap();
-        assert!(w.starts_with("Entrou sem microfone:") && w.contains("nenhum microfone"), "{w}");
+        assert!(
+            w.starts_with("Joined without a microphone:") && w.contains("no microphone"),
+            "{w}"
+        );
         report.mic_error = Some("build mic stream: Access is denied. (0x80070005)".into());
-        assert!(join_warning(&report).unwrap().contains("permissões de microfone do Windows"));
+        assert!(join_warning(&report)
+            .unwrap()
+            .contains("Windows microphone permissions"));
         report.mic_error = None;
         report.playback_error = Some("the audio device did not answer within 8 s".into());
-        assert!(join_warning(&report).unwrap().starts_with("Entrou sem saída de áudio:"));
+        assert!(join_warning(&report)
+            .unwrap()
+            .starts_with("Joined without audio output:"));
     }
 
     #[test]
     fn errors_are_friendly() {
         let e = anyhow::anyhow!("login failed: HTTP 401 Unauthorized: wrong server password");
-        assert_eq!(friendly(&e), "Senha do servidor incorreta.");
-        let e = anyhow::anyhow!("login failed: HTTP 400 Bad Request: protocol version mismatch: server 1, client 2");
-        assert!(friendly(&e).starts_with("Versão incompatível"));
+        assert_eq!(friendly(&e), "Incorrect server password.");
+        let e = anyhow::anyhow!(
+            "login failed: HTTP 400 Bad Request: protocol version mismatch: server 1, client 2"
+        );
+        assert!(friendly(&e).starts_with("Incompatible version"));
         let e = anyhow::anyhow!("error sending request").context("health request");
-        assert!(friendly(&e).starts_with("Não foi possível conectar"));
+        assert!(friendly(&e).starts_with("Could not connect"));
         // v1.0.1: an invite on a name that already exists.
-        let e = anyhow::anyhow!("login failed: HTTP 401 Unauthorized: {}", vox_proto::ERR_INVITE_NAME_TAKEN);
-        assert_eq!(friendly(&e), "Esse nome já existe neste servidor. Escolha outro nome ou peça a senha do servidor.");
+        let e = anyhow::anyhow!(
+            "login failed: HTTP 401 Unauthorized: {}",
+            vox_proto::ERR_INVITE_NAME_TAKEN
+        );
+        assert_eq!(
+            friendly(&e),
+            "This name already exists on this server. Choose another name or ask for the server password."
+        );
     }
 
     /// A stand-in for some other server (v1.0.1 test): answers its health check as `server_id`
@@ -2243,7 +2577,9 @@ mod tests {
                     }
                     buf.extend_from_slice(&chunk[..n]);
                     let text = String::from_utf8_lossy(&buf).to_string();
-                    let Some(end) = text.find("\r\n\r\n") else { continue };
+                    let Some(end) = text.find("\r\n\r\n") else {
+                        continue;
+                    };
                     let len = text[..end]
                         .lines()
                         .filter_map(|l| l.split_once(':'))
@@ -2251,15 +2587,27 @@ mod tests {
                         .and_then(|(_, v)| v.trim().parse::<usize>().ok())
                         .unwrap_or(0);
                     if buf.len() >= end + 4 + len {
-                        break (text[..end].to_string(), String::from_utf8_lossy(&buf[end + 4..end + 4 + len]).to_string());
+                        break (
+                            text[..end].to_string(),
+                            String::from_utf8_lossy(&buf[end + 4..end + 4 + len]).to_string(),
+                        );
                     }
                 };
                 let (status, json) = if head.starts_with("GET /api/health") {
-                    let id = server_id.map_or(String::new(), |id| format!(r#","server_id":"{id}""#));
-                    ("200 OK", format!(r#"{{"ok":true,"version":"9.9.9","protocol_version":{PROTOCOL_VERSION},"livekit_ok":false{id}}}"#))
+                    let id =
+                        server_id.map_or(String::new(), |id| format!(r#","server_id":"{id}""#));
+                    (
+                        "200 OK",
+                        format!(
+                            r#"{{"ok":true,"version":"9.9.9","protocol_version":{PROTOCOL_VERSION},"livekit_ok":false{id}}}"#
+                        ),
+                    )
                 } else {
                     seen.lock().unwrap().push(body);
-                    ("401 Unauthorized", r#"{"error":"wrong server password"}"#.to_string())
+                    (
+                        "401 Unauthorized",
+                        r#"{"error":"wrong server password"}"#.to_string(),
+                    )
                 };
                 let resp = format!("HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{json}", json.len());
                 let _ = sock.write_all(resp.as_bytes());
@@ -2274,7 +2622,10 @@ mod tests {
     /// answers as another server, an older hub answers with no identity.
     #[test]
     fn saved_secrets_go_only_to_the_server_they_belong_to() {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let dir = std::env::temp_dir().join(format!("concord-guard-test-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
@@ -2345,17 +2696,58 @@ mod tests {
     fn the_guard_verdicts() {
         let id = "0123456789abcdef0123456789abcdef";
         let home = "http://192.0.2.10:7890";
-        let pinned = Binding { home: home.into(), server_id: Some(id.into()) };
-        assert_eq!(pinned.check("http://198.51.100.1:7890", Some(id)), Check::Ok, "same server, another address");
-        assert_eq!(pinned.check(home, Some("ffffffffffffffffffffffffffffffff")), Check::Mismatch);
-        assert_eq!(pinned.check(home, None), Check::Mismatch, "an identity is known: no answer is not enough");
-        let legacy = Binding { home: home.into(), server_id: None };
-        assert_eq!(legacy.check("192.0.2.10", None), Check::Ok, "the address it was saved under");
-        assert_eq!(legacy.check("http://198.51.100.1:7890", Some(id)), Check::Unconfirmed);
-        let g = Guard { token: Some(pinned), password: Some(legacy), confirmed: None };
+        let pinned = Binding {
+            home: home.into(),
+            server_id: Some(id.into()),
+        };
+        assert_eq!(
+            pinned.check("http://198.51.100.1:7890", Some(id)),
+            Check::Ok,
+            "same server, another address"
+        );
+        assert_eq!(
+            pinned.check(home, Some("ffffffffffffffffffffffffffffffff")),
+            Check::Mismatch
+        );
+        assert_eq!(
+            pinned.check(home, None),
+            Check::Mismatch,
+            "an identity is known: no answer is not enough"
+        );
+        let legacy = Binding {
+            home: home.into(),
+            server_id: None,
+        };
+        assert_eq!(
+            legacy.check("192.0.2.10", None),
+            Check::Ok,
+            "the address it was saved under"
+        );
+        assert_eq!(
+            legacy.check("http://198.51.100.1:7890", Some(id)),
+            Check::Unconfirmed
+        );
+        let g = Guard {
+            token: Some(pinned),
+            password: Some(legacy),
+            confirmed: None,
+        };
         assert_eq!(g.check(home, Some(id)), Check::Ok);
-        assert_eq!(g.check("http://198.51.100.1:7890", Some(id)), Check::Unconfirmed, "the worst of the two");
-        assert_eq!(Guard::default().check("http://anything:1", None), Check::Ok, "nothing saved: nothing to keep back");
-        assert!(!Check::Mismatch.message().is_empty() && Check::Mismatch.message().starts_with("Este endereço não é o mesmo servidor que você salvou"));
+        assert_eq!(
+            g.check("http://198.51.100.1:7890", Some(id)),
+            Check::Unconfirmed,
+            "the worst of the two"
+        );
+        assert_eq!(
+            Guard::default().check("http://anything:1", None),
+            Check::Ok,
+            "nothing saved: nothing to keep back"
+        );
+        assert!(
+            !Check::Mismatch.message().is_empty()
+                && Check::Mismatch
+                    .message()
+                    .starts_with("This address is not the server you saved")
+        );
     }
 }

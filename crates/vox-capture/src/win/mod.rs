@@ -13,16 +13,18 @@ mod preview;
 mod thumb;
 mod video;
 
-pub use audio::{start_audio, AudioInner};
-pub use camera::{camera_diagnostics, list_camera_formats, list_cameras, start_camera, CameraInner, CameraOutput};
-pub use dshow::camera_property_pages;
 pub use adapters::{encoder_candidates, list_gpus};
+pub use audio::{start_audio, AudioInner};
+pub use camera::{
+    camera_diagnostics, list_camera_formats, list_cameras, start_camera, CameraInner, CameraOutput,
+};
+pub use dshow::camera_property_pages;
 pub use encode::{available_encoders, self_test_encoders, start_video_encoded, EncodedInner};
 pub use enumerate::{list_monitors, list_windows};
 pub use icon::{is_window_minimized, window_icon};
-pub use thumb::GrabberInner;
-pub use preview::{gpu_holders, PreviewHandle};
 pub(crate) use preview::PreviewAttach;
+pub use preview::{gpu_holders, PreviewHandle};
+pub use thumb::GrabberInner;
 pub use video::{start_video, VideoInner};
 
 use std::sync::OnceLock;

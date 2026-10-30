@@ -30,11 +30,21 @@ async fn setup() -> Env {
         ),
     )
     .unwrap();
-    let server = start(Options { data_dir: dir.path().to_path_buf(), no_livekit: true, livekit_bin: "unused".into(), bind_override: Some("127.0.0.1:0".into()) })
-        .await
-        .unwrap();
+    let server = start(Options {
+        data_dir: dir.path().to_path_buf(),
+        no_livekit: true,
+        livekit_bin: "unused".into(),
+        bind_override: Some("127.0.0.1:0".into()),
+    })
+    .await
+    .unwrap();
     let base = format!("127.0.0.1:{}", server.addr.port());
-    Env { server, base, http: reqwest::Client::new(), _dir: dir }
+    Env {
+        server,
+        base,
+        http: reqwest::Client::new(),
+        _dir: dir,
+    }
 }
 
 #[derive(Clone)]
@@ -56,23 +66,51 @@ impl Env {
             password: personal.map(Into::into),
             ..Default::default()
         };
-        let r = self.http.post(self.url("/api/login")).json(&req).send().await.unwrap();
+        let r = self
+            .http
+            .post(self.url("/api/login"))
+            .json(&req)
+            .send()
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::OK, "login {name}");
         let l: LoginResponse = r.json().await.unwrap();
-        Who { token: l.token, user: l.user }
+        Who {
+            token: l.token,
+            user: l.user,
+        }
     }
 
     async fn post(&self, who: &Who, path: &str, body: Value) -> reqwest::Response {
-        self.http.post(self.url(path)).bearer_auth(&who.token).json(&body).send().await.unwrap()
+        self.http
+            .post(self.url(path))
+            .bearer_auth(&who.token)
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
     }
 
     async fn get(&self, who: &Who, path: &str) -> reqwest::Response {
-        self.http.get(self.url(path)).bearer_auth(&who.token).send().await.unwrap()
+        self.http
+            .get(self.url(path))
+            .bearer_auth(&who.token)
+            .send()
+            .await
+            .unwrap()
     }
 
-    async fn upload_raw(&self, who: &Who, name: &str, emoji: &str, body: Vec<u8>) -> reqwest::Response {
+    async fn upload_raw(
+        &self,
+        who: &Who,
+        name: &str,
+        emoji: &str,
+        body: Vec<u8>,
+    ) -> reqwest::Response {
         let mut url = url::Url::parse(&self.url("/api/sounds")).unwrap();
-        url.query_pairs_mut().append_pair("name", name).append_pair("emoji", emoji);
+        url.query_pairs_mut()
+            .append_pair("name", name)
+            .append_pair("emoji", emoji);
         self.http
             .post(url)
             .header("content-type", "audio/wav")
@@ -86,7 +124,15 @@ impl Env {
     /// An upload by somebody new each time (a refused upload still uses a turn of the rate limit).
     async fn upload_fresh(&self, name: &str, emoji: &str, body: Vec<u8>) -> reqwest::Response {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let who = self.login(&format!("anon{}", N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)), None).await;
+        let who = self
+            .login(
+                &format!(
+                    "anon{}",
+                    N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                ),
+                None,
+            )
+            .await;
         self.upload_raw(&who, name, emoji, body).await
     }
 
@@ -105,9 +151,13 @@ impl Env {
     }
 
     async fn ws(&self, who: &Who) -> Ws {
-        let (ws, _) = tokio_tungstenite::connect_async(format!("ws://{}/ws?token={}", self.base, who.token)).await.unwrap();
+        let (ws, _) =
+            tokio_tungstenite::connect_async(format!("ws://{}/ws?token={}", self.base, who.token))
+                .await
+                .unwrap();
         let mut ws = Ws(ws);
-        ws.wait_for("ready", |e| matches!(e, ServerEvent::Ready { .. })).await;
+        ws.wait_for("ready", |e| matches!(e, ServerEvent::Ready { .. }))
+            .await;
         ws
     }
 
@@ -116,14 +166,20 @@ impl Env {
     }
 
     async fn audit(&self, who: &Who) -> Vec<AuditEntry> {
-        self.get(who, "/api/admin/audit").await.json().await.unwrap()
+        self.get(who, "/api/admin/audit")
+            .await
+            .json()
+            .await
+            .unwrap()
     }
 
     /// The owner, an admin and a moderator (promoted; their roles need personal passwords), and
     /// plain members for the rest of a test.
     async fn staff(&self) -> (Who, Who, Who) {
         let set_pw = |who: Who, pw: &'static str| async move {
-            let r = self.post(&who, "/api/account/password", json!({ "new": pw })).await;
+            let r = self
+                .post(&who, "/api/account/password", json!({ "new": pw }))
+                .await;
             assert_eq!(r.status(), StatusCode::OK);
             who
         };
@@ -134,7 +190,13 @@ impl Env {
         let moder = self.login("modi", None).await;
         let moder = set_pw(moder, "mod-senha").await;
         for (who, role) in [(&admin, "admin"), (&moder, "moderator")] {
-            let r = self.post(&owner, &format!("/api/admin/users/{}/role", who.user.id), json!({ "role": role })).await;
+            let r = self
+                .post(
+                    &owner,
+                    &format!("/api/admin/users/{}/role", who.user.id),
+                    json!({ "role": role }),
+                )
+                .await;
             assert_eq!(r.status(), StatusCode::OK);
         }
         (owner, admin, moder)
@@ -146,7 +208,8 @@ fn tone_with(channels: u16, ms: u32) -> Vec<u8> {
     let frames = (SOUND_RATE as u64 * ms as u64 / 1000) as usize;
     let mut samples = Vec::with_capacity(frames * channels as usize);
     for i in 0..frames {
-        let v = ((i as f32 * 440.0 * std::f32::consts::TAU / SOUND_RATE as f32).sin() * 8000.0) as i16;
+        let v =
+            ((i as f32 * 440.0 * std::f32::consts::TAU / SOUND_RATE as f32).sin() * 8000.0) as i16;
         samples.extend(std::iter::repeat_n(v, channels as usize));
     }
     canonical_wav(channels, &samples)
@@ -158,10 +221,18 @@ fn tone(ms: u32) -> Vec<u8> {
 
 async fn error_text(r: reqwest::Response) -> (StatusCode, String) {
     let s = r.status();
-    (s, r.json::<ApiError>().await.map(|e| e.error).unwrap_or_default())
+    (
+        s,
+        r.json::<ApiError>()
+            .await
+            .map(|e| e.error)
+            .unwrap_or_default(),
+    )
 }
 
-struct Ws(tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>);
+struct Ws(
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+);
 
 impl Ws {
     async fn next_within(&mut self, wait: Duration) -> Option<ServerEvent> {
@@ -174,7 +245,11 @@ impl Ws {
         }
     }
 
-    async fn wait_for(&mut self, what: &str, mut pred: impl FnMut(&ServerEvent) -> bool) -> ServerEvent {
+    async fn wait_for(
+        &mut self,
+        what: &str,
+        mut pred: impl FnMut(&ServerEvent) -> bool,
+    ) -> ServerEvent {
         let t = Instant::now();
         while t.elapsed() < Duration::from_secs(5) {
             match self.next_within(Duration::from_secs(5)).await {
@@ -203,7 +278,9 @@ impl Ws {
     async fn wait_placed(&mut self, mut want: Vec<(UserId, i64)>) {
         let t = Instant::now();
         while !want.is_empty() && t.elapsed() < Duration::from_secs(5) {
-            if let Some(ServerEvent::VoiceStateChanged { member }) = self.next_within(Duration::from_secs(5)).await {
+            if let Some(ServerEvent::VoiceStateChanged { member }) =
+                self.next_within(Duration::from_secs(5)).await
+            {
                 want.retain(|(u, c)| !(member.user.id == *u && member.channel_id == Some(*c)));
             }
         }
@@ -211,11 +288,22 @@ impl Ws {
     }
 
     async fn send(&mut self, ev: &ClientEvent) {
-        self.0.send(WsMsg::Text(serde_json::to_string(ev).unwrap().into())).await.unwrap();
+        self.0
+            .send(WsMsg::Text(serde_json::to_string(ev).unwrap().into()))
+            .await
+            .unwrap();
     }
 
     async fn voice(&mut self, channel: Option<i64>, deafened: bool) {
-        self.send(&ClientEvent::VoiceState { channel_id: channel, muted: false, deafened, streaming: false, camera: false, audio_only: false }).await;
+        self.send(&ClientEvent::VoiceState {
+            channel_id: channel,
+            muted: false,
+            deafened,
+            streaming: false,
+            camera: false,
+            audio_only: false,
+        })
+        .await;
     }
 
     async fn play(&mut self, sound_id: SoundId) {
@@ -224,7 +312,11 @@ impl Ws {
 }
 
 fn voice_ids(chs: &[Channel]) -> (i64, i64) {
-    let v: Vec<i64> = chs.iter().filter(|c| c.kind == ChannelKind::Voice).map(|c| c.id).collect();
+    let v: Vec<i64> = chs
+        .iter()
+        .filter(|c| c.kind == ChannelKind::Voice)
+        .map(|c| c.id)
+        .collect();
     (v[0], v[1])
 }
 
@@ -240,16 +332,36 @@ async fn an_empty_server_has_no_sounds_and_anyone_uploads() {
     let ana = env.login("ana", None).await;
     assert!(env.sounds(&ana).await.is_empty(), "nothing is seeded");
     // Not logged in.
-    assert_eq!(env.http.get(env.url("/api/sounds")).send().await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        env.http
+            .get(env.url("/api/sounds"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
 
     let mut watcher = env.ws(&env.login("bia", None).await).await;
     let s = env.upload(&ana, "  trombone  ").await;
-    assert_eq!((s.name.as_str(), s.emoji.as_str(), s.uploader.id, s.duration_ms), ("trombone", "🎺", ana.user.id, 300));
+    assert_eq!(
+        (
+            s.name.as_str(),
+            s.emoji.as_str(),
+            s.uploader.id,
+            s.duration_ms
+        ),
+        ("trombone", "🎺", ana.user.id, 300)
+    );
     assert_eq!(s.size as usize, tone(300).len());
     assert_eq!(s.hash.len(), 16);
     assert_eq!(env.sounds(&ana).await, vec![s.clone()]);
     // Everybody is told, with the whole list.
-    let ev = watcher.wait_for("sounds changed", |e| matches!(e, ServerEvent::SoundsChanged { .. })).await;
+    let ev = watcher
+        .wait_for("sounds changed", |e| {
+            matches!(e, ServerEvent::SoundsChanged { .. })
+        })
+        .await;
     assert!(matches!(ev, ServerEvent::SoundsChanged { sounds } if sounds == vec![s.clone()]));
 
     // No emoji is fine; stereo too.
@@ -273,21 +385,46 @@ async fn uploads_are_validated_again_on_the_hub() {
     let (status, msg) = error_text(r).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(msg.contains("too long"), "{msg}");
-    let (status, msg) = error_text(env.upload_fresh("longo-mono", "", tone_with(1, 6000)).await).await;
-    assert_eq!((status, msg.contains("too long")), (StatusCode::BAD_REQUEST, true));
+    let (status, msg) =
+        error_text(env.upload_fresh("longo-mono", "", tone_with(1, 6000)).await).await;
+    assert_eq!(
+        (status, msg.contains("too long")),
+        (StatusCode::BAD_REQUEST, true)
+    );
     // Stereo: 5.01 s is a bit over the duration limit but still under the 1 MiB size limit.
-    let (status, msg) = error_text(env.upload_fresh("longo-estereo", "", tone_with(2, 5010)).await).await;
-    assert_eq!((status, msg.contains("too long")), (StatusCode::BAD_REQUEST, true));
+    let (status, msg) = error_text(
+        env.upload_fresh("longo-estereo", "", tone_with(2, 5010))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        (status, msg.contains("too long")),
+        (StatusCode::BAD_REQUEST, true)
+    );
     // 6 s of stereo is over 1 MiB: refused for its size before anything is parsed.
-    assert_eq!(env.upload_fresh("gigante", "", tone_with(2, 6000)).await.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        env.upload_fresh("gigante", "", tone_with(2, 6000))
+            .await
+            .status(),
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
     assert!(ok(&env.upload_fresh("curto", "", tone(100)).await));
-    assert_eq!(env.upload_fresh("clique", "", tone(50)).await.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        env.upload_fresh("clique", "", tone(50)).await.status(),
+        StatusCode::BAD_REQUEST
+    );
 
     // Other formats are refused, whatever the Content-Type says.
     let mp3 = [&[0xff, 0xfb, 0x90, 0x00][..], &[0u8; 4000][..]].concat();
     let ogg = [&b"OggS\0\x02"[..], &[0u8; 4000][..]].concat();
     let flac = [&b"fLaC"[..], &[0u8; 4000][..]].concat();
-    for (what, body) in [("mp3", mp3), ("ogg", ogg), ("flac", flac), ("empty", vec![]), ("text", b"hello".to_vec())] {
+    for (what, body) in [
+        ("mp3", mp3),
+        ("ogg", ogg),
+        ("flac", flac),
+        ("empty", vec![]),
+        ("text", b"hello".to_vec()),
+    ] {
         let (status, _) = error_text(env.upload_fresh("formato", "", body).await).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{what}");
     }
@@ -295,26 +432,53 @@ async fn uploads_are_validated_again_on_the_hub() {
     let mut w = tone(500);
     w[24..28].copy_from_slice(&44_100u32.to_le_bytes());
     let (status, msg) = error_text(env.upload_fresh("taxa", "", w).await).await;
-    assert_eq!((status, msg.contains("48 kHz")), (StatusCode::BAD_REQUEST, true));
+    assert_eq!(
+        (status, msg.contains("48 kHz")),
+        (StatusCode::BAD_REQUEST, true)
+    );
     let mut w = tone(500);
     w[34] = 8;
-    assert_eq!(env.upload_fresh("bits", "", w).await.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        env.upload_fresh("bits", "", w).await.status(),
+        StatusCode::BAD_REQUEST
+    );
     // Truncated: the header promises more audio than there is.
     let w = tone(500);
-    assert_eq!(env.upload_fresh("cortado", "", w[..w.len() - 100].to_vec()).await.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        env.upload_fresh("cortado", "", w[..w.len() - 100].to_vec())
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
 
     // Over 1 MB is refused before anything else (and does not eat the whole body into memory).
-    let (status, _) = error_text(env.upload_fresh("enorme", "", vec![0u8; SOUND_MAX_UPLOAD_BYTES + 100_000]).await).await;
+    let (status, _) = error_text(
+        env.upload_fresh("enorme", "", vec![0u8; SOUND_MAX_UPLOAD_BYTES + 100_000])
+            .await,
+    )
+    .await;
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
-    let (status, _) = error_text(env.upload_fresh("enorme", "", vec![0u8; SOUND_MAX_UPLOAD_BYTES + 1]).await).await;
+    let (status, _) = error_text(
+        env.upload_fresh("enorme", "", vec![0u8; SOUND_MAX_UPLOAD_BYTES + 1])
+            .await,
+    )
+    .await;
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
 
     // Names and emoji.
     for name in ["", "   ", &"x".repeat(33), "a\u{7}b"] {
-        assert_eq!(env.upload_fresh(name, "", tone(300)).await.status(), StatusCode::BAD_REQUEST, "name {name:?}");
+        assert_eq!(
+            env.upload_fresh(name, "", tone(300)).await.status(),
+            StatusCode::BAD_REQUEST,
+            "name {name:?}"
+        );
     }
     for emoji in ["two words", &"x".repeat(13), "a\nb"] {
-        assert_eq!(env.upload_fresh("emoji", emoji, tone(300)).await.status(), StatusCode::BAD_REQUEST, "emoji {emoji:?}");
+        assert_eq!(
+            env.upload_fresh("emoji", emoji, tone(300)).await.status(),
+            StatusCode::BAD_REQUEST,
+            "emoji {emoji:?}"
+        );
     }
     // Only the valid ones were stored.
     let names: Vec<String> = env.sounds(&ana).await.into_iter().map(|s| s.name).collect();
@@ -331,27 +495,72 @@ async fn the_stored_clip_is_a_canonical_re_encoding() {
     let mut padded = base[..36].to_vec();
     padded.extend_from_slice(b"JUNK\x08\0\0\0DEADBEEF");
     padded.extend_from_slice(&base[36..]);
-    let s: Sound = env.upload_raw(&ana, "junk", "", padded.clone()).await.json().await.unwrap();
+    let s: Sound = env
+        .upload_raw(&ana, "junk", "", padded.clone())
+        .await
+        .json()
+        .await
+        .unwrap();
     assert_eq!(s.size as usize, base.len());
 
-    let r = env.get(&ana, &format!("/api/sounds/{}/audio?v={}", s.id, s.hash)).await;
+    let r = env
+        .get(&ana, &format!("/api/sounds/{}/audio?v={}", s.id, s.hash))
+        .await;
     assert_eq!(r.status(), StatusCode::OK);
     assert_eq!(r.headers()["content-type"], "audio/wav");
-    assert_eq!(r.headers()["etag"].to_str().unwrap(), format!("\"{}\"", s.hash));
-    assert!(r.headers()["cache-control"].to_str().unwrap().contains("immutable"));
-    assert_eq!(r.bytes().await.unwrap().as_ref(), base.as_slice(), "the same samples, in a plain WAV");
+    assert_eq!(
+        r.headers()["etag"].to_str().unwrap(),
+        format!("\"{}\"", s.hash)
+    );
+    assert!(r.headers()["cache-control"]
+        .to_str()
+        .unwrap()
+        .contains("immutable"));
+    assert_eq!(
+        r.bytes().await.unwrap().as_ref(),
+        base.as_slice(),
+        "the same samples, in a plain WAV"
+    );
 
     // Cacheable: a repeat with the ETag is 304 and has no body.
-    let r = env.http.get(env.url(&format!("/api/sounds/{}/audio", s.id))).bearer_auth(&ana.token).header("if-none-match", format!("\"{}\"", s.hash)).send().await.unwrap();
+    let r = env
+        .http
+        .get(env.url(&format!("/api/sounds/{}/audio", s.id)))
+        .bearer_auth(&ana.token)
+        .header("if-none-match", format!("\"{}\"", s.hash))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), StatusCode::NOT_MODIFIED);
     assert!(r.bytes().await.unwrap().is_empty());
     // Needs a login; unknown ids are 404.
-    assert_eq!(env.http.get(env.url(&format!("/api/sounds/{}/audio", s.id))).send().await.unwrap().status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(env.get(&ana, "/api/sounds/999/audio").await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        env.http
+            .get(env.url(&format!("/api/sounds/{}/audio", s.id)))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        env.get(&ana, "/api/sounds/999/audio").await.status(),
+        StatusCode::NOT_FOUND
+    );
     // Two uploads of the same samples share a hash; different samples do not.
-    let again: Sound = env.upload_raw(&ana, "igual", "", base.clone()).await.json().await.unwrap();
+    let again: Sound = env
+        .upload_raw(&ana, "igual", "", base.clone())
+        .await
+        .json()
+        .await
+        .unwrap();
     assert_eq!(again.hash, s.hash);
-    let other: Sound = env.upload_raw(&ana, "outro", "", tone(500)).await.json().await.unwrap();
+    let other: Sound = env
+        .upload_raw(&ana, "outro", "", tone(500))
+        .await
+        .json()
+        .await
+        .unwrap();
     assert_ne!(other.hash, s.hash);
     env.server.shutdown().await;
 }
@@ -376,8 +585,22 @@ async fn the_server_holds_at_most_fifty_sounds() {
     // Deleting one makes room.
     let first = env.sounds(&late).await[0].clone();
     let owner = env.login(&first.uploader.username, None).await;
-    assert_eq!(env.post(&owner, &format!("/api/sounds/{}/delete", first.id), json!({})).await.status(), StatusCode::OK);
-    assert_eq!(env.upload_raw(&late, "agora cabe", "", tone(300)).await.status(), StatusCode::OK);
+    assert_eq!(
+        env.post(
+            &owner,
+            &format!("/api/sounds/{}/delete", first.id),
+            json!({})
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        env.upload_raw(&late, "agora cabe", "", tone(300))
+            .await
+            .status(),
+        StatusCode::OK
+    );
     assert_eq!(env.sounds(&late).await.len(), SOUND_MAX_COUNT);
     env.server.shutdown().await;
 }
@@ -399,7 +622,10 @@ async fn uploading_is_rate_limited_per_person() {
     // A request that fails validation does not use up a turn.
     let cara = env.login("cara", None).await;
     for _ in 0..8 {
-        assert_eq!(env.upload_raw(&cara, "", "", tone(300)).await.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            env.upload_raw(&cara, "", "", tone(300)).await.status(),
+            StatusCode::BAD_REQUEST
+        );
     }
     env.upload(&cara, "ainda posso").await;
     env.server.shutdown().await;
@@ -416,32 +642,101 @@ async fn rename_and_delete_follow_the_permission_matrix() {
     let mut watcher = env.ws(&bia).await;
 
     let s = env.upload(&ana, "original").await;
-    watcher.wait_for("added", |e| matches!(e, ServerEvent::SoundsChanged { .. })).await;
+    watcher
+        .wait_for("added", |e| matches!(e, ServerEvent::SoundsChanged { .. }))
+        .await;
     let rename = |id: SoundId| format!("/api/sounds/{id}/rename");
     let delete = |id: SoundId| format!("/api/sounds/{id}/delete");
 
     // Another member cannot, anywhere.
-    assert_eq!(env.post(&bia, &rename(s.id), json!({"name": "invadido"})).await.status(), StatusCode::FORBIDDEN);
-    assert_eq!(env.post(&bia, &delete(s.id), json!({})).await.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        env.post(&bia, &rename(s.id), json!({"name": "invadido"}))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        env.post(&bia, &delete(s.id), json!({})).await.status(),
+        StatusCode::FORBIDDEN
+    );
     assert_eq!(env.sounds(&ana).await[0].name, "original");
     // Unknown sound.
-    assert_eq!(env.post(&ana, &rename(999), json!({"name": "x"})).await.status(), StatusCode::NOT_FOUND);
-    assert_eq!(env.post(&ana, &delete(999), json!({})).await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        env.post(&ana, &rename(999), json!({"name": "x"}))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        env.post(&ana, &delete(999), json!({})).await.status(),
+        StatusCode::NOT_FOUND
+    );
 
     // The uploader renames (name, and optionally the emoji) and it is announced.
-    let r = env.post(&ana, &rename(s.id), json!({"name": "  novo nome ", "emoji": "🥁"})).await;
+    let r = env
+        .post(
+            &ana,
+            &rename(s.id),
+            json!({"name": "  novo nome ", "emoji": "🥁"}),
+        )
+        .await;
     assert_eq!(r.status(), StatusCode::OK);
     let renamed: Sound = r.json().await.unwrap();
-    assert_eq!((renamed.name.as_str(), renamed.emoji.as_str(), renamed.hash.as_str()), ("novo nome", "🥁", s.hash.as_str()));
-    let ev = watcher.wait_for("renamed", |e| matches!(e, ServerEvent::SoundsChanged { .. })).await;
+    assert_eq!(
+        (
+            renamed.name.as_str(),
+            renamed.emoji.as_str(),
+            renamed.hash.as_str()
+        ),
+        ("novo nome", "🥁", s.hash.as_str())
+    );
+    let ev = watcher
+        .wait_for("renamed", |e| {
+            matches!(e, ServerEvent::SoundsChanged { .. })
+        })
+        .await;
     assert!(matches!(ev, ServerEvent::SoundsChanged { sounds } if sounds[0].name == "novo nome"));
     // Without an emoji field the emoji stays; an empty one clears it; bad names are 400.
-    assert_eq!(env.post(&ana, &rename(s.id), json!({"name": "so o nome"})).await.json::<Sound>().await.unwrap().emoji, "🥁");
-    assert_eq!(env.post(&ana, &rename(s.id), json!({"name": "so o nome", "emoji": ""})).await.json::<Sound>().await.unwrap().emoji, "");
-    assert_eq!(env.post(&ana, &rename(s.id), json!({"name": ""})).await.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(env.post(&ana, &rename(s.id), json!({"name": "x", "emoji": "a b"})).await.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        env.post(&ana, &rename(s.id), json!({"name": "so o nome"}))
+            .await
+            .json::<Sound>()
+            .await
+            .unwrap()
+            .emoji,
+        "🥁"
+    );
+    assert_eq!(
+        env.post(
+            &ana,
+            &rename(s.id),
+            json!({"name": "so o nome", "emoji": ""})
+        )
+        .await
+        .json::<Sound>()
+        .await
+        .unwrap()
+        .emoji,
+        ""
+    );
+    assert_eq!(
+        env.post(&ana, &rename(s.id), json!({"name": ""}))
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        env.post(&ana, &rename(s.id), json!({"name": "x", "emoji": "a b"}))
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
     // Her own changes are not moderation: nothing in the log.
-    assert!(env.audit(&admin).await.iter().all(|e| e.action != AUDIT_SOUND_RENAME));
+    assert!(env
+        .audit(&admin)
+        .await
+        .iter()
+        .all(|e| e.action != AUDIT_SOUND_RENAME));
 
     // Moderador, Admin and Dono change anybody's.
     for (who, label) in [(&moder, "mod"), (&admin, "adm"), (&owner, "dono")] {
@@ -449,29 +744,79 @@ async fn rename_and_delete_follow_the_permission_matrix() {
         assert_eq!(r.status(), StatusCode::OK, "{label} renames");
     }
     let log = env.audit(&admin).await;
-    let renames: Vec<_> = log.iter().filter(|e| e.action == AUDIT_SOUND_RENAME).collect();
+    let renames: Vec<_> = log
+        .iter()
+        .filter(|e| e.action == AUDIT_SOUND_RENAME)
+        .collect();
     assert_eq!(renames.len(), 3);
-    assert!(renames.iter().all(|e| e.target.as_ref().map(|t| t.id) == Some(ana.user.id)));
+    assert!(renames
+        .iter()
+        .all(|e| e.target.as_ref().map(|t| t.id) == Some(ana.user.id)));
     assert_eq!(renames[2].detail, "so o nome -> mod");
     assert_eq!(renames[2].actor.as_ref().map(|a| a.id), Some(moder.user.id));
 
     // Delete: the moderator's delete is audited, with the sound's name.
-    assert_eq!(env.post(&moder, &delete(s.id), json!({})).await.status(), StatusCode::OK);
+    assert_eq!(
+        env.post(&moder, &delete(s.id), json!({})).await.status(),
+        StatusCode::OK
+    );
     assert!(env.sounds(&ana).await.is_empty());
-    let ev = watcher.wait_for("deleted", |e| matches!(e, ServerEvent::SoundsChanged { sounds } if sounds.is_empty())).await;
+    let ev = watcher
+        .wait_for(
+            "deleted",
+            |e| matches!(e, ServerEvent::SoundsChanged { sounds } if sounds.is_empty()),
+        )
+        .await;
     assert!(matches!(ev, ServerEvent::SoundsChanged { .. }));
-    assert_eq!(env.get(&ana, &format!("/api/sounds/{}/audio", s.id)).await.status(), StatusCode::NOT_FOUND, "the clip is gone too");
+    assert_eq!(
+        env.get(&ana, &format!("/api/sounds/{}/audio", s.id))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND,
+        "the clip is gone too"
+    );
     let log = env.audit(&admin).await;
-    let del = log.iter().find(|e| e.action == AUDIT_SOUND_DELETE).expect("delete audited");
-    assert_eq!((del.detail.as_str(), del.actor.as_ref().map(|a| a.id), del.target.as_ref().map(|a| a.id)), ("dono", Some(moder.user.id), Some(ana.user.id)));
+    let del = log
+        .iter()
+        .find(|e| e.action == AUDIT_SOUND_DELETE)
+        .expect("delete audited");
+    assert_eq!(
+        (
+            del.detail.as_str(),
+            del.actor.as_ref().map(|a| a.id),
+            del.target.as_ref().map(|a| a.id)
+        ),
+        ("dono", Some(moder.user.id), Some(ana.user.id))
+    );
 
     // The uploader deletes her own (not audited); a moderator's own sound is hers to delete too.
     let mine = env.upload(&ana, "minha").await;
-    assert_eq!(env.post(&ana, &delete(mine.id), json!({})).await.status(), StatusCode::OK);
+    assert_eq!(
+        env.post(&ana, &delete(mine.id), json!({})).await.status(),
+        StatusCode::OK
+    );
     let modsound = env.upload(&moder, "do moderador").await;
-    assert_eq!(env.post(&bia, &delete(modsound.id), json!({})).await.status(), StatusCode::FORBIDDEN, "a member cannot touch a moderator's sound");
-    assert_eq!(env.post(&admin, &delete(modsound.id), json!({})).await.status(), StatusCode::OK);
-    assert_eq!(env.audit(&admin).await.iter().filter(|e| e.action == AUDIT_SOUND_DELETE).count(), 2);
+    assert_eq!(
+        env.post(&bia, &delete(modsound.id), json!({}))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN,
+        "a member cannot touch a moderator's sound"
+    );
+    assert_eq!(
+        env.post(&admin, &delete(modsound.id), json!({}))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        env.audit(&admin)
+            .await
+            .iter()
+            .filter(|e| e.action == AUDIT_SOUND_DELETE)
+            .count(),
+        2
+    );
     env.server.shutdown().await;
 }
 
@@ -484,13 +829,47 @@ async fn a_role_without_its_personal_password_has_no_powers_here_either() {
     // Promote bia to moderator, then clear her password through a reset: until she sets a new one
     // her role counts as a plain member.
     let bia = env.login("bia", None).await;
-    assert_eq!(env.post(&bia, "/api/account/password", json!({"new": "bia-senha"})).await.status(), StatusCode::OK);
-    assert_eq!(env.post(&owner, &format!("/api/admin/users/{}/role", bia.user.id), json!({"role": "moderator"})).await.status(), StatusCode::OK);
-    assert_eq!(env.post(&bia, &format!("/api/sounds/{}/rename", s.id), json!({"name": "ok"})).await.status(), StatusCode::OK);
-    let r = env.post(&owner, &format!("/api/admin/users/{}/reset-password", bia.user.id), json!({})).await;
+    assert_eq!(
+        env.post(&bia, "/api/account/password", json!({"new": "bia-senha"}))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        env.post(
+            &owner,
+            &format!("/api/admin/users/{}/role", bia.user.id),
+            json!({"role": "moderator"})
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        env.post(
+            &bia,
+            &format!("/api/sounds/{}/rename", s.id),
+            json!({"name": "ok"})
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    let r = env
+        .post(
+            &owner,
+            &format!("/api/admin/users/{}/reset-password", bia.user.id),
+            json!({}),
+        )
+        .await;
     let code = r.json::<ResetPasswordResponse>().await.unwrap().code;
     let bia = env.login("bia", Some(&code)).await;
-    assert_eq!(env.post(&bia, &format!("/api/sounds/{}/delete", s.id), json!({})).await.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        env.post(&bia, &format!("/api/sounds/{}/delete", s.id), json!({}))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
     env.server.shutdown().await;
 }
 
@@ -506,26 +885,52 @@ async fn a_sound_reaches_only_the_players_voice_channel() {
     let (room1, room2) = voice_ids(&env.channels(&ana).await);
     let s = env.upload(&ana, "buzina").await;
 
-    let (mut wa, mut wb, mut wc, mut wd) = (env.ws(&ana).await, env.ws(&bia).await, env.ws(&caio).await, env.ws(&dani).await);
+    let (mut wa, mut wb, mut wc, mut wd) = (
+        env.ws(&ana).await,
+        env.ws(&bia).await,
+        env.ws(&caio).await,
+        env.ws(&dani).await,
+    );
     wa.voice(Some(room1), false).await;
     wb.voice(Some(room1), true).await; // deafened: the hub still sends, the client decides
     wc.voice(Some(room2), false).await;
     // Dani is online but not in voice. Wait until the hub has everybody placed.
-    wd.wait_placed(vec![(ana.user.id, room1), (bia.user.id, room1), (caio.user.id, room2)]).await;
+    wd.wait_placed(vec![
+        (ana.user.id, room1),
+        (bia.user.id, room1),
+        (caio.user.id, room2),
+    ])
+    .await;
 
     wa.play(s.id).await;
     let ev = wb.wait_for("played", is_played(s.id)).await;
-    let ServerEvent::SoundPlayed { by, channel_id, .. } = ev else { unreachable!() };
+    let ServerEvent::SoundPlayed { by, channel_id, .. } = ev else {
+        unreachable!()
+    };
     assert_eq!((by.id, channel_id), (ana.user.id, room1));
-    wa.wait_for("played for the player too", is_played(s.id)).await;
-    for (name, ws) in [("caio (other room)", &mut wc), ("dani (not in voice)", &mut wd)] {
+    wa.wait_for("played for the player too", is_played(s.id))
+        .await;
+    for (name, ws) in [
+        ("caio (other room)", &mut wc),
+        ("dani (not in voice)", &mut wd),
+    ] {
         let got = ws.drain(Duration::from_millis(500)).await;
-        assert!(!got.iter().any(|e| matches!(e, ServerEvent::SoundPlayed { .. })), "{name} must not get it: {got:?}");
+        assert!(
+            !got.iter()
+                .any(|e| matches!(e, ServerEvent::SoundPlayed { .. })),
+            "{name} must not get it: {got:?}"
+        );
     }
     // The other room has its own sounds.
     wc.play(s.id).await;
     wc.wait_for("c hears own", is_played(s.id)).await;
-    assert!(!wb.drain(Duration::from_millis(400)).await.iter().any(is_played(s.id)), "room 1 does not hear room 2");
+    assert!(
+        !wb.drain(Duration::from_millis(400))
+            .await
+            .iter()
+            .any(is_played(s.id)),
+        "room 1 does not hear room 2"
+    );
     env.server.shutdown().await;
 }
 
@@ -540,19 +945,39 @@ async fn playing_is_refused_outside_voice_for_unknown_sounds_and_when_server_mut
 
     let is_err = |text: &'static str| move |e: &ServerEvent| matches!(e, ServerEvent::Error { error } if error == text);
     wa.play(s.id).await;
-    wa.wait_for("not in voice", is_err(ERR_SOUND_NOT_IN_VOICE)).await;
+    wa.wait_for("not in voice", is_err(ERR_SOUND_NOT_IN_VOICE))
+        .await;
     wa.voice(Some(room1), false).await;
     wa.play(404).await;
     wa.wait_for("unknown", is_err(ERR_SOUND_UNKNOWN)).await;
 
     // A server-muted member cannot talk through the soundboard.
-    assert_eq!(env.post(&moder, &format!("/api/mod/users/{}/mute", ana.user.id), json!({"muted": true})).await.status(), StatusCode::OK);
+    assert_eq!(
+        env.post(
+            &moder,
+            &format!("/api/mod/users/{}/mute", ana.user.id),
+            json!({"muted": true})
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
     tokio::time::sleep(Duration::from_millis(2100)).await; // past the per-person gap of the refused-unknown play
     wa.play(s.id).await;
     wa.wait_for("muted", is_err(ERR_SOUND_SERVER_MUTED)).await;
-    assert_eq!(env.post(&moder, &format!("/api/mod/users/{}/mute", ana.user.id), json!({"muted": false})).await.status(), StatusCode::OK);
+    assert_eq!(
+        env.post(
+            &moder,
+            &format!("/api/mod/users/{}/mute", ana.user.id),
+            json!({"muted": false})
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
     wa.play(s.id).await;
-    wa.wait_for("played after the unmute", is_played(s.id)).await;
+    wa.wait_for("played after the unmute", is_played(s.id))
+        .await;
     let _ = owner;
     env.server.shutdown().await;
 }
@@ -577,7 +1002,8 @@ async fn play_rate_limits_per_person_and_per_room() {
         ws.voice(Some(room1), false).await;
     }
     socks[6].voice(Some(room2), false).await;
-    let mut placed: Vec<(UserId, i64)> = people.iter().take(6).map(|p| (p.user.id, room1)).collect();
+    let mut placed: Vec<(UserId, i64)> =
+        people.iter().take(6).map(|p| (p.user.id, room1)).collect();
     placed.push((people[6].user.id, room2));
     socks[0].wait_placed(placed).await;
 
@@ -588,7 +1014,11 @@ async fn play_rate_limits_per_person_and_per_room() {
     socks[0].play(s.id).await;
     socks[0].wait_for("too fast", limited).await;
     let heard = socks[1].drain(Duration::from_millis(300)).await;
-    assert_eq!(heard.iter().filter(|e| is_played(s.id)(e)).count(), 1, "only the first reached the room");
+    assert_eq!(
+        heard.iter().filter(|e| is_played(s.id)(e)).count(),
+        1,
+        "only the first reached the room"
+    );
 
     // The room: five plays in 10 s in all; the sixth person is refused even though it is their first.
     for ws in socks.iter_mut().take(5).skip(1) {
@@ -606,7 +1036,9 @@ async fn play_rate_limits_per_person_and_per_room() {
     // After the gap the first person plays again (the room window has not slid yet: still full).
     tokio::time::sleep(Duration::from_millis(2100)).await;
     socks[0].play(s.id).await;
-    socks[0].wait_for("still limited by the room", limited).await;
+    socks[0]
+        .wait_for("still limited by the room", limited)
+        .await;
     env.server.shutdown().await;
 }
 
@@ -622,10 +1054,24 @@ async fn old_clients_are_not_bothered_by_the_new_events() {
         Pong { nonce: u64 },
         Error { error: String },
     }
-    let played = serde_json::to_string(&ServerEvent::SoundPlayed { sound_id: 3, by: User::new(1, "ana"), channel_id: 2 }).unwrap();
+    let played = serde_json::to_string(&ServerEvent::SoundPlayed {
+        sound_id: 3,
+        by: User::new(1, "ana"),
+        channel_id: 2,
+    })
+    .unwrap();
     let changed = serde_json::to_string(&ServerEvent::SoundsChanged { sounds: vec![] }).unwrap();
-    assert!(serde_json::from_str::<V041Event>(&played).is_err() && serde_json::from_str::<V041Event>(&changed).is_err());
-    assert_eq!(played, r#"{"type":"sound_played","sound_id":3,"by":{"id":1,"username":"ana"},"channel_id":2}"#);
-    assert_eq!(serde_json::to_string(&ClientEvent::PlaySound { sound_id: 3 }).unwrap(), r#"{"type":"play_sound","sound_id":3}"#);
+    assert!(
+        serde_json::from_str::<V041Event>(&played).is_err()
+            && serde_json::from_str::<V041Event>(&changed).is_err()
+    );
+    assert_eq!(
+        played,
+        r#"{"type":"sound_played","sound_id":3,"by":{"id":1,"username":"ana"},"channel_id":2}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&ClientEvent::PlaySound { sound_id: 3 }).unwrap(),
+        r#"{"type":"play_sound","sound_id":3}"#
+    );
     // A hub too old for it answers a PlaySound with the generic parse error, and keeps the socket.
 }

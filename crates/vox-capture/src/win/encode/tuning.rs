@@ -87,7 +87,9 @@ impl NvTuning {
     pub fn parse(mut self, spec: &str) -> Result<Self, String> {
         for tok in spec.split(',').map(str::trim).filter(|t| !t.is_empty()) {
             let num = |p: &str| -> Result<f32, String> {
-                tok[p.len()..].parse::<f32>().map_err(|_| format!("bad NVENC option {tok:?}"))
+                tok[p.len()..]
+                    .parse::<f32>()
+                    .map_err(|_| format!("bad NVENC option {tok:?}"))
             };
             match tok {
                 "v01" => self = Self::V01,
@@ -175,7 +177,9 @@ impl MfTuning {
     pub fn parse(mut self, spec: &str) -> Result<Self, String> {
         for tok in spec.split(',').map(str::trim).filter(|t| !t.is_empty()) {
             let num = |p: &str| -> Result<f32, String> {
-                tok[p.len()..].parse::<f32>().map_err(|_| format!("bad MF option {tok:?}"))
+                tok[p.len()..]
+                    .parse::<f32>()
+                    .map_err(|_| format!("bad MF option {tok:?}"))
             };
             match tok {
                 "v01" => self = Self::V01,
@@ -186,9 +190,15 @@ impl MfTuning {
                 "ldvbr" => self.rc = 4,
                 "head" => self.headroom = true,
                 "nohead" => self.headroom = false,
-                t if t.starts_with("qs") => self.quality_vs_speed = Some(num("qs")?.clamp(0.0, 100.0) as u32),
-                t if t.starts_with("maxqp") => self.max_qp = Some(num("maxqp")?.clamp(0.0, 51.0) as u32),
-                t if t.starts_with("minqp") => self.min_qp = Some(num("minqp")?.clamp(0.0, 51.0) as u32),
+                t if t.starts_with("qs") => {
+                    self.quality_vs_speed = Some(num("qs")?.clamp(0.0, 100.0) as u32)
+                }
+                t if t.starts_with("maxqp") => {
+                    self.max_qp = Some(num("maxqp")?.clamp(0.0, 51.0) as u32)
+                }
+                t if t.starts_with("minqp") => {
+                    self.min_qp = Some(num("minqp")?.clamp(0.0, 51.0) as u32)
+                }
                 t if t.starts_with("vbv") => self.vbv_frames = num("vbv")?.clamp(0.25, 30.0),
                 t if t.starts_with("peak") => self.peak_factor = num("peak")?.clamp(1.0, 4.0),
                 _ => return Err(format!("unknown MF option {tok:?}")),
@@ -236,14 +246,15 @@ impl Default for Tuning {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn parse_nv() {
-        let t = NvTuning::V01.parse("p6, ll, vbr, vbv1.5, aq8, taq, mp1, ks2, maxqp42").unwrap();
+        let t = NvTuning::V01
+            .parse("p6, ll, vbr, vbv1.5, aq8, taq, mp1, ks2, maxqp42")
+            .unwrap();
         assert_eq!(t.preset, 6);
         assert!(!t.ull && t.vbr && t.temporal_aq);
         assert_eq!(t.vbv_frames, 1.5);
@@ -259,7 +270,9 @@ mod tests {
 
     #[test]
     fn parse_mf() {
-        let t = MfTuning::V01.parse("pvbr,qs70,maxqp40,minqp10,vbv2,peak1.5,head").unwrap();
+        let t = MfTuning::V01
+            .parse("pvbr,qs70,maxqp40,minqp10,vbv2,peak1.5,head")
+            .unwrap();
         assert!(t.headroom);
         assert_eq!(t.rc, 1);
         assert_eq!(t.quality_vs_speed, Some(70));

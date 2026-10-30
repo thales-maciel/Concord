@@ -48,7 +48,10 @@ fn parse_args() -> Result<Cli> {
     };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
-        let mut value = |name: &str| args.next().ok_or_else(|| anyhow::anyhow!("{name} needs a value"));
+        let mut value = |name: &str| {
+            args.next()
+                .ok_or_else(|| anyhow::anyhow!("{name} needs a value"))
+        };
         match a.as_str() {
             "--data-dir" => cli.opts.data_dir = value("--data-dir")?.into(),
             "--livekit-bin" => cli.opts.livekit_bin = value("--livekit-bin")?.into(),
@@ -84,7 +87,9 @@ fn main() -> Result<()> {
     let _log = vox_log::init("hub", cli.log_dir.as_deref(), cli.console);
     let rt = voxhub_server::runtime()?;
     // v1.0.2: what the connection diagnostics check (in the background, after the start).
-    let livekit_exe = (!cli.opts.no_livekit).then(|| std::path::absolute(&cli.opts.livekit_bin).unwrap_or_else(|_| cli.opts.livekit_bin.clone()));
+    let livekit_exe = (!cli.opts.no_livekit).then(|| {
+        std::path::absolute(&cli.opts.livekit_bin).unwrap_or_else(|_| cli.opts.livekit_bin.clone())
+    });
     let no_diag = cli.no_diag;
     let result = rt.block_on(serve_until(cli.opts, move |server| {
         if !no_diag {

@@ -87,14 +87,20 @@ fn sound_row(r: &rusqlite::Row) -> rusqlite::Result<SoundRow> {
 }
 
 /// Rows to wire sounds, uploaders as everybody currently sees them (role, picture).
-fn with_uploaders(conn: &Connection, rows: Vec<SoundRow>, owner: &str) -> rusqlite::Result<Vec<Sound>> {
+fn with_uploaders(
+    conn: &Connection,
+    rows: Vec<SoundRow>,
+    owner: &str,
+) -> rusqlite::Result<Vec<Sound>> {
     let mut people: HashMap<UserId, User> = HashMap::new();
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
         let uploader = match people.get(&r.uploader_id) {
             Some(u) => u.clone(),
             None => {
-                let u = db::get_user(conn, r.uploader_id)?.map(|u| u.user(owner)).unwrap_or_else(|| User::new(r.uploader_id, "?"));
+                let u = db::get_user(conn, r.uploader_id)?
+                    .map(|u| u.user(owner))
+                    .unwrap_or_else(|| User::new(r.uploader_id, "?"));
                 people.insert(r.uploader_id, u.clone());
                 u
             }
@@ -117,14 +123,22 @@ fn with_uploaders(conn: &Connection, rows: Vec<SoundRow>, owner: &str) -> rusqli
 pub fn list_sounds(conn: &Connection, owner: &str) -> rusqlite::Result<Vec<Sound>> {
     let rows = {
         let mut st = conn.prepare(&format!("SELECT {SOUND_COLS} FROM sounds ORDER BY id"))?;
-        let rows = st.query_map([], sound_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let rows = st
+            .query_map([], sound_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         rows
     };
     with_uploaders(conn, rows, owner)
 }
 
 pub fn get_sound(conn: &Connection, id: SoundId, owner: &str) -> rusqlite::Result<Option<Sound>> {
-    let row = conn.query_row(&format!("SELECT {SOUND_COLS} FROM sounds WHERE id = ?"), [id], sound_row).optional()?;
+    let row = conn
+        .query_row(
+            &format!("SELECT {SOUND_COLS} FROM sounds WHERE id = ?"),
+            [id],
+            sound_row,
+        )
+        .optional()?;
     Ok(match row {
         Some(r) => with_uploaders(conn, vec![r], owner)?.pop(),
         None => None,
@@ -132,7 +146,10 @@ pub fn get_sound(conn: &Connection, id: SoundId, owner: &str) -> rusqlite::Resul
 }
 
 pub fn sound_exists(conn: &Connection, id: SoundId) -> rusqlite::Result<bool> {
-    Ok(conn.query_row("SELECT 1 FROM sounds WHERE id = ?", [id], |_| Ok(())).optional()?.is_some())
+    Ok(conn
+        .query_row("SELECT 1 FROM sounds WHERE id = ?", [id], |_| Ok(()))
+        .optional()?
+        .is_some())
 }
 
 /// The stored clip.
@@ -168,14 +185,25 @@ pub fn insert_sound(
         )?;
         Ok(id)
     })?;
-    tx.execute("INSERT INTO sound_data (sound_id, data) VALUES (?, ?)", params![id, data])?;
+    tx.execute(
+        "INSERT INTO sound_data (sound_id, data) VALUES (?, ?)",
+        params![id, data],
+    )?;
     tx.commit()?;
     Ok(Some(id))
 }
 
-pub fn rename_sound(conn: &Connection, id: SoundId, name: &str, emoji: Option<&str>) -> rusqlite::Result<bool> {
+pub fn rename_sound(
+    conn: &Connection,
+    id: SoundId,
+    name: &str,
+    emoji: Option<&str>,
+) -> rusqlite::Result<bool> {
     let n = match emoji {
-        Some(e) => conn.execute("UPDATE sounds SET name = ?, emoji = ? WHERE id = ?", params![name, e, id])?,
+        Some(e) => conn.execute(
+            "UPDATE sounds SET name = ?, emoji = ? WHERE id = ?",
+            params![name, e, id],
+        )?,
         None => conn.execute("UPDATE sounds SET name = ? WHERE id = ?", params![name, id])?,
     };
     Ok(n > 0)
@@ -220,7 +248,9 @@ impl SoundState {
     fn allow_upload_at(&self, user: UserId, now: Instant) -> bool {
         let mut g = self.uploads.lock().unwrap_or_else(|e| e.into_inner());
         let b = g.entry(user).or_insert((UPLOAD_BURST, now));
-        b.0 = (b.0 + now.saturating_duration_since(b.1).as_secs_f64() / UPLOAD_REFILL.as_secs_f64()).min(UPLOAD_BURST);
+        b.0 = (b.0
+            + now.saturating_duration_since(b.1).as_secs_f64() / UPLOAD_REFILL.as_secs_f64())
+        .min(UPLOAD_BURST);
         b.1 = now;
         if b.0 >= 1.0 {
             b.0 -= 1.0;
@@ -235,13 +265,24 @@ impl SoundState {
         self.allow_play_at(user, channel, Instant::now())
     }
 
-    fn allow_play_at(&self, user: UserId, channel: ChannelId, now: Instant) -> Result<(), PlayDenied> {
+    fn allow_play_at(
+        &self,
+        user: UserId,
+        channel: ChannelId,
+        now: Instant,
+    ) -> Result<(), PlayDenied> {
         let mut g = self.plays.lock().unwrap_or_else(|e| e.into_inner());
-        if g.last_by_user.get(&user).is_some_and(|t| now.saturating_duration_since(*t) < PLAY_GAP_PER_USER) {
+        if g.last_by_user
+            .get(&user)
+            .is_some_and(|t| now.saturating_duration_since(*t) < PLAY_GAP_PER_USER)
+        {
             return Err(PlayDenied::User);
         }
         let room = g.by_room.entry(channel).or_default();
-        while room.front().is_some_and(|t| now.saturating_duration_since(*t) >= PLAY_ROOM_WINDOW) {
+        while room
+            .front()
+            .is_some_and(|t| now.saturating_duration_since(*t) >= PLAY_ROOM_WINDOW)
+        {
             room.pop_front();
         }
         if room.len() >= PLAY_MAX_PER_ROOM {
@@ -251,7 +292,8 @@ impl SoundState {
         g.last_by_user.insert(user, now);
         // Keep the maps small: forget people who have been quiet for a while.
         if g.last_by_user.len() > 256 {
-            g.last_by_user.retain(|_, t| now.saturating_duration_since(*t) < PLAY_ROOM_WINDOW);
+            g.last_by_user
+                .retain(|_, t| now.saturating_duration_since(*t) < PLAY_ROOM_WINDOW);
         }
         Ok(())
     }
@@ -282,10 +324,23 @@ pub async fn play(s: &AppState, user: &User, sound_id: SoundId) -> Option<Server
             return err("could not play the sound");
         }
     }
-    let members: Vec<UserId> = s.voice_members().into_iter().filter(|m| m.channel_id == Some(channel)).map(|m| m.user.id).collect();
+    let members: Vec<UserId> = s
+        .voice_members()
+        .into_iter()
+        .filter(|m| m.channel_id == Some(channel))
+        .map(|m| m.user.id)
+        .collect();
     tracing::info!(user = %user.username, sound_id, channel, listeners = members.len(), "sound played");
     // Only the room's members, and only those who may see the channel (v0.9: private channels).
-    s.send_channel_to(channel, &members, &ServerEvent::SoundPlayed { sound_id, by: s.current_user(user), channel_id: channel });
+    s.send_channel_to(
+        channel,
+        &members,
+        &ServerEvent::SoundPlayed {
+            sound_id,
+            by: s.current_user(user),
+            channel_id: channel,
+        },
+    );
     None
 }
 
@@ -296,7 +351,10 @@ fn not_found() -> ApiErr {
 }
 
 fn forbidden() -> ApiErr {
-    ApiErr::new(StatusCode::FORBIDDEN, "only the person who added this sound, or a moderator, can change it")
+    ApiErr::new(
+        StatusCode::FORBIDDEN,
+        "only the person who added this sound, or a moderator, can change it",
+    )
 }
 
 /// Tell everybody the list changed.
@@ -309,7 +367,10 @@ async fn announce(s: &AppState) -> Result<(), ApiErr> {
 
 async fn audit(s: &AppState, actor: UserId, action: &'static str, target: UserId, detail: String) {
     tracing::info!(actor, action, target, detail, "audit");
-    if let Err(e) = s.db.call(move |c| db::audit(c, Some(actor), action, Some(target), &detail)).await {
+    if let Err(e) =
+        s.db.call(move |c| db::audit(c, Some(actor), action, Some(target), &detail))
+            .await
+    {
         tracing::error!("audit log write failed: {e:#}");
     }
 }
@@ -321,14 +382,40 @@ pub async fn list(State(s): State<AppState>, _: AuthUser) -> ApiResult<Vec<Sound
 }
 
 /// `GET /api/sounds/{id}/audio`
-pub async fn audio(State(s): State<AppState>, _: AuthUser, Path(id): Path<SoundId>, headers: HeaderMap) -> Result<Response, ApiErr> {
-    let (data, hash) = s.db.call(move |c| sound_data(c, id)).await?.ok_or_else(not_found)?;
+pub async fn audio(
+    State(s): State<AppState>,
+    _: AuthUser,
+    Path(id): Path<SoundId>,
+    headers: HeaderMap,
+) -> Result<Response, ApiErr> {
+    let (data, hash) =
+        s.db.call(move |c| sound_data(c, id))
+            .await?
+            .ok_or_else(not_found)?;
     let etag = format!("\"{hash}\"");
-    let cache = [(header::ETAG, etag.clone()), (header::CACHE_CONTROL, "private, max-age=31536000, immutable".to_string())];
-    if headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()).is_some_and(|v| v.split(',').any(|t| t.trim() == etag)) {
+    let cache = [
+        (header::ETAG, etag.clone()),
+        (
+            header::CACHE_CONTROL,
+            "private, max-age=31536000, immutable".to_string(),
+        ),
+    ];
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.split(',').any(|t| t.trim() == etag))
+    {
         return Ok((StatusCode::NOT_MODIFIED, cache).into_response());
     }
-    Ok((cache, [(header::CONTENT_TYPE, "audio/wav".to_string()), (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string())], data).into_response())
+    Ok((
+        cache,
+        [
+            (header::CONTENT_TYPE, "audio/wav".to_string()),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+        ],
+        data,
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]
@@ -346,7 +433,8 @@ pub async fn upload(
     body: Result<Bytes, BytesRejection>,
 ) -> ApiResult<Sound> {
     let bad = |m: &str| ApiErr::new(StatusCode::BAD_REQUEST, m);
-    let name = clean_sound_name(&q.name).ok_or_else(|| bad(&format!("the name must be 1-{SOUND_NAME_MAX} characters")))?;
+    let name = clean_sound_name(&q.name)
+        .ok_or_else(|| bad(&format!("the name must be 1-{SOUND_NAME_MAX} characters")))?;
     let emoji = clean_sound_emoji(&q.emoji).ok_or_else(|| bad("invalid emoji"))?;
     let too_big = || ApiErr::new(StatusCode::PAYLOAD_TOO_LARGE, "the sound is over 1 MB");
     let body = body.map_err(|_| too_big())?;
@@ -355,7 +443,10 @@ pub async fn upload(
     }
     if !s.sounds.allow_upload(me.user.id) {
         tracing::warn!(user = %me.user.username, "sound upload refused (rate limit)");
-        return Err(ApiErr::new(StatusCode::TOO_MANY_REQUESTS, "too many uploads, try again in a little while"));
+        return Err(ApiErr::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many uploads, try again in a little while",
+        ));
     }
     // Parse again (never trust the client) and store a canonical re-encoding: no other chunk of
     // the upload survives.
@@ -364,13 +455,21 @@ pub async fn upload(
     let hash = hash_of(&stored);
     let (uploader, duration, size) = (me.user.id, info.duration_ms(), stored.len());
     let (n2, e2, h2) = (name.clone(), emoji.clone(), hash.clone());
-    let id = s.db.call(move |c| insert_sound(c, &n2, &e2, uploader, duration, &h2, &stored)).await?;
+    let id =
+        s.db.call(move |c| insert_sound(c, &n2, &e2, uploader, duration, &h2, &stored))
+            .await?;
     let Some(id) = id else {
-        return Err(ApiErr::new(StatusCode::CONFLICT, format!("the soundboard is full ({SOUND_MAX_COUNT} sounds): delete one first")));
+        return Err(ApiErr::new(
+            StatusCode::CONFLICT,
+            format!("the soundboard is full ({SOUND_MAX_COUNT} sounds): delete one first"),
+        ));
     };
     tracing::info!(user = %me.user.username, id, name, duration_ms = duration, size, "sound added");
     let owner = s.owner().to_string();
-    let sound = s.db.call(move |c| get_sound(c, id, &owner)).await?.ok_or_else(not_found)?;
+    let sound =
+        s.db.call(move |c| get_sound(c, id, &owner))
+            .await?
+            .ok_or_else(not_found)?;
     announce(&s).await?;
     Ok(Json(sound))
 }
@@ -378,12 +477,18 @@ pub async fn upload(
 /// The cache key of a clip: the first 16 hex digits of the SHA-256 of its bytes.
 fn hash_of(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
-    crate::util::hex(&Sha256::digest(bytes)).chars().take(16).collect()
+    crate::util::hex(&Sha256::digest(bytes))
+        .chars()
+        .take(16)
+        .collect()
 }
 
 async fn editable(s: &AppState, me: &Authed, id: SoundId) -> Result<Sound, ApiErr> {
     let owner = s.owner().to_string();
-    let sound = s.db.call(move |c| get_sound(c, id, &owner)).await?.ok_or_else(not_found)?;
+    let sound =
+        s.db.call(move |c| get_sound(c, id, &owner))
+            .await?
+            .ok_or_else(not_found)?;
     if !may_edit_sound(me.role, me.user.id, sound.uploader.id) {
         return Err(forbidden());
     }
@@ -399,32 +504,65 @@ pub async fn rename(
 ) -> ApiResult<Sound> {
     let Json(req) = body?;
     let sound = editable(&s, &me, id).await?;
-    let name = clean_sound_name(&req.name).ok_or_else(|| ApiErr::new(StatusCode::BAD_REQUEST, format!("the name must be 1-{SOUND_NAME_MAX} characters")))?;
+    let name = clean_sound_name(&req.name).ok_or_else(|| {
+        ApiErr::new(
+            StatusCode::BAD_REQUEST,
+            format!("the name must be 1-{SOUND_NAME_MAX} characters"),
+        )
+    })?;
     let emoji = match req.emoji.as_deref() {
-        Some(e) => Some(clean_sound_emoji(e).ok_or_else(|| ApiErr::new(StatusCode::BAD_REQUEST, "invalid emoji"))?),
+        Some(e) => Some(
+            clean_sound_emoji(e)
+                .ok_or_else(|| ApiErr::new(StatusCode::BAD_REQUEST, "invalid emoji"))?,
+        ),
         None => None,
     };
     let n2 = name.clone();
-    if !s.db.call(move |c| rename_sound(c, id, &n2, emoji.as_deref())).await? {
+    if !s
+        .db
+        .call(move |c| rename_sound(c, id, &n2, emoji.as_deref()))
+        .await?
+    {
         return Err(not_found());
     }
     if sound.uploader.id != me.user.id {
-        audit(&s, me.user.id, AUDIT_SOUND_RENAME, sound.uploader.id, format!("{} -> {name}", sound.name)).await;
+        audit(
+            &s,
+            me.user.id,
+            AUDIT_SOUND_RENAME,
+            sound.uploader.id,
+            format!("{} -> {name}", sound.name),
+        )
+        .await;
     }
     let owner = s.owner().to_string();
-    let fresh = s.db.call(move |c| get_sound(c, id, &owner)).await?.ok_or_else(not_found)?;
+    let fresh =
+        s.db.call(move |c| get_sound(c, id, &owner))
+            .await?
+            .ok_or_else(not_found)?;
     announce(&s).await?;
     Ok(Json(fresh))
 }
 
 /// `POST /api/sounds/{id}/delete`
-pub async fn delete(State(s): State<AppState>, me: Authed, Path(id): Path<SoundId>) -> ApiResult<OkResponse> {
+pub async fn delete(
+    State(s): State<AppState>,
+    me: Authed,
+    Path(id): Path<SoundId>,
+) -> ApiResult<OkResponse> {
     let sound = editable(&s, &me, id).await?;
     if !s.db.call(move |c| delete_sound(c, id)).await? {
         return Err(not_found());
     }
     if sound.uploader.id != me.user.id {
-        audit(&s, me.user.id, AUDIT_SOUND_DELETE, sound.uploader.id, sound.name.clone()).await;
+        audit(
+            &s,
+            me.user.id,
+            AUDIT_SOUND_DELETE,
+            sound.uploader.id,
+            sound.name.clone(),
+        )
+        .await;
     }
     announce(&s).await?;
     Ok(Json(OkResponse { ok: true }))
@@ -439,9 +577,19 @@ mod tests {
         let st = SoundState::default();
         let t = Instant::now();
         assert_eq!(st.allow_play_at(1, 10, t), Ok(()));
-        assert_eq!(st.allow_play_at(1, 10, t + Duration::from_millis(1900)), Err(PlayDenied::User));
-        assert_eq!(st.allow_play_at(2, 10, t + Duration::from_millis(1900)), Ok(()), "somebody else is not slowed down");
-        assert_eq!(st.allow_play_at(1, 10, t + Duration::from_millis(2100)), Ok(()));
+        assert_eq!(
+            st.allow_play_at(1, 10, t + Duration::from_millis(1900)),
+            Err(PlayDenied::User)
+        );
+        assert_eq!(
+            st.allow_play_at(2, 10, t + Duration::from_millis(1900)),
+            Ok(()),
+            "somebody else is not slowed down"
+        );
+        assert_eq!(
+            st.allow_play_at(1, 10, t + Duration::from_millis(2100)),
+            Ok(())
+        );
     }
 
     #[test]
@@ -449,11 +597,25 @@ mod tests {
         let st = SoundState::default();
         let t = Instant::now();
         for who in 1..=5 {
-            assert_eq!(st.allow_play_at(who, 10, t + Duration::from_millis(who as u64 * 100)), Ok(()));
+            assert_eq!(
+                st.allow_play_at(who, 10, t + Duration::from_millis(who as u64 * 100)),
+                Ok(())
+            );
         }
-        assert_eq!(st.allow_play_at(6, 10, t + Duration::from_secs(1)), Err(PlayDenied::Room));
-        assert_eq!(st.allow_play_at(6, 11, t + Duration::from_secs(1)), Ok(()), "another room is its own count");
-        assert_eq!(st.allow_play_at(7, 10, t + Duration::from_millis(10_150)), Ok(()), "the window slides");
+        assert_eq!(
+            st.allow_play_at(6, 10, t + Duration::from_secs(1)),
+            Err(PlayDenied::Room)
+        );
+        assert_eq!(
+            st.allow_play_at(6, 11, t + Duration::from_secs(1)),
+            Ok(()),
+            "another room is its own count"
+        );
+        assert_eq!(
+            st.allow_play_at(7, 10, t + Duration::from_millis(10_150)),
+            Ok(()),
+            "the window slides"
+        );
     }
 
     #[test]
@@ -465,7 +627,10 @@ mod tests {
         }
         assert!(!st.allow_upload_at(1, t + Duration::from_secs(1)));
         assert!(st.allow_upload_at(2, t), "per person");
-        assert!(st.allow_upload_at(1, t + Duration::from_secs(31)), "one token back after 30 s");
+        assert!(
+            st.allow_upload_at(1, t + Duration::from_secs(31)),
+            "one token back after 30 s"
+        );
         assert!(!st.allow_upload_at(1, t + Duration::from_secs(32)));
     }
 
@@ -473,21 +638,48 @@ mod tests {
     fn storage_round_trip_and_the_limit() {
         let mut conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, role TEXT, avatar_version TEXT);").unwrap();
-        conn.execute("INSERT INTO users (id, username, role) VALUES (1, 'ana', 'member')", []).unwrap();
+        conn.execute(
+            "INSERT INTO users (id, username, role) VALUES (1, 'ana', 'member')",
+            [],
+        )
+        .unwrap();
         init(&conn).unwrap();
         init(&conn).unwrap(); // idempotent
         let wav = canonical_wav(1, &[1i16; 9600]);
         for i in 0..SOUND_MAX_COUNT {
-            assert!(insert_sound(&mut conn, &format!("s{i}"), "", 1, 200, "h", &wav).unwrap().is_some());
+            assert!(
+                insert_sound(&mut conn, &format!("s{i}"), "", 1, 200, "h", &wav)
+                    .unwrap()
+                    .is_some()
+            );
         }
-        assert_eq!(insert_sound(&mut conn, "one too many", "", 1, 200, "h", &wav).unwrap(), None);
+        assert_eq!(
+            insert_sound(&mut conn, "one too many", "", 1, 200, "h", &wav).unwrap(),
+            None
+        );
         assert!(delete_sound(&mut conn, 3).unwrap());
         assert!(!delete_sound(&mut conn, 3).unwrap());
-        assert_eq!(sound_data(&conn, 3).unwrap(), None, "the audio goes with the row");
-        assert!(insert_sound(&mut conn, "fits again", "🎺", 1, 200, "h", &wav).unwrap().is_some());
+        assert_eq!(
+            sound_data(&conn, 3).unwrap(),
+            None,
+            "the audio goes with the row"
+        );
+        assert!(
+            insert_sound(&mut conn, "fits again", "🎺", 1, 200, "h", &wav)
+                .unwrap()
+                .is_some()
+        );
         assert!(rename_sound(&conn, 4, "renamed", Some("😀")).unwrap());
         assert!(rename_sound(&conn, 4, "again", None).unwrap());
-        let (name, emoji): (String, String) = conn.query_row("SELECT name, emoji FROM sounds WHERE id = 4", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
-        assert_eq!((name.as_str(), emoji.as_str()), ("again", "😀"), "no emoji given keeps it");
+        let (name, emoji): (String, String) = conn
+            .query_row("SELECT name, emoji FROM sounds WHERE id = 4", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(
+            (name.as_str(), emoji.as_str()),
+            ("again", "😀"),
+            "no emoji given keeps it"
+        );
     }
 }

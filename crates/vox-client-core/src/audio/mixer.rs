@@ -61,13 +61,17 @@ fn clamp_gain(g: f32) -> f32 {
 
 impl Gain {
     pub fn new(level: f32, muted: bool) -> Self {
-        Self { level: AtomicU32::new(clamp_gain(level).to_bits()), muted: AtomicBool::new(muted) }
+        Self {
+            level: AtomicU32::new(clamp_gain(level).to_bits()),
+            muted: AtomicBool::new(muted),
+        }
     }
 
     /// Set the volume (clamped to `0.0..=MAX_GAIN`; NaN is ignored).
     pub fn set_level(&self, level: f32) {
         if !level.is_nan() {
-            self.level.store(clamp_gain(level).to_bits(), Ordering::Relaxed);
+            self.level
+                .store(clamp_gain(level).to_bits(), Ordering::Relaxed);
         }
     }
 
@@ -108,7 +112,11 @@ impl SourceCtl {
 
     /// Gain to reach by the end of the next block.
     pub fn target(&self) -> f32 {
-        if self.silence.as_ref().is_some_and(|s| s.load(Ordering::Relaxed)) {
+        if self
+            .silence
+            .as_ref()
+            .is_some_and(|s| s.load(Ordering::Relaxed))
+        {
             0.0
         } else {
             self.gain.effective()
@@ -196,7 +204,14 @@ impl Mixer {
         let applied = ctl.target();
         g.sources.insert(
             id,
-            Source { buf: VecDeque::with_capacity(MAX_SAMPLES), primed: false, ctl, applied, underruns: 0, overflow_drops: 0 },
+            Source {
+                buf: VecDeque::with_capacity(MAX_SAMPLES),
+                primed: false,
+                ctl,
+                applied,
+                underruns: 0,
+                overflow_drops: 0,
+            },
         );
         id
     }
@@ -220,7 +235,9 @@ impl Mixer {
     /// Queue interleaved stereo samples for a source. Unknown ids are ignored.
     pub fn push(&self, id: SourceId, samples: &[i16]) {
         let mut g = self.inner.lock();
-        let Some(s) = g.sources.get_mut(&id) else { return };
+        let Some(s) = g.sources.get_mut(&id) else {
+            return;
+        };
         s.buf.extend(samples.iter().copied());
         if s.buf.len() > MAX_SAMPLES {
             let excess = s.buf.len() - MAX_SAMPLES;
@@ -239,7 +256,11 @@ impl Mixer {
         if g.ui.len() >= MAX_UI_VOICES || samples.is_empty() {
             return false;
         }
-        g.ui.push(UiVoice { samples, pos: 0, gain: clamp_gain(gain) });
+        g.ui.push(UiVoice {
+            samples,
+            pos: 0,
+            gain: clamp_gain(gain),
+        });
         true
     }
 
@@ -254,14 +275,22 @@ impl Mixer {
     /// channel count, or when [`MAX_SOUND_VOICES`] are already playing.
     pub fn play_sound(&self, samples: Arc<[i16]>, channels: usize) -> bool {
         let mut g = self.inner.lock();
-        if !(1..=2).contains(&channels) || samples.len() < channels || !samples.len().is_multiple_of(channels) || g.sounds.len() >= MAX_SOUND_VOICES {
+        if !(1..=2).contains(&channels)
+            || samples.len() < channels
+            || !samples.len().is_multiple_of(channels)
+            || g.sounds.len() >= MAX_SOUND_VOICES
+        {
             return false;
         }
         if g.sounds.is_empty() {
             // The first clip starts at the current gain (no fade-in from silence).
             g.sound_applied = self.sound_gain.effective();
         }
-        g.sounds.push(SoundVoice { samples, channels, pos: 0 });
+        g.sounds.push(SoundVoice {
+            samples,
+            channels,
+            pos: 0,
+        });
         true
     }
 
@@ -307,7 +336,13 @@ impl Mixer {
     /// [`Mixer::mix_ui`].
     pub fn mix(&self, out: &mut [i16]) {
         let mut g = self.inner.lock();
-        let Inner { sources, acc, sounds, sound_applied, .. } = &mut *g;
+        let Inner {
+            sources,
+            acc,
+            sounds,
+            sound_applied,
+            ..
+        } = &mut *g;
         acc.clear();
         acc.resize(out.len(), 0);
         for s in sources.values_mut() {
@@ -356,7 +391,11 @@ impl Mixer {
             for v in sounds.iter_mut() {
                 let n = frames.min(v.frames() - v.pos);
                 for i in 0..n {
-                    let gain = if from == to { to } else { from + step * i as f32 };
+                    let gain = if from == to {
+                        to
+                    } else {
+                        from + step * i as f32
+                    };
                     let at = (v.pos + i) * v.channels;
                     let (l, r) = (v.samples[at] as f32, v.samples[at + v.channels - 1] as f32);
                     acc[i * MIX_CHANNELS] += (l * gain).round() as i32;
@@ -471,10 +510,16 @@ mod tests {
     #[test]
     fn gain_0_100_200() {
         assert!(one_block(ctl(0.0, false).0, 1000).iter().all(|&s| s == 0));
-        assert!(one_block(ctl(1.0, false).0, 1000).iter().all(|&s| s == 1000));
-        assert!(one_block(ctl(2.0, false).0, 1000).iter().all(|&s| s == 2000));
+        assert!(one_block(ctl(1.0, false).0, 1000)
+            .iter()
+            .all(|&s| s == 1000));
+        assert!(one_block(ctl(2.0, false).0, 1000)
+            .iter()
+            .all(|&s| s == 2000));
         // Above 200 % is clamped to 200 %.
-        assert!(one_block(ctl(9.0, false).0, 1000).iter().all(|&s| s == 2000));
+        assert!(one_block(ctl(9.0, false).0, 1000)
+            .iter()
+            .all(|&s| s == 2000));
     }
 
     #[test]
@@ -504,8 +549,15 @@ mod tests {
         m.push(other, &filled(7, 3 * MIX_10MS));
         let mut out = vec![0i16; MIX_10MS];
         m.mix(&mut out);
-        assert!(out.iter().all(|&s| s == 7), "muted source must not be heard");
-        assert_eq!(m.source_stats(id).unwrap().queued_samples, 2 * MIX_10MS, "muted source is still drained");
+        assert!(
+            out.iter().all(|&s| s == 7),
+            "muted source must not be heard"
+        );
+        assert_eq!(
+            m.source_stats(id).unwrap().queued_samples,
+            2 * MIX_10MS,
+            "muted source is still drained"
+        );
         // Unmuting restores the volume that was set before (50 %), after a short ramp.
         g.set_muted(false);
         m.mix(&mut out); // ramp block
@@ -527,7 +579,11 @@ mod tests {
             m.mix(&mut out);
             m.mix(&mut out);
             m.mix(&mut out);
-            assert!(out.iter().all(|&s| s == expect), "expected {expect}, got {:?}", &out[..2]);
+            assert!(
+                out.iter().all(|&s| s == expect),
+                "expected {expect}, got {:?}",
+                &out[..2]
+            );
             m.mix(&mut out);
         };
         settled(1500);
@@ -574,7 +630,10 @@ mod tests {
         assert!(out.iter().all(|&s| s == 1000));
         let mut out = vec![0i16; MIX_10MS];
         assert!(m.mix_ui(&mut out));
-        assert!(out[..240].iter().all(|&s| s == 1000), "the remaining 120 frames");
+        assert!(
+            out[..240].iter().all(|&s| s == 1000),
+            "the remaining 120 frames"
+        );
         assert!(out[240..].iter().all(|&s| s == 0), "then silence");
         assert_eq!(m.ui_active(), 0);
         assert!(!m.mix_ui(&mut out));
@@ -605,7 +664,10 @@ mod tests {
             assert!(m.play_ui(ui_buf(1, 480), 1.0));
         }
         assert!(!m.play_ui(ui_buf(1, 480), 1.0), "over the cap");
-        assert!(!m.play_ui(Arc::from(Vec::<i16>::new()), 1.0), "empty buffers are ignored");
+        assert!(
+            !m.play_ui(Arc::from(Vec::<i16>::new()), 1.0),
+            "empty buffers are ignored"
+        );
         // The caller zeroes the voice mix (deafen) and still adds the alerts afterwards.
         let mut out = vec![0i16; MIX_10MS];
         m.mix_ui(&mut out);
@@ -631,12 +693,20 @@ mod tests {
         assert_eq!(m.sounds_active(), 1);
         let mut out = vec![0i16; MIX_10MS];
         m.mix(&mut out);
-        assert!(out.iter().all(|&s| s == 100 + 500), "voice + clip * 50 %: {:?}", &out[..2]);
+        assert!(
+            out.iter().all(|&s| s == 100 + 500),
+            "voice + clip * 50 %: {:?}",
+            &out[..2]
+        );
         m.mix(&mut out);
-        assert!(out[..240].iter().all(|&s| s == 600) && out[240..].iter().all(|&s| s == 100), "the clip ends mid-block");
+        assert!(
+            out[..240].iter().all(|&s| s == 600) && out[240..].iter().all(|&s| s == 100),
+            "the clip ends mid-block"
+        );
         assert_eq!(m.sounds_active(), 0);
         // Stereo clips keep their channels.
-        let stereo: Arc<[i16]> = Arc::from((0..480).flat_map(|_| [200i16, -400]).collect::<Vec<_>>());
+        let stereo: Arc<[i16]> =
+            Arc::from((0..480).flat_map(|_| [200i16, -400]).collect::<Vec<_>>());
         assert!(m.play_sound(stereo, 2));
         let mut out = vec![0i16; MIX_10MS];
         m.mix(&mut out);
@@ -653,7 +723,12 @@ mod tests {
         assert!(out.iter().all(|&s| s == 10_000));
         m.sound_gain().set_muted(true);
         m.mix(&mut out);
-        assert!(out[0] >= 9_900 && out[MIX_10MS - 1] <= 50, "fade, not a cut: {} -> {}", out[0], out[MIX_10MS - 1]);
+        assert!(
+            out[0] >= 9_900 && out[MIX_10MS - 1] <= 50,
+            "fade, not a cut: {} -> {}",
+            out[0],
+            out[MIX_10MS - 1]
+        );
         m.mix(&mut out);
         assert!(out.iter().all(|&s| s == 0));
         assert_eq!(m.sounds_active(), 1, "still draining while muted");

@@ -21,11 +21,19 @@ const PASSWORD: &str = "pw";
 
 fn old_hub() -> Option<PathBuf> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-    std::env::var_os("VOX_V070_HUB").map(PathBuf::from).into_iter().chain([root.join("releases/v0.7.0/voxhub-server.exe")]).find(|p| p.exists())
+    std::env::var_os("VOX_V070_HUB")
+        .map(PathBuf::from)
+        .into_iter()
+        .chain([root.join("releases/v0.7.0/voxhub-server.exe")])
+        .find(|p| p.exists())
 }
 
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
 }
 
 fn config(dir: &Path, port: u16) {
@@ -64,15 +72,25 @@ async fn run_old(bin: &Path, dir: &Path, port: u16) -> OldHub {
         .unwrap();
     let hub = OldHub(child);
     let t = Instant::now();
-    while tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_err() {
-        assert!(t.elapsed() < Duration::from_secs(15), "the old hub did not start");
+    while tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .is_err()
+    {
+        assert!(
+            t.elapsed() < Duration::from_secs(15),
+            "the old hub did not start"
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     hub
 }
 
 async fn login(http: &reqwest::Client, port: u16, body: Value) -> reqwest::Response {
-    http.post(format!("http://127.0.0.1:{port}/api/login")).json(&body).send().await.unwrap()
+    http.post(format!("http://127.0.0.1:{port}/api/login"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
 }
 
 async fn login_ok(http: &reqwest::Client, port: u16, body: Value) -> Value {
@@ -83,10 +101,24 @@ async fn login_ok(http: &reqwest::Client, port: u16, body: Value) -> Value {
 }
 
 async fn say(port: u16, token: &str, channel: i64, text: &str) {
-    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/ws?token={token}")).await.unwrap();
-    ws.send(WsMsg::Text(json!({"type": "send_message", "channel_id": channel, "content": text}).to_string().into())).await.unwrap();
+    let (mut ws, _) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/ws?token={token}"))
+            .await
+            .unwrap();
+    ws.send(WsMsg::Text(
+        json!({"type": "send_message", "channel_id": channel, "content": text})
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
     loop {
-        let Some(Ok(WsMsg::Text(t))) = tokio::time::timeout(Duration::from_secs(5), ws.next()).await.unwrap() else { continue };
+        let Some(Ok(WsMsg::Text(t))) = tokio::time::timeout(Duration::from_secs(5), ws.next())
+            .await
+            .unwrap()
+        else {
+            continue;
+        };
         let v: Value = serde_json::from_str(&t).unwrap();
         if v["type"] == "message_created" && v["message"]["content"] == text {
             return;
@@ -118,14 +150,39 @@ async fn a_v070_database_gets_invites_and_stays_usable() {
     let port = free_port();
     config(&old_dir, port);
     let old = run_old(&bin, &old_dir, port).await;
-    let bruno = login_ok(&http, port, json!({"username": "Bruno", "server_password": PASSWORD, "protocol_version": 1})).await;
+    let bruno = login_ok(
+        &http,
+        port,
+        json!({"username": "Bruno", "server_password": PASSWORD, "protocol_version": 1}),
+    )
+    .await;
     let bt = bruno["token"].as_str().unwrap().to_string();
-    let chs: Vec<Channel> = http.get(format!("http://127.0.0.1:{port}/api/channels")).bearer_auth(&bt).send().await.unwrap().json().await.unwrap();
+    let chs: Vec<Channel> = http
+        .get(format!("http://127.0.0.1:{port}/api/channels"))
+        .bearer_auth(&bt)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let geral = chs.iter().find(|c| c.kind == ChannelKind::Text).unwrap().id;
     // A v0.7.0 hub has no invites: the endpoints are missing and the field is ignored.
-    assert_eq!(http.get(format!("http://127.0.0.1:{port}/api/invites")).bearer_auth(&bt).send().await.unwrap().status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        http.get(format!("http://127.0.0.1:{port}/api/invites"))
+            .bearer_auth(&bt)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
     let r = login(&http, port, json!({"username": "Zé", "server_password": "", "protocol_version": 1, "invite": "ab".repeat(16)})).await;
-    assert_eq!(r.status(), StatusCode::UNAUTHORIZED, "an old hub wants the password");
+    assert_eq!(
+        r.status(),
+        StatusCode::UNAUTHORIZED,
+        "an old hub wants the password"
+    );
     say(port, &bt, geral, "oi do v0.7.0").await;
     drop(old); // killed like a crash: the last writes may only be in the WAL
     copy_db(&old_dir, &new_dir);
@@ -137,22 +194,69 @@ async fn a_v070_database_gets_invites_and_stays_usable() {
     let mut owner_token = String::new();
     let mut dani_device = String::new();
     for round in 0..2 {
-        let server = start(Options { data_dir: new_dir.clone(), no_livekit: true, livekit_bin: "unused".into(), bind_override: None }).await.unwrap();
+        let server = start(Options {
+            data_dir: new_dir.clone(),
+            no_livekit: true,
+            livekit_bin: "unused".into(),
+            bind_override: None,
+        })
+        .await
+        .unwrap();
         // The v0.7.0 session is still valid and the history is there.
-        let msgs: Vec<Message> = http.get(format!("{base}/api/channels/{geral}/messages")).bearer_auth(&bt).send().await.unwrap().json().await.unwrap();
-        assert_eq!(msgs.last().unwrap().content, "oi do v0.7.0", "round {round}");
+        let msgs: Vec<Message> = http
+            .get(format!("{base}/api/channels/{geral}/messages"))
+            .bearer_auth(&bt)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            msgs.last().unwrap().content,
+            "oi do v0.7.0",
+            "round {round}"
+        );
         if round == 0 {
-            let ana = login_ok(&http, port, json!({"username": "Ana", "server_password": PASSWORD, "protocol_version": 1})).await;
-            let r = http.post(format!("{base}/api/account/password")).bearer_auth(ana["token"].as_str().unwrap()).json(&json!({"new": "ana-senha-1"})).send().await.unwrap();
+            let ana = login_ok(
+                &http,
+                port,
+                json!({"username": "Ana", "server_password": PASSWORD, "protocol_version": 1}),
+            )
+            .await;
+            let r = http
+                .post(format!("{base}/api/account/password"))
+                .bearer_auth(ana["token"].as_str().unwrap())
+                .json(&json!({"new": "ana-senha-1"}))
+                .send()
+                .await
+                .unwrap();
             assert_eq!(r.status(), StatusCode::OK);
             let ana = login_ok(&http, port, json!({"username": "Ana", "server_password": PASSWORD, "password": "ana-senha-1", "protocol_version": 1})).await;
             owner_token = ana["token"].as_str().unwrap().to_string();
-            let inv: InviteCreated = http.post(format!("{base}/api/invites")).bearer_auth(&owner_token).json(&json!({"max_uses": 3})).send().await.unwrap().json().await.unwrap();
+            let inv: InviteCreated = http
+                .post(format!("{base}/api/invites"))
+                .bearer_auth(&owner_token)
+                .json(&json!({"max_uses": 3}))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
             let dani = login_ok(&http, port, json!({"username": "Dani", "server_password": "", "protocol_version": 1, "invite": inv.token, "remember_device": true})).await;
             dani_device = dani["device_token"].as_str().unwrap().to_string();
         } else {
             // Second start: the invite, its use and Dani's way back in are still there.
-            let list: Vec<Invite> = http.get(format!("{base}/api/invites")).bearer_auth(&owner_token).send().await.unwrap().json().await.unwrap();
+            let list: Vec<Invite> = http
+                .get(format!("{base}/api/invites"))
+                .bearer_auth(&owner_token)
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
             assert_eq!((list.len(), list[0].uses), (1, 1));
             login_ok(&http, port, json!({"username": "Dani", "server_password": "", "protocol_version": 1, "device_token": dani_device})).await;
         }
@@ -160,9 +264,20 @@ async fn a_v070_database_gets_invites_and_stays_usable() {
     }
     let db = voxhub_server::db::Db::open(&new_dir.join("voxhub.db")).unwrap();
     db.call_now(|c| {
-        assert_eq!(c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))?, voxhub_server::db::SCHEMA_VERSION);
+        assert_eq!(
+            c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))?,
+            voxhub_server::db::SCHEMA_VERSION
+        );
         for t in ["invites", "invite_members"] {
-            assert_eq!(c.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", [t], |r| r.get::<_, i64>(0))?, 1, "{t}");
+            assert_eq!(
+                c.query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+                    [t],
+                    |r| r.get::<_, i64>(0)
+                )?,
+                1,
+                "{t}"
+            );
         }
         Ok(())
     })
@@ -176,7 +291,18 @@ async fn a_v070_database_gets_invites_and_stays_usable() {
     let old = run_old(&bin, &new_dir, port).await;
     let r = login(&http, port, json!({"username": "Dani", "server_password": "", "protocol_version": 1, "device_token": dani_device})).await;
     assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
-    let dani = login_ok(&http, port, json!({"username": "Dani", "server_password": PASSWORD, "protocol_version": 1})).await;
-    say(port, dani["token"].as_str().unwrap(), geral, "de volta ao v0.7.0").await;
+    let dani = login_ok(
+        &http,
+        port,
+        json!({"username": "Dani", "server_password": PASSWORD, "protocol_version": 1}),
+    )
+    .await;
+    say(
+        port,
+        dani["token"].as_str().unwrap(),
+        geral,
+        "de volta ao v0.7.0",
+    )
+    .await;
     drop(old);
 }

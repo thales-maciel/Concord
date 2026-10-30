@@ -11,7 +11,7 @@
 //! autocorrelation pitch estimator independent of the effect's own tracker), the formant scale
 //! (the long-term spectral envelope matched against a stretched copy of the input's), the
 //! measured latency (envelope cross-correlation) against the declared one, the level change and
-//! the peak (no clipping), and checks that "Desligado" is bit-exact. Set `VOX_VOICEFX_OUT_DIR` to
+//! the peak (no clipping), and checks that "Off" is bit-exact. Set `VOX_VOICEFX_OUT_DIR` to
 //! also write each result as a WAV file (nothing is ever played).
 
 use std::path::Path;
@@ -31,7 +31,13 @@ fn read_wav(path: &Path) -> Option<Vec<f32>> {
         let len = u32::from_le_bytes(b[i + 4..i + 8].try_into().ok()?) as usize;
         if id == b"data" {
             let body = &b[i + 8..(i + 8 + len).min(b.len())];
-            return Some(body.as_chunks::<2>().0.iter().map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0).collect());
+            return Some(
+                body.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
+                    .collect(),
+            );
         }
         i += 8 + len + (len & 1);
     }
@@ -61,7 +67,10 @@ fn write_wav(path: &Path, x: &[i16]) {
 /// Run `x` through a fresh chain set to `effect` at `pct`: (output, time per chunk, worst chunk).
 fn process(x: &[f32], effect: VoiceEffect, pct: u32) -> (Vec<i16>, Duration, Duration) {
     let ctl = Arc::new(NoiseControl::new(NoiseLevel::Standard));
-    ctl.voice_fx().set(VoiceFxConfig { effect, intensity_pct: pct });
+    ctl.voice_fx().set(VoiceFxConfig {
+        effect,
+        intensity_pct: pct,
+    });
     let mut fx = VoiceChanger::new(ctl);
     let mut pcm = to_i16(x);
     let mut total = Duration::ZERO;
@@ -76,7 +85,11 @@ fn process(x: &[f32], effect: VoiceEffect, pct: u32) -> (Vec<i16>, Duration, Dur
         }
         worst = worst.max(e);
     }
-    assert_eq!(fx.late_grains(), 0, "{effect:?}: pitch grains later than the declared delay");
+    assert_eq!(
+        fx.late_grains(),
+        0,
+        "{effect:?}: pitch grains later than the declared delay"
+    );
     let n = (pcm.len() / BLOCK).saturating_sub(1).max(1) as u32;
     (pcm, total / n, worst)
 }
@@ -93,7 +106,9 @@ fn latency_ms(x: &[f32], y: &[f32]) -> f32 {
     let my = ey.iter().sum::<f32>() / ey.len() as f32;
     let n = ex.len().min(ey.len()) - 100;
     let corr = |d: usize| (0..n).map(|i| (ex[i] - mx) * (ey[i + d] - my)).sum::<f32>();
-    let best = (0..100).max_by(|&a, &b| corr(a).total_cmp(&corr(b))).unwrap();
+    let best = (0..100)
+        .max_by(|&a, &b| corr(a).total_cmp(&corr(b)))
+        .unwrap();
     // Parabolic refinement.
     if best > 0 && best < 99 {
         let (a, b, c) = (corr(best - 1), corr(best), corr(best + 1));
@@ -110,7 +125,9 @@ fn latency_ms(x: &[f32], y: &[f32]) -> f32 {
 fn ltas(x: &[f32]) -> Vec<f32> {
     const N: usize = 2048;
     let freqs: Vec<f32> = (4..=200).map(|k| k as f32 * 25.0).collect();
-    let win: Vec<f32> = (0..N).map(|i| 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / N as f32).cos()).collect();
+    let win: Vec<f32> = (0..N)
+        .map(|i| 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / N as f32).cos())
+        .collect();
     let mut acc = vec![0.0f64; freqs.len()];
     let loud = rms(x) * 0.5;
     let mut i = 0;
@@ -130,12 +147,17 @@ fn ltas(x: &[f32]) -> Vec<f32> {
         }
         i += N / 2;
     }
-    let db: Vec<f32> = acc.iter().map(|&p| 10.0 * (p.max(1e-20) as f32).log10()).collect();
+    let db: Vec<f32> = acc
+        .iter()
+        .map(|&p| 10.0 * (p.max(1e-20) as f32).log10())
+        .collect();
     let r = 7; // +-175 Hz
-    (0..db.len()).map(|k| {
-        let (lo, hi) = (k.saturating_sub(r), (k + r + 1).min(db.len()));
-        db[lo..hi].iter().sum::<f32>() / (hi - lo) as f32
-    }).collect()
+    (0..db.len())
+        .map(|k| {
+            let (lo, hi) = (k.saturating_sub(r), (k + r + 1).min(db.len()));
+            db[lo..hi].iter().sum::<f32>() / (hi - lo) as f32
+        })
+        .collect()
 }
 
 /// The scale `a` for which `out(f)` best matches `inp(f / a)` between 300 Hz and 3.5 kHz.
@@ -153,9 +175,14 @@ fn formant_scale(inp: &[f32], out: &[f32]) -> f32 {
         let fs: Vec<f32> = (12..=140).map(|k| k as f32 * 25.0).collect();
         let p: Vec<f32> = fs.iter().map(|&f| at(&eo, f)).collect();
         let q: Vec<f32> = fs.iter().map(|&f| at(&ei, f / a)).collect();
-        let (mp, mq) = (p.iter().sum::<f32>() / p.len() as f32, q.iter().sum::<f32>() / q.len() as f32);
+        let (mp, mq) = (
+            p.iter().sum::<f32>() / p.len() as f32,
+            q.iter().sum::<f32>() / q.len() as f32,
+        );
         let num: f32 = p.iter().zip(&q).map(|(x, y)| (x - mp) * (y - mq)).sum();
-        let den = (p.iter().map(|x| (x - mp).powi(2)).sum::<f32>() * q.iter().map(|y| (y - mq).powi(2)).sum::<f32>()).sqrt();
+        let den = (p.iter().map(|x| (x - mp).powi(2)).sum::<f32>()
+            * q.iter().map(|y| (y - mq).powi(2)).sum::<f32>())
+        .sqrt();
         let c = num / den.max(1e-9);
         if c > best.1 {
             best = (a, c);
@@ -169,7 +196,13 @@ fn formant_scale(inp: &[f32], out: &[f32]) -> f32 {
 #[ignore = "offline evaluation, run by hand in release"]
 fn voicefx_eval() {
     let out_dir = std::env::var_os("VOX_VOICEFX_OUT_DIR").map(std::path::PathBuf::from);
-    let mut inputs: Vec<(String, Vec<f32>)> = vec![("voz grave sintética (110 Hz)".into(), speech(8.0, 110.0, 1)), ("voz aguda sintética (210 Hz)".into(), speech(8.0, 210.0, 2))];
+    let mut inputs: Vec<(String, Vec<f32>)> = vec![
+        ("synthetic low voice (110 Hz)".into(), speech(8.0, 110.0, 1)),
+        (
+            "synthetic high voice (210 Hz)".into(),
+            speech(8.0, 210.0, 2),
+        ),
+    ];
     if let Some(dir) = std::env::var_os("VOX_DENOISE_EVAL_DIR") {
         if let Some(mut x) = read_wav(&Path::new(&dir).join("speech0.wav")) {
             let g = 0.1 / rms(&x).max(1e-9);
@@ -193,25 +226,36 @@ fn voicefx_eval() {
     for (name, x) in &inputs {
         // Bypass: bit-exact.
         let (y, t_off, _) = process(x, VoiceEffect::Off, 50);
-        assert_eq!(y, to_i16(x), "Desligado is not bit-exact");
+        assert_eq!(y, to_i16(x), "Off is not bit-exact");
         let f_in = median_f0(x);
-        println!("\n### {name}: {:.1} s, f0 mediana {f_in:.1} Hz; Desligado: idêntico bit a bit, {t_off:?} por bloco\n", x.len() as f32 / 48_000.0);
-        println!("| efeito | intensidade | CPU / 10 ms | % de 1 núcleo | pior bloco | f0 pedido | f0 obtido | formantes | atraso declarado | atraso medido | nível | pico |");
+        println!("\n### {name}: {:.1} s, median f0 {f_in:.1} Hz; Off: bit-identical, {t_off:?} per block\n", x.len() as f32 / 48_000.0);
+        println!("| effect | intensity | CPU / 10 ms | % of 1 core | worst block | requested f0 | actual f0 | formants | declared delay | measured delay | level | peak |");
         println!("|---|---|---|---|---|---|---|---|---|---|---|---|");
         for &(e, pct) in &cases {
             let (y, per, worst) = process(x, e, pct);
             let yf = to_f32(&y);
-            let clipped = y.iter().filter(|&&s| s == i16::MAX || s == i16::MIN).count();
+            let clipped = y
+                .iter()
+                .filter(|&&s| s == i16::MAX || s == i16::MIN)
+                .count();
             assert_eq!(clipped, 0, "{e:?}: clipped");
-            let peak_db = 20.0 * (y.iter().map(|s| s.unsigned_abs()).max().unwrap() as f32 / 32768.0).log10();
+            let peak_db =
+                20.0 * (y.iter().map(|s| s.unsigned_abs()).max().unwrap() as f32 / 32768.0).log10();
             let level_db = 20.0 * (rms(&yf) / rms(x)).log10();
             let lat = latency_ms(x, &yf);
-            let (want, got, formant) = if matches!(e, VoiceEffect::Deep | VoiceEffect::High | VoiceEffect::Alien) {
+            let (want, got, formant) = if matches!(
+                e,
+                VoiceEffect::Deep | VoiceEffect::High | VoiceEffect::Alien
+            ) {
                 let p = pitch_params(e, pct as f32 / 100.0);
                 let want = 2f32.powf(p.semitones / 12.0);
                 let got = median_f0(&yf) / f_in;
-                // The formant scale is measured without the vibrato/chorus (Alienígena's would blur it).
-                (format!("×{want:.3} ({:+.1} st)", p.semitones), format!("×{got:.3} ({:+.2} st)", 12.0 * got.log2()), format!("×{:.3} (alvo ×{:.3})", formant_scale(x, &yf), p.formant))
+                // The formant scale is measured without the vibrato/chorus (Alien's would blur it).
+                (
+                    format!("×{want:.3} ({:+.1} st)", p.semitones),
+                    format!("×{got:.3} ({:+.2} st)", 12.0 * got.log2()),
+                    format!("×{:.3} (alvo ×{:.3})", formant_scale(x, &yf), p.formant),
+                )
             } else {
                 ("-".into(), "-".into(), "-".into())
             };
@@ -222,7 +266,14 @@ fn voicefx_eval() {
                 e.latency_ms()
             );
             if let Some(dir) = &out_dir {
-                let file = format!("{}-{}-{pct}.wav", name.split_whitespace().last().unwrap_or("x").trim_matches(|c: char| !c.is_alphanumeric()), e.as_str());
+                let file = format!(
+                    "{}-{}-{pct}.wav",
+                    name.split_whitespace()
+                        .last()
+                        .unwrap_or("x")
+                        .trim_matches(|c: char| !c.is_alphanumeric()),
+                    e.as_str()
+                );
                 write_wav(&dir.join(file), &y);
             }
         }

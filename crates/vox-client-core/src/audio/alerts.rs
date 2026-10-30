@@ -37,7 +37,7 @@ pub enum AlertKind {
     StreamStop,
     /// Someone started watching *my* live. Two identical bell pings ("knock knock").
     Viewer,
-    /// A direct message arrived ("Mensagem direta"). A rising two-note pop, higher than a join.
+    /// A direct message arrived ("Message direta"). A rising two-note pop, higher than a join.
     DirectMessage,
     /// Somebody is calling me from a DM: one short trill, repeated by the app while it rings
     /// (at most `CALL_RING_SECS`); stopping is simply not repeating it.
@@ -69,7 +69,10 @@ impl AlertKind {
     ];
 
     fn index(self) -> usize {
-        Self::ALL.iter().position(|k| *k == self).expect("listed in ALL")
+        Self::ALL
+            .iter()
+            .position(|k| *k == self)
+            .expect("listed in ALL")
     }
 
     /// Short stable name for logs.
@@ -96,7 +99,13 @@ impl AlertKind {
     /// The precomputed 48 kHz interleaved stereo buffer (built once, shared).
     pub fn samples(self) -> Arc<[i16]> {
         static BANK: OnceLock<Vec<Arc<[i16]>>> = OnceLock::new();
-        BANK.get_or_init(|| AlertKind::ALL.iter().map(|k| Arc::from(synth(&k.spec()))).collect())[self.index()].clone()
+        BANK.get_or_init(|| {
+            AlertKind::ALL
+                .iter()
+                .map(|k| Arc::from(synth(&k.spec())))
+                .collect()
+        })[self.index()]
+        .clone()
     }
 
     fn spec(self) -> Spec {
@@ -113,7 +122,11 @@ impl AlertKind {
         const B4: f32 = 493.88;
         const A4: f32 = 440.0;
         const G6: f32 = 1568.0;
-        let n = |freq: f32, start_ms: f32, dur_ms: f32| Note { freq, start_ms, dur_ms };
+        let n = |freq: f32, start_ms: f32, dur_ms: f32| Note {
+            freq,
+            start_ms,
+            dur_ms,
+        };
         match self {
             AlertKind::Join => Spec::bell(0.38, vec![n(E5, 0.0, 130.0), n(B5, 80.0, 150.0)]),
             AlertKind::Leave => Spec::bell(0.34, vec![n(A5, 0.0, 120.0), n(D5, 80.0, 150.0)]),
@@ -121,15 +134,40 @@ impl AlertKind {
             AlertKind::Offline => Spec::bell(0.12, vec![n(A5, 0.0, 100.0)]),
             AlertKind::Mute => Spec::blip(0.32, vec![n(FS5, 0.0, 70.0), n(B4, 55.0, 85.0)]),
             AlertKind::Unmute => Spec::blip(0.32, vec![n(B4, 0.0, 70.0), n(FS5, 55.0, 85.0)]),
-            AlertKind::Deafen => Spec::blip(0.32, vec![n(A5, 0.0, 70.0), n(E5, 65.0, 70.0), n(A4, 130.0, 100.0)]),
-            AlertKind::Undeafen => Spec::blip(0.32, vec![n(A4, 0.0, 70.0), n(E5, 65.0, 70.0), n(A5, 130.0, 100.0)]),
-            AlertKind::StreamStart => Spec::bell(0.34, vec![n(C5, 0.0, 100.0), n(E5, 60.0, 100.0), n(G5, 120.0, 120.0)]),
-            AlertKind::StreamStop => Spec::bell(0.30, vec![n(G5, 0.0, 100.0), n(E5, 60.0, 100.0), n(C5, 120.0, 120.0)]),
+            AlertKind::Deafen => Spec::blip(
+                0.32,
+                vec![n(A5, 0.0, 70.0), n(E5, 65.0, 70.0), n(A4, 130.0, 100.0)],
+            ),
+            AlertKind::Undeafen => Spec::blip(
+                0.32,
+                vec![n(A4, 0.0, 70.0), n(E5, 65.0, 70.0), n(A5, 130.0, 100.0)],
+            ),
+            AlertKind::StreamStart => Spec::bell(
+                0.34,
+                vec![n(C5, 0.0, 100.0), n(E5, 60.0, 100.0), n(G5, 120.0, 120.0)],
+            ),
+            AlertKind::StreamStop => Spec::bell(
+                0.30,
+                vec![n(G5, 0.0, 100.0), n(E5, 60.0, 100.0), n(C5, 120.0, 120.0)],
+            ),
             AlertKind::Viewer => Spec::bell(0.30, vec![n(G5, 0.0, 80.0), n(G5, 105.0, 105.0)]),
-            AlertKind::DirectMessage => Spec::bell(0.32, vec![n(B5, 0.0, 90.0), n(E6, 70.0, 140.0)]),
-            AlertKind::Ring => Spec::blip(0.30, vec![n(E5, 0.0, 60.0), n(B5, 60.0, 60.0), n(E5, 120.0, 60.0), n(B5, 180.0, 60.0)]),
+            AlertKind::DirectMessage => {
+                Spec::bell(0.32, vec![n(B5, 0.0, 90.0), n(E6, 70.0, 140.0)])
+            }
+            AlertKind::Ring => Spec::blip(
+                0.30,
+                vec![
+                    n(E5, 0.0, 60.0),
+                    n(B5, 60.0, 60.0),
+                    n(E5, 120.0, 60.0),
+                    n(B5, 180.0, 60.0),
+                ],
+            ),
             AlertKind::ChannelMessage => Spec::bell(0.16, vec![n(G5, 0.0, 110.0)]),
-            AlertKind::Mention => Spec::bell(0.34, vec![n(B5, 0.0, 80.0), n(E6, 55.0, 80.0), n(G6, 110.0, 130.0)]),
+            AlertKind::Mention => Spec::bell(
+                0.34,
+                vec![n(B5, 0.0, 80.0), n(E6, 55.0, 80.0), n(G6, 110.0, 130.0)],
+            ),
         }
     }
 }
@@ -157,10 +195,18 @@ struct Spec {
 
 impl Spec {
     fn bell(peak: f32, notes: Vec<Note>) -> Self {
-        Self { timbre: Timbre::Bell, peak, notes }
+        Self {
+            timbre: Timbre::Bell,
+            peak,
+            notes,
+        }
     }
     fn blip(peak: f32, notes: Vec<Note>) -> Self {
-        Self { timbre: Timbre::Blip, peak, notes }
+        Self {
+            timbre: Timbre::Blip,
+            peak,
+            notes,
+        }
     }
 }
 
@@ -184,22 +230,38 @@ fn waveform(timbre: Timbre, phase: f32) -> f32 {
 }
 
 fn synth(spec: &Spec) -> Vec<i16> {
-    let total = spec.notes.iter().map(|n| ms_to_samples(n.start_ms + n.dur_ms)).max().unwrap_or(0);
+    let total = spec
+        .notes
+        .iter()
+        .map(|n| ms_to_samples(n.start_ms + n.dur_ms))
+        .max()
+        .unwrap_or(0);
     let mut mono = vec![0f32; total];
     // How far a note decays by its end: bells ring out (-36 dB), blips are punchier (-14 dB).
-    let decay_db = if spec.timbre == Timbre::Bell { 36.0f32 } else { 14.0 };
+    let decay_db = if spec.timbre == Timbre::Bell {
+        36.0f32
+    } else {
+        14.0
+    };
     for note in &spec.notes {
         let start = ms_to_samples(note.start_ms);
         let len = ms_to_samples(note.dur_ms);
-        let (att, rel) = (ms_to_samples(ATTACK_MS).min(len / 2), ms_to_samples(RELEASE_MS).min(len / 2));
+        let (att, rel) = (
+            ms_to_samples(ATTACK_MS).min(len / 2),
+            ms_to_samples(RELEASE_MS).min(len / 2),
+        );
         let k = decay_db / 20.0 * std::f32::consts::LN_10 / len as f32; // exp(-k*len) = -decay_db
         for i in 0..len {
             let mut env = (-k * i as f32).exp();
             if i < att {
-                env *= (std::f32::consts::FRAC_PI_2 * i as f32 / att as f32).sin().powi(2);
+                env *= (std::f32::consts::FRAC_PI_2 * i as f32 / att as f32)
+                    .sin()
+                    .powi(2);
             }
             if i >= len - rel {
-                env *= (std::f32::consts::FRAC_PI_2 * (len - 1 - i) as f32 / rel as f32).sin().powi(2);
+                env *= (std::f32::consts::FRAC_PI_2 * (len - 1 - i) as f32 / rel as f32)
+                    .sin()
+                    .powi(2);
             }
             let phase = TAU * note.freq * i as f32 / SR;
             mono[start + i] += env * waveform(spec.timbre, phase);
@@ -208,10 +270,14 @@ fn synth(spec: &Spec) -> Vec<i16> {
     // Edge fades over the whole sound; the very first and last sample are exactly 0.
     let (fin, fout) = (ms_to_samples(EDGE_IN_MS), ms_to_samples(EDGE_OUT_MS));
     for (i, v) in mono.iter_mut().enumerate().take(fin) {
-        *v *= (std::f32::consts::FRAC_PI_2 * i as f32 / fin as f32).sin().powi(2);
+        *v *= (std::f32::consts::FRAC_PI_2 * i as f32 / fin as f32)
+            .sin()
+            .powi(2);
     }
     for i in 0..fout.min(total) {
-        mono[total - 1 - i] *= (std::f32::consts::FRAC_PI_2 * i as f32 / fout as f32).sin().powi(2);
+        mono[total - 1 - i] *= (std::f32::consts::FRAC_PI_2 * i as f32 / fout as f32)
+            .sin()
+            .powi(2);
     }
     let max = mono.iter().fold(0f32, |m, s| m.max(s.abs())).max(1e-6);
     let scale = spec.peak * i16::MAX as f32 / max;
@@ -228,7 +294,12 @@ mod tests {
     use super::*;
 
     fn frames(k: AlertKind) -> Vec<i16> {
-        k.samples().as_chunks::<MIX_CHANNELS>().0.iter().map(|f| f[0]).collect()
+        k.samples()
+            .as_chunks::<MIX_CHANNELS>()
+            .0
+            .iter()
+            .map(|f| f[0])
+            .collect()
     }
 
     fn peak(k: AlertKind) -> i16 {
@@ -243,7 +314,10 @@ mod tests {
             let ms = frames(k).len() as f32 * 1000.0 / SR;
             assert!((80.0..=250.0).contains(&ms), "{k:?} lasts {ms} ms");
             // Mono content duplicated into both channels.
-            assert!(s.as_chunks::<2>().0.iter().all(|f| f[0] == f[1]), "{k:?} L != R");
+            assert!(
+                s.as_chunks::<2>().0.iter().all(|f| f[0] == f[1]),
+                "{k:?} L != R"
+            );
         }
     }
 
@@ -252,7 +326,10 @@ mod tests {
         for k in AlertKind::ALL {
             let p = peak(k);
             assert!(p > 3_000, "{k:?} peak {p} too quiet to hear");
-            assert!(p < (i16::MAX as f32 * 0.5) as i16, "{k:?} peak {p} too loud");
+            assert!(
+                p < (i16::MAX as f32 * 0.5) as i16,
+                "{k:?} peak {p} too loud"
+            );
         }
         // Even every alert stacked on top of each other stays inside i16 when summed in i32 and
         // the mixer saturates; a realistic pair never exceeds full scale.
@@ -262,7 +339,14 @@ mod tests {
     #[test]
     fn online_and_offline_are_quieter_than_the_voice_alerts() {
         for quiet in [AlertKind::Online, AlertKind::Offline] {
-            for loud in [AlertKind::Join, AlertKind::Leave, AlertKind::Mute, AlertKind::Unmute, AlertKind::Deafen, AlertKind::Undeafen] {
+            for loud in [
+                AlertKind::Join,
+                AlertKind::Leave,
+                AlertKind::Mute,
+                AlertKind::Unmute,
+                AlertKind::Deafen,
+                AlertKind::Undeafen,
+            ] {
                 assert!(peak(quiet) * 2 < peak(loud), "{quiet:?} vs {loud:?}");
             }
         }
@@ -271,10 +355,17 @@ mod tests {
     #[test]
     fn chat_sounds_are_ordered_soft_to_bright() {
         // A channel message is the softest, a direct message louder, a mention the brightest.
-        let (c, d, m) = (peak(AlertKind::ChannelMessage), peak(AlertKind::DirectMessage), peak(AlertKind::Mention));
+        let (c, d, m) = (
+            peak(AlertKind::ChannelMessage),
+            peak(AlertKind::DirectMessage),
+            peak(AlertKind::Mention),
+        );
         assert!(c * 3 / 2 < d && c < m, "channel {c}, dm {d}, mention {m}");
         let top = |k: AlertKind| pitch(k, 100.0, 180.0);
-        assert!(top(AlertKind::Mention) > top(AlertKind::DirectMessage), "the mention is brighter than a DM");
+        assert!(
+            top(AlertKind::Mention) > top(AlertKind::DirectMessage),
+            "the mention is brighter than a DM"
+        );
         assert!(frames(AlertKind::Mention).len() > frames(AlertKind::ChannelMessage).len());
     }
 
@@ -287,11 +378,26 @@ mod tests {
             assert_eq!(f[0], 0, "{k:?} starts at zero");
             assert_eq!(*f.last().unwrap(), 0, "{k:?} ends at zero");
             // The first and last half millisecond are still nearly silent.
-            assert!(f[..half_ms].iter().all(|s| (s.abs() as f32) < p * 0.05), "{k:?} fade-in too abrupt");
-            assert!(f[f.len() - half_ms..].iter().all(|s| (s.abs() as f32) < p * 0.05), "{k:?} fade-out too abrupt");
+            assert!(
+                f[..half_ms].iter().all(|s| (s.abs() as f32) < p * 0.05),
+                "{k:?} fade-in too abrupt"
+            );
+            assert!(
+                f[f.len() - half_ms..]
+                    .iter()
+                    .all(|s| (s.abs() as f32) < p * 0.05),
+                "{k:?} fade-out too abrupt"
+            );
             // No jump between neighbouring samples anywhere (a click would show as one).
-            let max_step = f.windows(2).map(|w| (w[1] as i32 - w[0] as i32).abs()).max().unwrap() as f32;
-            assert!(max_step < p * 0.3, "{k:?} has a {max_step} step at peak {p}");
+            let max_step = f
+                .windows(2)
+                .map(|w| (w[1] as i32 - w[0] as i32).abs())
+                .max()
+                .unwrap() as f32;
+            assert!(
+                max_step < p * 0.3,
+                "{k:?} has a {max_step} step at peak {p}"
+            );
         }
     }
 
@@ -299,7 +405,10 @@ mod tests {
     fn pitch(k: AlertKind, from_ms: f32, to_ms: f32) -> f32 {
         let f = frames(k);
         let (a, b) = (ms_to_samples(from_ms), ms_to_samples(to_ms).min(f.len()));
-        let crossings = f[a..b].windows(2).filter(|w| (w[0] < 0) != (w[1] < 0)).count();
+        let crossings = f[a..b]
+            .windows(2)
+            .filter(|w| (w[0] < 0) != (w[1] < 0))
+            .count();
         crossings as f32 * 1000.0 / (to_ms - from_ms) / 2.0
     }
 
@@ -307,11 +416,30 @@ mod tests {
     fn rising_and_falling_shapes_are_recognisable() {
         let ms = |k: AlertKind| frames(k).len() as f32 * 1000.0 / SR;
         let ratio = |k| pitch(k, 5.0, 35.0) / pitch(k, ms(k) - 45.0, ms(k) - 15.0);
-        for k in [AlertKind::Join, AlertKind::Unmute, AlertKind::Undeafen, AlertKind::StreamStart, AlertKind::Mention] {
-            assert!(ratio(k) < 0.8, "{k:?} should rise (start/end pitch = {})", ratio(k));
+        for k in [
+            AlertKind::Join,
+            AlertKind::Unmute,
+            AlertKind::Undeafen,
+            AlertKind::StreamStart,
+            AlertKind::Mention,
+        ] {
+            assert!(
+                ratio(k) < 0.8,
+                "{k:?} should rise (start/end pitch = {})",
+                ratio(k)
+            );
         }
-        for k in [AlertKind::Leave, AlertKind::Mute, AlertKind::Deafen, AlertKind::StreamStop] {
-            assert!(ratio(k) > 1.25, "{k:?} should fall (start/end pitch = {})", ratio(k));
+        for k in [
+            AlertKind::Leave,
+            AlertKind::Mute,
+            AlertKind::Deafen,
+            AlertKind::StreamStop,
+        ] {
+            assert!(
+                ratio(k) > 1.25,
+                "{k:?} should fall (start/end pitch = {})",
+                ratio(k)
+            );
         }
     }
 

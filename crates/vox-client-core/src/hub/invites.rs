@@ -2,7 +2,10 @@
 //! `vox_proto::invite`). Joining with an invite is a login: [`LoginRequest::invite`].
 
 use anyhow::{Context, Result};
-use vox_proto::{Invite, InviteCreateRequest, InviteCreated, InviteId, InviteRedeemRequest, InviteRedeemResponse, OkResponse};
+use vox_proto::{
+    Invite, InviteCreateRequest, InviteCreated, InviteId, InviteRedeemRequest,
+    InviteRedeemResponse, OkResponse,
+};
 
 use super::*;
 
@@ -19,7 +22,13 @@ impl HubClient {
 
     /// `POST /api/invites/{id}/revoke` (Admin+).
     pub async fn revoke_invite(&self, id: InviteId) -> Result<()> {
-        self.post::<_, OkResponse>("revoke invite", &format!("api/invites/{id}/revoke"), &serde_json::json!({})).await.map(|_| ())
+        self.post::<_, OkResponse>(
+            "revoke invite",
+            &format!("api/invites/{id}/revoke"),
+            &serde_json::json!({}),
+        )
+        .await
+        .map(|_| ())
     }
 
     /// `POST /api/invites/redeem`: does this token work here? (No login needed, no use taken.)
@@ -27,7 +36,9 @@ impl HubClient {
         let resp = self
             .http
             .post(self.url("api/invites/redeem")?)
-            .json(&InviteRedeemRequest { token: token.to_string() })
+            .json(&InviteRedeemRequest {
+                token: token.to_string(),
+            })
             .send()
             .await
             .context("redeem invite request")?;

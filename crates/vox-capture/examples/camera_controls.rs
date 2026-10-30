@@ -43,12 +43,23 @@ fn main() {
             let kv = args.next().unwrap_or_default();
             let (k, v) = kv.split_once('=').unwrap_or((&kv, ""));
             let id = CameraControlId::from_key(k).expect("unknown control key");
-            sets.push((id, if v == "auto" { None } else { Some(v.parse().expect("value")) }));
+            sets.push((
+                id,
+                if v == "auto" {
+                    None
+                } else {
+                    Some(v.parse().expect("value"))
+                },
+            ));
         } else if a == "--format" {
             let f = args.next().unwrap_or_default();
             let (wh, fps) = f.split_once('@').unwrap_or((&f, "30"));
             let (w, h) = wh.split_once('x').unwrap_or(("1280", "720"));
-            format = Some((w.parse().unwrap_or(1280), h.parse().unwrap_or(720), fps.parse().unwrap_or(30)));
+            format = Some((
+                w.parse().unwrap_or(1280),
+                h.parse().unwrap_or(720),
+                fps.parse().unwrap_or(30),
+            ));
         } else {
             want = a;
         }
@@ -59,7 +70,9 @@ fn main() {
     }
     let cam = cams
         .iter()
-        .find(|c| want.is_empty() || c.name.to_lowercase().contains(&want.to_lowercase()) || c.id == want)
+        .find(|c| {
+            want.is_empty() || c.name.to_lowercase().contains(&want.to_lowercase()) || c.id == want
+        })
         .expect("no such camera");
     println!("using: {}", cam.name);
     if list_only {
@@ -86,19 +99,39 @@ fn main() {
 
     let t0 = Instant::now();
     let modes = vox_capture::list_camera_formats(&cam.id).expect("formats");
-    println!("{} native modes (listed in {} ms, camera not streaming):", modes.len(), t0.elapsed().as_millis());
+    println!(
+        "{} native modes (listed in {} ms, camera not streaming):",
+        modes.len(),
+        t0.elapsed().as_millis()
+    );
     for m in &modes {
         println!("  {}", m.label());
     }
 
-    let mut cfg = CameraConfig { width: 1280, height: 720, fps: 30, ..Default::default() };
+    let mut cfg = CameraConfig {
+        width: 1280,
+        height: 720,
+        fps: 30,
+        ..Default::default()
+    };
     if let Some((w, h, fps)) = format {
-        cfg.mode = modes.iter().find(|m| m.width == w && m.height == h && (m.fps() - fps as f32).abs() < 1.0).copied();
-        println!("chosen format: {:?}", cfg.mode.map(|m: CameraMode| m.label()));
+        cfg.mode = modes
+            .iter()
+            .find(|m| m.width == w && m.height == h && (m.fps() - fps as f32).abs() < 1.0)
+            .copied();
+        println!(
+            "chosen format: {:?}",
+            cfg.mode.map(|m: CameraMode| m.label())
+        );
     }
     let t0 = Instant::now();
-    let cap = vox_capture::start_camera_preview(&cam.id, cfg, Box::new(|_| {})).expect("start camera");
-    println!("opened in {} ms: {:?}", t0.elapsed().as_millis(), cap.format());
+    let cap =
+        vox_capture::start_camera_preview(&cam.id, cfg, Box::new(|_| {})).expect("start camera");
+    println!(
+        "opened in {} ms: {:?}",
+        t0.elapsed().as_millis(),
+        cap.format()
+    );
     std::thread::sleep(Duration::from_millis(800));
 
     let controls = cap.controls();
@@ -110,7 +143,11 @@ fn main() {
     let get = |id| cap.controls().into_iter().find(|c| c.id == id);
     // Put the camera back as it was found: manual values first, automatic modes last.
     let restore = |cap: &vox_capture::CameraCapture| {
-        for c in found.iter().filter(|c| !c.auto).chain(found.iter().filter(|c| c.auto)) {
+        for c in found
+            .iter()
+            .filter(|c| !c.auto)
+            .chain(found.iter().filter(|c| c.auto))
+        {
             cap.set_control(c.id, c.value, c.auto);
         }
         std::thread::sleep(Duration::from_millis(600));
@@ -134,29 +171,54 @@ fn main() {
         while !ok() && t0.elapsed() < Duration::from_secs(2) {
             std::thread::sleep(Duration::from_millis(20));
         }
-        println!("  {what}: {} after {} ms", if ok() { "ok" } else { "NOT APPLIED" }, t0.elapsed().as_millis());
+        println!(
+            "  {what}: {} after {} ms",
+            if ok() { "ok" } else { "NOT APPLIED" },
+            t0.elapsed().as_millis()
+        );
     };
 
     // Brightness: move off the default, read back, restore.
     if let Some(b) = get(CameraControlId::Brightness) {
-        let target = b.snap(if b.value + 20 <= b.max { b.value + 20 } else { b.value - 20 });
+        let target = b.snap(if b.value + 20 <= b.max {
+            b.value + 20
+        } else {
+            b.value - 20
+        });
         println!("brightness {} -> {target}", b.value);
         cap.set_control(CameraControlId::Brightness, target, false);
-        wait_for("brightness set", &|| get(CameraControlId::Brightness).is_some_and(|c| c.value == target));
+        wait_for("brightness set", &|| {
+            get(CameraControlId::Brightness).is_some_and(|c| c.value == target)
+        });
         cap.set_control(CameraControlId::Brightness, b.value, b.auto);
-        wait_for("brightness restored", &|| get(CameraControlId::Brightness).is_some_and(|c| c.value == b.value));
+        wait_for("brightness restored", &|| {
+            get(CameraControlId::Brightness).is_some_and(|c| c.value == b.value)
+        });
     }
     // Exposure: switch to manual at a value, then back to automatic.
     if let Some(e) = get(CameraControlId::Exposure) {
         let was_auto = e.auto;
         let target = e.snap(e.max - 2);
-        println!("exposure (auto={}) -> manual {} ({})", e.auto, target, e.format_value(target));
+        println!(
+            "exposure (auto={}) -> manual {} ({})",
+            e.auto,
+            target,
+            e.format_value(target)
+        );
         cap.set_control(CameraControlId::Exposure, target, false);
-        wait_for("exposure manual", &|| get(CameraControlId::Exposure).is_some_and(|c| !c.auto && c.value == target));
+        wait_for("exposure manual", &|| {
+            get(CameraControlId::Exposure).is_some_and(|c| !c.auto && c.value == target)
+        });
         std::thread::sleep(Duration::from_millis(1500));
-        println!("  measured {:.1} fps with manual exposure {}", cap.stats().fps, e.format_value(target));
+        println!(
+            "  measured {:.1} fps with manual exposure {}",
+            cap.stats().fps,
+            e.format_value(target)
+        );
         cap.set_control(CameraControlId::Exposure, e.value, e.auto);
-        wait_for("exposure restored", &|| get(CameraControlId::Exposure).is_some_and(|c| c.auto == was_auto));
+        wait_for("exposure restored", &|| {
+            get(CameraControlId::Exposure).is_some_and(|c| c.auto == was_auto)
+        });
     }
     // Everything back as found (never factory defaults).
     restore(&cap);

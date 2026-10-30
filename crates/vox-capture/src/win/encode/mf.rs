@@ -15,6 +15,7 @@ use std::sync::{mpsc, Arc, OnceLock};
 use std::time::Duration;
 
 use windows::core::Interface;
+use windows::Win32::Foundation::VARIANT_TRUE;
 use windows::Win32::Foundation::{E_NOTIMPL, LUID, S_OK};
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
@@ -24,7 +25,6 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC}
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Variant::{VARIANT, VT_BOOL, VT_UI4};
-use windows::Win32::Foundation::VARIANT_TRUE;
 
 use super::{is_annexb, nal_units, EncParams, HwEncoder};
 use crate::win::{os, ComInit, Event};
@@ -229,13 +229,26 @@ fn enum_mfts(luid: LUID, strict: bool) -> Result<Vec<IMFActivate>> {
 
 fn enum_mfts_all() -> Result<Vec<IMFActivate>> {
     unsafe {
-        let input = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Video, guidSubtype: MFVideoFormat_NV12 };
-        let output = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Video, guidSubtype: MFVideoFormat_H264 };
+        let input = MFT_REGISTER_TYPE_INFO {
+            guidMajorType: MFMediaType_Video,
+            guidSubtype: MFVideoFormat_NV12,
+        };
+        let output = MFT_REGISTER_TYPE_INFO {
+            guidMajorType: MFMediaType_Video,
+            guidSubtype: MFVideoFormat_H264,
+        };
         let flags = MFT_ENUM_FLAG(MFT_ENUM_FLAG_HARDWARE.0 | MFT_ENUM_FLAG_SORTANDFILTER.0);
         let mut arr: *mut Option<IMFActivate> = std::ptr::null_mut();
         let mut n = 0u32;
-        MFTEnumEx(MFT_CATEGORY_VIDEO_ENCODER, flags, Some(&input), Some(&output), &mut arr, &mut n)
-            .map_err(|e| os("MFTEnumEx(H.264 HW encoders)", e))?;
+        MFTEnumEx(
+            MFT_CATEGORY_VIDEO_ENCODER,
+            flags,
+            Some(&input),
+            Some(&output),
+            &mut arr,
+            &mut n,
+        )
+        .map_err(|e| os("MFTEnumEx(H.264 HW encoders)", e))?;
         let mut out = Vec::with_capacity(n as usize);
         for i in 0..n as usize {
             if let Some(a) = (*arr.add(i)).take() {
@@ -318,14 +331,18 @@ impl Inner {
                 .GetAttributes()
                 .map_err(|e| os("IMFTransform::GetAttributes", e))?;
             if attrs.GetUINT32(&MF_TRANSFORM_ASYNC).unwrap_or(0) == 0 {
-                return Err(CaptureError::Unsupported(format!("{name}: not an async MFT")));
+                return Err(CaptureError::Unsupported(format!(
+                    "{name}: not an async MFT"
+                )));
             }
             attrs
                 .SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)
                 .map_err(|e| os("MF_TRANSFORM_ASYNC_UNLOCK", e))?;
             let _ = attrs.SetUINT32(&MF_LOW_LATENCY, 1);
             if attrs.GetUINT32(&MF_SA_D3D11_AWARE).unwrap_or(0) == 0 {
-                return Err(CaptureError::Unsupported(format!("{name}: not D3D11 aware")));
+                return Err(CaptureError::Unsupported(format!(
+                    "{name}: not D3D11 aware"
+                )));
             }
 
             let mut token = 0u32;
@@ -347,27 +364,38 @@ impl Inner {
             }
             let (in_id, out_id) = (in_id[0], out_id[0]);
 
-            let codec: ICodecAPI = transform
-                .cast()
-                .map_err(|e| os("ICodecAPI", e))?;
+            let codec: ICodecAPI = transform.cast().map_err(|e| os("ICodecAPI", e))?;
             // Rate control and GOP structure must be set before the media types.
             let set = |api: &windows_core::GUID, v: VARIANT, what: &str| {
                 if let Err(e) = codec.SetValue(api, &v) {
-                    tracing::debug!(mft = name, setting = what, hr = format!("0x{:08X}", e.code().0 as u32), "codec setting rejected");
+                    tracing::debug!(
+                        mft = name,
+                        setting = what,
+                        hr = format!("0x{:08X}", e.code().0 as u32),
+                        "codec setting rejected"
+                    );
                     false
                 } else {
                     true
                 }
             };
             let t = p.tuning.mf;
-            set(&CODECAPI_AVLowLatencyMode, var_bool(true), "AVLowLatencyMode");
+            set(
+                &CODECAPI_AVLowLatencyMode,
+                var_bool(true),
+                "AVLowLatencyMode",
+            );
             let mut rc_ok = set(
                 &CODECAPI_AVEncCommonRateControlMode,
                 var_u32(t.rc),
                 "RateControlMode",
             );
             if !rc_ok && t.rc != eAVEncCommonRateControlMode_CBR.0 as u32 {
-                tracing::warn!(mft = name, rc = t.rc, "rate-control mode rejected; using CBR");
+                tracing::warn!(
+                    mft = name,
+                    rc = t.rc,
+                    "rate-control mode rejected; using CBR"
+                );
                 rc_ok = set(
                     &CODECAPI_AVEncCommonRateControlMode,
                     var_u32(eAVEncCommonRateControlMode_CBR.0 as u32),
@@ -377,9 +405,21 @@ impl Inner {
             // The NVIDIA MFT never raises the mean bitrate above the value it was started with
             // (measured: 3 -> 8 Mbps mid-stream stays at ~3.4). Start with headroom for the
             // input-rate compensation, then set the real target.
-            let headroom = if t.headroom { headroom_bits(p.bitrate) } else { p.bitrate };
-            set(&CODECAPI_AVEncCommonMaxBitRate, var_u32(headroom), "MaxBitRate(headroom)");
-            set(&CODECAPI_AVEncCommonMeanBitRate, var_u32(headroom), "MeanBitRate(headroom)");
+            let headroom = if t.headroom {
+                headroom_bits(p.bitrate)
+            } else {
+                p.bitrate
+            };
+            set(
+                &CODECAPI_AVEncCommonMaxBitRate,
+                var_u32(headroom),
+                "MaxBitRate(headroom)",
+            );
+            set(
+                &CODECAPI_AVEncCommonMeanBitRate,
+                var_u32(headroom),
+                "MeanBitRate(headroom)",
+            );
             if t.rc != 0 {
                 set(
                     &CODECAPI_AVEncCommonMaxBitRate,
@@ -387,10 +427,22 @@ impl Inner {
                     "MaxBitRate",
                 );
             }
-            set(&CODECAPI_AVEncMPVDefaultBPictureCount, var_u32(0), "BPictureCount=0");
+            set(
+                &CODECAPI_AVEncMPVDefaultBPictureCount,
+                var_u32(0),
+                "BPictureCount=0",
+            );
             // Long GOP; keyframes come from CODECAPI_AVEncVideoForceKeyFrame on demand.
-            if !set(&CODECAPI_AVEncMPVGOPSize, var_u32(0xFFFF_FFFF), "GOPSize=inf") {
-                set(&CODECAPI_AVEncMPVGOPSize, var_u32(p.fps * 3600), "GOPSize=1h");
+            if !set(
+                &CODECAPI_AVEncMPVGOPSize,
+                var_u32(0xFFFF_FFFF),
+                "GOPSize=inf",
+            ) {
+                set(
+                    &CODECAPI_AVEncMPVGOPSize,
+                    var_u32(p.fps * 3600),
+                    "GOPSize=1h",
+                );
             }
             set(
                 &CODECAPI_AVEncCommonBufferSize,
@@ -398,7 +450,11 @@ impl Inner {
                 "BufferSize(headroom)",
             );
             if let Some(q) = t.quality_vs_speed {
-                set(&CODECAPI_AVEncCommonQualityVsSpeed, var_u32(q), "QualityVsSpeed");
+                set(
+                    &CODECAPI_AVEncCommonQualityVsSpeed,
+                    var_u32(q),
+                    "QualityVsSpeed",
+                );
             }
             if let Some(q) = t.max_qp {
                 set(&CODECAPI_AVEncVideoMaxQP, var_u32(q), "MaxQP");
@@ -407,7 +463,9 @@ impl Inner {
                 set(&CODECAPI_AVEncVideoMinQP, var_u32(q), "MinQP");
             }
             if !rc_ok {
-                return Err(CaptureError::Unsupported(format!("{name}: CBR not supported")));
+                return Err(CaptureError::Unsupported(format!(
+                    "{name}: CBR not supported"
+                )));
             }
 
             let out_t = MFCreateMediaType().map_err(|e| os("MFCreateMediaType", e))?;
@@ -415,12 +473,17 @@ impl Inner {
             out_t.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264).ok();
             out_t.SetUINT32(&MF_MT_AVG_BITRATE, headroom).ok();
             out_t
-                .SetUINT64(&MF_MT_FRAME_SIZE, ((p.width as u64) << 32) | p.height as u64)
+                .SetUINT64(
+                    &MF_MT_FRAME_SIZE,
+                    ((p.width as u64) << 32) | p.height as u64,
+                )
                 .ok();
             out_t
                 .SetUINT64(&MF_MT_FRAME_RATE, ((p.fps as u64) << 32) | 1)
                 .ok();
-            out_t.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1u64 << 32) | 1).ok();
+            out_t
+                .SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1u64 << 32) | 1)
+                .ok();
             out_t
                 .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)
                 .ok();
@@ -457,19 +520,20 @@ impl Inner {
                     t
                 }
             };
-            in_t
-                .SetUINT64(&MF_MT_FRAME_SIZE, ((p.width as u64) << 32) | p.height as u64)
+            in_t.SetUINT64(
+                &MF_MT_FRAME_SIZE,
+                ((p.width as u64) << 32) | p.height as u64,
+            )
+            .ok();
+            in_t.SetUINT64(&MF_MT_FRAME_RATE, ((p.fps as u64) << 32) | 1)
                 .ok();
-            in_t.SetUINT64(&MF_MT_FRAME_RATE, ((p.fps as u64) << 32) | 1).ok();
-            in_t.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1u64 << 32) | 1).ok();
-            in_t
-                .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)
+            in_t.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1u64 << 32) | 1)
                 .ok();
-            in_t
-                .SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235.0 as u32)
+            in_t.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)
                 .ok();
-            in_t
-                .SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32)
+            in_t.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235.0 as u32)
+                .ok();
+            in_t.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32)
                 .ok();
             transform
                 .SetInputType(in_id, &in_t, 0)
@@ -544,7 +608,11 @@ impl Inner {
                 var_u32(buffer_bits(p.bitrate, p.fps, t.vbv_frames)),
                 "BufferSize",
             );
-            me.set_value(&CODECAPI_AVEncCommonMeanBitRate, var_u32(p.bitrate), "MeanBitRate")?;
+            me.set_value(
+                &CODECAPI_AVEncCommonMeanBitRate,
+                var_u32(p.bitrate),
+                "MeanBitRate",
+            )?;
             Ok(me)
         }
     }
@@ -701,7 +769,11 @@ impl Inner {
                 }
                 if t != 9 && first_non_aud.is_none() {
                     // Start code begins 3 or 4 bytes before the NAL header.
-                    let sc = if off >= 4 && data[off - 4] == 0 { off - 4 } else { off - 3 };
+                    let sc = if off >= 4 && data[off - 4] == 0 {
+                        off - 4
+                    } else {
+                        off - 3
+                    };
                     first_non_aud = Some(sc);
                 }
             }
@@ -722,7 +794,9 @@ impl Inner {
         // Wake and stop the pump: a queued dummy event unblocks GetEvent.
         self.ps.stop.store(true, Ordering::Relaxed);
         unsafe {
-            let _ = self.transform.ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0);
+            let _ = self
+                .transform
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0);
             let _ = self.gen.QueueEvent(
                 MEUnknown.0 as u32,
                 &windows_core::GUID::zeroed(),
@@ -790,7 +864,11 @@ impl HwEncoder for MfEncoder {
             return Err(CaptureError::Os("MFT not accepting input".into()));
         }
         if force_idr {
-            i.set_value(&CODECAPI_AVEncVideoForceKeyFrame, var_u32(1), "ForceKeyFrame")?;
+            i.set_value(
+                &CODECAPI_AVEncVideoForceKeyFrame,
+                var_u32(1),
+                "ForceKeyFrame",
+            )?;
         }
         unsafe {
             let slot = &i.ring[i.ring_next];
@@ -824,7 +902,12 @@ impl HwEncoder for MfEncoder {
         self.inner = None;
         self.params.width = width;
         self.params.height = height;
-        self.inner = Some(Inner::create(&self.device, self.luid, self.params, &self.ev)?);
+        self.inner = Some(Inner::create(
+            &self.device,
+            self.luid,
+            self.params,
+            &self.ev,
+        )?);
         Ok(())
     }
 
@@ -836,7 +919,11 @@ impl HwEncoder for MfEncoder {
             // Raise the cap first when going up (some MFTs reject mean > max). With headroom the
             // CBR cap is the 3x start value already.
             let peak = if t.rc != 0 { t.peak_factor } else { 1.0 };
-            let _ = i.set_value(&CODECAPI_AVEncCommonMaxBitRate, var_u32((bps as f32 * peak) as u32), "MaxBitRate");
+            let _ = i.set_value(
+                &CODECAPI_AVEncCommonMaxBitRate,
+                var_u32((bps as f32 * peak) as u32),
+                "MaxBitRate",
+            );
         }
         // Buffer first: a larger mean than the current buffer allows is ignored on the way up.
         let _ = i.set_value(
@@ -844,7 +931,11 @@ impl HwEncoder for MfEncoder {
             var_u32(buffer_bits(bps, fps, t.vbv_frames)),
             "BufferSize",
         );
-        i.set_value(&CODECAPI_AVEncCommonMeanBitRate, var_u32(bps), "MeanBitRate")?;
+        i.set_value(
+            &CODECAPI_AVEncCommonMeanBitRate,
+            var_u32(bps),
+            "MeanBitRate",
+        )?;
         self.params.bitrate = bps;
         Ok(())
     }

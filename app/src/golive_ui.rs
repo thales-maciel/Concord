@@ -1,4 +1,4 @@
-//! The Go Live window (v1.0, phase 3a): what to stream ("Tela + áudio" or "Só áudio"), the grid
+//! The Go Live window (v1.0, phase 3a): what to stream ("Screen + audio" or "Audio only"), the grid
 //! of thumbnail cards ([`crate::sources`]), the quality and the button that goes live. A child
 //! module of `app` (it uses the app's private helpers).
 //!
@@ -32,13 +32,20 @@ fn screen_permission_note(ui: &mut egui::Ui) -> bool {
     note_colored(
         ui,
         format!(
-            "{} O macOS ainda não deixou o concord gravar a tela. Ligue o concord em Ajustes do Sistema > Privacidade e Segurança > Gravação de Tela e Áudio do Sistema e depois feche e abra o concord de novo.",
+            "{} macOS has not allowed concord to record the screen yet. Enable concord in System Settings > Privacy & Security > Screen & System Audio Recording, then quit and reopen concord.",
             ph::WARNING
         ),
         false,
         theme::AVISO,
     );
-    if ui_kit::button(ui, Kind::Secondary, Some(ph::GEAR_SIX), "Abrir Ajustes do Sistema").clicked() {
+    if ui_kit::button(
+        ui,
+        Kind::Secondary,
+        Some(ph::GEAR_SIX),
+        "Open System Settings",
+    )
+    .clicked()
+    {
         // The first time this shows macOS's own prompt; afterwards the app is listed, switched off.
         vox_capture::request_screen_capture_permission();
         if let Some(url) = vox_capture::privacy_settings_url(false) {
@@ -75,8 +82,16 @@ impl App {
         let switching = self.golive.switching;
         // The kind of the running live: choosing the same kind (and quality) only changes the
         // source; anything else restarts the live (viewers stay in the room and follow).
-        let live_mode = if self.voice.share_audio_only { ShareMode::AudioOnly } else { ShareMode::ScreenAudio };
-        let title = if switching { "Trocar o que você transmite" } else { "Transmitir" };
+        let live_mode = if self.voice.share_audio_only {
+            ShareMode::AudioOnly
+        } else {
+            ShareMode::ScreenAudio
+        };
+        let title = if switching {
+            "Change what you share"
+        } else {
+            "Stream"
+        };
         let current = self.voice.share_pick.clone();
         let screen = ctx.content_rect();
         let size = SIZE.min(screen.size() - Vec2::splat(24.0));
@@ -84,12 +99,12 @@ impl App {
         let open = forms::Dialog::new("golive_window", title).icon(ph::SCREENCAST).size(size).show(ctx, |ui| {
             let mut mode = self.golive.mode;
             ui.horizontal(|ui| {
-                forms::segmented(ui, &mut mode, &[(ShareMode::ScreenAudio, "Tela + áudio"), (ShareMode::AudioOnly, "Só áudio")]);
+                forms::segmented(ui, &mut mode, &[(ShareMode::ScreenAudio, "Screen + audio"), (ShareMode::AudioOnly, "Audio only")]);
                 ui.add_space(space::M);
                 let hint = if mode == ShareMode::AudioOnly {
-                    "Só o som de um app, sem imagem: bom para ouvir música juntos."
+                    "An app's audio without video: great for listening to music together."
                 } else {
-                    "Uma janela ou uma tela inteira, com o som do app."
+                    "A window or an entire screen, with app audio."
                 };
                 ui.label(egui::RichText::new(hint).color(theme::NEVOA).size(12.5));
             });
@@ -133,48 +148,48 @@ impl App {
             }
             forms::divider(ui);
             if audio_only {
-                forms::row(ui, "Qualidade do áudio", |ui| {
-                    forms::segmented(ui, &mut self.golive.audio_high, &[(false, "Normal (128 kbps)"), (true, "Alta (256 kbps, estéreo)")]);
+                forms::row(ui, "Audio quality", |ui| {
+                    forms::segmented(ui, &mut self.golive.audio_high, &[(false, "Normal (128 kbps)"), (true, "High (256 kbps, stereo)")]);
                 });
                 let q = if self.golive.audio_high {
-                    "Estéreo com mais detalhe. Cada pessoa que ouve recebe uma cópia, então pesa mais no seu envio."
+                    "More detailed stereo. Each listener receives a copy, requiring more upload bandwidth."
                 } else {
-                    "Estéreo, boa para música e leve para a conexão."
+                    "Stereo, good for music and light on bandwidth."
                 };
                 note(ui, q, true);
                 note(
                     ui,
-                    "Só o som vai para a sala: nada de imagem, e sem supressão de ruído nem corte de silêncio. Quem está na sala clica em \"Ouvir\". Você não escuta a sua própria transmissão.",
+                    "Only audio goes to the room: no video, noise suppression or silence gate. People in the room click \"Listen\". You do not hear your own stream.",
                     true,
                 );
             } else {
                 if switch_in_place {
-                    note(ui, "A qualidade e o modo de conexão continuam como estão. Quem assiste não precisa fazer nada.", false);
+                    note(ui, "Quality and connection mode stay unchanged. Viewers do not need to do anything.", false);
                 } else {
-                    forms::row(ui, "Qualidade", |ui| {
+                    forms::row(ui, "Quality", |ui| {
                         let options: Vec<(Preset, &str)> = Preset::ALL.iter().map(|p| (*p, p.label())).collect();
                         forms::segmented(ui, &mut self.golive.preset, &options);
                     });
-                    note(ui, format!("Até {} Mbps de vídeo. O servidor envia uma cópia para cada pessoa que assiste.", self.golive.preset.bitrate() / 1_000_000), true);
-                    forms::row(ui, "Se a conexão apertar", |ui| {
-                        forms::segmented(ui, &mut self.golive.smooth, &[(false, "Priorizar nitidez"), (true, "Priorizar fluidez")]);
+                    note(ui, format!("Up to {} Mbps of video. The server sends a copy to each viewer.", self.golive.preset.bitrate() / 1_000_000), true);
+                    forms::row(ui, "When bandwidth is limited", |ui| {
+                        forms::segmented(ui, &mut self.golive.smooth, &[(false, "Prioritize sharpness"), (true, "Prioritize smoothness")]);
                     });
                     let s = if self.golive.smooth {
-                        "Mantém os quadros por segundo e aceita uma imagem mais borrada. Bom para jogos rápidos."
+                        "Maintains frame rate and allows a blurrier image. Good for fast-paced games."
                     } else {
-                        "Reduz os quadros por segundo (de 60 para 30, depois 20) para manter cada quadro nítido. Bom para texto, código e detalhes."
+                        "Reduces frame rate (from 60 to 30, then 20) to keep each frame sharp. Good for text, code and detail."
                     };
                     note(ui, s, true);
                 }
-                forms::row(ui, "Áudio", |ui| {
-                    ui.checkbox(&mut self.golive.audio, "Compartilhar o áudio do app");
+                forms::row(ui, "Audio", |ui| {
+                    ui.checkbox(&mut self.golive.audio, "Share app audio");
                 });
-                note(ui, "Janela: só o som daquele app. Tela inteira: o som do PC, menos o do concord.", true);
+                note(ui, "Window: only that app's audio. Entire screen: PC audio except concord.", true);
             }
             if switching && !switch_in_place {
                 note_colored(
                     ui,
-                    format!("{} Mudar o tipo (tela ou só áudio) ou a qualidade do áudio reinicia a transmissão por um instante. Quem assiste continua na sala.", ph::WARNING),
+                    format!("{} Changing type (screen or audio only) or audio quality briefly restarts the stream. Viewers stay in the room.", ph::WARNING),
                     false,
                     theme::AVISO,
                 );
@@ -182,21 +197,21 @@ impl App {
             forms::footer(ui, |ui| {
                 let can = self.golive.pick.is_some();
                 let go = if switch_in_place {
-                    "Trocar"
+                    "Switch"
                 } else if switching {
-                    "Trocar e reiniciar"
+                    "Switch and restart"
                 } else {
-                    "Transmitir"
+                    "Stream"
                 };
                 let icon = if switching { ph::ARROWS_LEFT_RIGHT } else { ICON_LIVE };
                 let r = ui.add_enabled_ui(can, |ui| ui_kit::button(ui, Kind::Primary, Some(icon), go)).inner;
-                if r.on_disabled_hover_text("Escolha uma janela, uma tela ou um app acima.").clicked() {
+                if r.on_disabled_hover_text("Choose a window, screen or app above.").clicked() {
                     start = self.golive.pick.clone().map(|p| (p, self.golive.preset, self.golive.audio));
                 }
-                if ui_kit::button(ui, Kind::Ghost, None, "Cancelar").clicked() {
+                if ui_kit::button(ui, Kind::Ghost, None, "Cancel").clicked() {
                     cancel = true;
                 }
-                if ui_kit::button(ui, Kind::Secondary, Some(ph::ARROWS_CLOCKWISE), "Atualizar lista").clicked() {
+                if ui_kit::button(ui, Kind::Secondary, Some(ph::ARROWS_CLOCKWISE), "Refresh list").clicked() {
                     refresh = true;
                 }
             });
@@ -210,7 +225,8 @@ impl App {
         }
         if let Some((pick, preset, audio)) = start {
             let audio_only = self.golive.mode == ShareMode::AudioOnly;
-            let same = self.golive.mode == live_mode && (!audio_only || self.golive.audio_high == self.voice.share_audio_high);
+            let same = self.golive.mode == live_mode
+                && (!audio_only || self.golive.audio_high == self.voice.share_audio_high);
             if switching && same {
                 self.switch_share(pick, audio);
             } else {

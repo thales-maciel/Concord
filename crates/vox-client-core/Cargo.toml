@@ -30,7 +30,7 @@ softbuffer = { version = "0.4.8", default-features = false }
 clap = { version = "4.6", features = ["derive"] }
 parking_lot = "0.12"
 nnnoiseless = { version = "0.5.2", default-features = false }
-# "IA máxima": DeepFilterNet3 (MIT/Apache) through tract, vendored subset of libDF.
+# "Maximum AI": DeepFilterNet3 (MIT/Apache) through tract, vendored subset of libDF.
 deep_filter = { path = "../../vendor/deep_filter" }
 url = "2"
 # Soundboard uploads: decode WAV / MP3 / OGG (Vorbis) / FLAC in pure Rust (no ffmpeg, no C).

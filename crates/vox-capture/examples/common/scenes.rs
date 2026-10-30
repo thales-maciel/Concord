@@ -56,7 +56,8 @@ impl Rng {
 }
 
 fn hash2(x: i64, y: i64) -> u32 {
-    let mut h = (x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (y as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+    let mut h = (x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (y as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
     h ^= h >> 29;
     h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
     (h ^ (h >> 32)) as u32
@@ -71,12 +72,12 @@ pub struct SceneGen {
     scene: Scene,
     w: usize,
     h: usize,
-    points: Vec<[f32; 6]>,  // x y z r g b
-    page: Vec<u32>,         // text page
+    points: Vec<[f32; 6]>, // x y z r g b
+    page: Vec<u32>,        // text page
     page_w: usize,
     page_h: usize,
-    tex: Vec<u32>,          // game floor texture 1024x1024
-    accum: Vec<[u16; 3]>,   // point cloud additive buffer
+    tex: Vec<u32>,        // game floor texture 1024x1024
+    accum: Vec<[u16; 3]>, // point cloud additive buffer
 }
 
 const TEX: usize = 1024;
@@ -150,7 +151,14 @@ impl SceneGen {
             let hue = (x.atan2(z) / (2.0 * PI) + 0.5 + y) * 6.0;
             let (cr, cg, cb) = hue_rgb(hue);
             let k = 0.55 + 0.45 * r.f();
-            self.points.push([x as f32, y as f32, z as f32, (cr * k) as f32, (cg * k) as f32, (cb * k) as f32]);
+            self.points.push([
+                x as f32,
+                y as f32,
+                z as f32,
+                (cr * k) as f32,
+                (cg * k) as f32,
+                (cb * k) as f32,
+            ]);
         }
         self.accum = vec![[0; 3]; self.w * self.h];
     }
@@ -234,7 +242,11 @@ impl SceneGen {
         let mut r = Rng(0x7E47_0002);
         for row in 0..rows {
             let indent = (r.next() % 12) as usize * 2;
-            let len = if r.next().is_multiple_of(9) { 0 } else { 20 + (r.next() % 140) as usize };
+            let len = if r.next().is_multiple_of(9) {
+                0
+            } else {
+                20 + (r.next() % 140) as usize
+            };
             let mut col = indent;
             let mut color = palette[0];
             let mut word_left = 0usize;
@@ -268,10 +280,10 @@ impl SceneGen {
             let b = (s.next() % 11) as usize;
             for k in 0..11usize {
                 let (x, y) = match kind {
-                    0 => (a, k),                    // vertical
-                    1 => (k.min(5), b),             // horizontal
-                    2 => (k * 5 / 10, k),           // diagonal
-                    _ => (5 - (k * 5 / 10), k),     // anti-diagonal
+                    0 => (a, k),                // vertical
+                    1 => (k.min(5), b),         // horizontal
+                    2 => (k * 5 / 10, k),       // diagonal
+                    _ => (5 - (k * 5 / 10), k), // anti-diagonal
                 };
                 if kind == 1 && k > 5 {
                     break;
@@ -291,7 +303,11 @@ impl SceneGen {
         let pan = 200.0 + 180.0 * (t * 1.3).sin();
         let max_y = (self.page_h - h) as f64;
         let oy = (scroll % (2.0 * max_y)) as i64;
-        let oy = if oy as f64 > max_y { (2.0 * max_y) as i64 - oy } else { oy } as usize;
+        let oy = if oy as f64 > max_y {
+            (2.0 * max_y) as i64 - oy
+        } else {
+            oy
+        } as usize;
         let ox = (pan.max(0.0) as usize).min(self.page_w.saturating_sub(w));
         let page = &self.page;
         let pw = self.page_w;
@@ -299,7 +315,12 @@ impl SceneGen {
             let src = &page[(oy + y) * pw + ox..];
             for x in 0..w {
                 let c = src[x];
-                row[x * 4..x * 4 + 4].copy_from_slice(&[c as u8, (c >> 8) as u8, (c >> 16) as u8, 255]);
+                row[x * 4..x * 4 + 4].copy_from_slice(&[
+                    c as u8,
+                    (c >> 8) as u8,
+                    (c >> 16) as u8,
+                    255,
+                ]);
             }
         });
     }
@@ -317,7 +338,11 @@ impl SceneGen {
                 let (r, g, b) = if path {
                     (150 + h2 as i32 / 2, 120 + h2 as i32 / 2, 80 + h1 as i32 / 8)
                 } else if tile {
-                    (40 + h1 as i32 / 6, 110 + h1 as i32 / 3 + h2 as i32 / 2, 35 + h2 as i32 / 3)
+                    (
+                        40 + h1 as i32 / 6,
+                        110 + h1 as i32 / 3 + h2 as i32 / 2,
+                        35 + h2 as i32 / 3,
+                    )
                 } else {
                     (60 + h1 as i32 / 5, 135 + h1 as i32 / 4, 45 + h2 as i32 / 2)
                 };
@@ -339,9 +364,15 @@ impl SceneGen {
             .map(|i| {
                 let a = i as f64 * 0.7 + t * (0.6 + (i % 5) as f64 * 0.25);
                 let x = (w as f64) * (0.5 + 0.45 * (a * 1.3).sin());
-                let y = horizon + (h as f64 - horizon) * (0.15 + 0.8 * ((a * 0.7 + i as f64).cos() * 0.5 + 0.5));
+                let y = horizon
+                    + (h as f64 - horizon)
+                        * (0.15 + 0.8 * ((a * 0.7 + i as f64).cos() * 0.5 + 0.5));
                 let r = 6.0 + (i % 7) as f64 * 3.0;
-                let c = px((i * 53 % 255) as u8, (i * 97 % 255) as u8, (i * 31 % 255) as u8);
+                let c = px(
+                    (i * 53 % 255) as u8,
+                    (i * 97 % 255) as u8,
+                    (i * 31 % 255) as u8,
+                );
                 (x, y, r, c)
             })
             .collect();
@@ -391,13 +422,29 @@ impl SceneGen {
                 {
                     c = px(200, 40, 40);
                 }
-                if x > w - 260 && x < w - 20 && y > 20 && y < 260 && (x == w - 259 || x == w - 21 || y == 21 || y == 259) {
+                if x > w - 260
+                    && x < w - 20
+                    && y > 20
+                    && y < 260
+                    && (x == w - 259 || x == w - 21 || y == 21 || y == 259)
+                {
                     c = px(255, 255, 255);
                 }
-                if y > 24 && y < 36 && x > 30 && x < 520 && hash2(x as i64 / 3, 1).is_multiple_of(3) && (x / 9) % 7 != 0 {
+                if y > 24
+                    && y < 36
+                    && x > 30
+                    && x < 520
+                    && hash2(x as i64 / 3, 1).is_multiple_of(3)
+                    && (x / 9) % 7 != 0
+                {
                     c = px(255, 255, 255);
                 }
-                row[x * 4..x * 4 + 4].copy_from_slice(&[c as u8, (c >> 8) as u8, (c >> 16) as u8, 255]);
+                row[x * 4..x * 4 + 4].copy_from_slice(&[
+                    c as u8,
+                    (c >> 8) as u8,
+                    (c >> 16) as u8,
+                    255,
+                ]);
             }
         });
     }
@@ -429,7 +476,10 @@ fn hue_rgb(h: f64) -> (f64, f64, f64) {
 
 /// Run `f(y, row)` over row bands on all cores.
 fn par_rows(buf: &mut [u8], stride: usize, h: usize, f: impl Fn(usize, &mut [u8]) + Sync) {
-    let n = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(16);
+    let n = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(16);
     let band = h.div_ceil(n);
     std::thread::scope(|s| {
         for (bi, chunk) in buf[..stride * h].chunks_mut(stride * band).enumerate() {

@@ -86,7 +86,10 @@ impl Db {
     }
 
     /// Run `f` right here (the command-line tools, which have no runtime).
-    pub fn call_now<T>(&self, f: impl FnOnce(&mut Connection) -> rusqlite::Result<T>) -> anyhow::Result<T> {
+    pub fn call_now<T>(
+        &self,
+        f: impl FnOnce(&mut Connection) -> rusqlite::Result<T>,
+    ) -> anyhow::Result<T> {
         let mut conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
         f(&mut conn).map_err(Into::into)
     }
@@ -135,9 +138,15 @@ fn init(conn: &mut Connection) -> rusqlite::Result<()> {
     // ---- v0.9: private channels (`access.rs`): one column, two tables, a trigger, and the
     // downgrade guard row while a channel is private.
     crate::access::init(conn)?;
-    let n: i64 = conn.query_row("SELECT COUNT(*) FROM channels WHERE id > 0", [], |r| r.get(0))?;
+    let n: i64 = conn.query_row("SELECT COUNT(*) FROM channels WHERE id > 0", [], |r| {
+        r.get(0)
+    })?;
     if n == 0 {
-        for (name, kind) in [("geral", ChannelKind::Text), ("Sala 1", ChannelKind::Voice), ("Sala 2", ChannelKind::Voice)] {
+        for (name, kind) in [
+            ("general", ChannelKind::Text),
+            ("Room 1", ChannelKind::Voice),
+            ("Room 2", ChannelKind::Voice),
+        ] {
             create_channel(conn, name, kind)?;
         }
     }
@@ -149,7 +158,9 @@ fn init(conn: &mut Connection) -> rusqlite::Result<()> {
 
 pub(crate) fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
     let mut st = conn.prepare(&format!("PRAGMA table_info({table})"))?;
-    let names = st.query_map([], |r| r.get::<_, String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let names = st
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(names.iter().any(|n| n.eq_ignore_ascii_case(column)))
 }
 
@@ -267,15 +278,29 @@ impl UserRow {
 
     /// The role used for permission checks.
     pub fn effective_role(&self, owner: &str) -> Role {
-        if self.must_set_password(owner) { Role::Member } else { self.role(owner) }
+        if self.must_set_password(owner) {
+            Role::Member
+        } else {
+            self.role(owner)
+        }
     }
 
     pub fn user(&self, owner: &str) -> User {
-        User { id: self.id, username: self.username.clone(), role: self.role(owner), avatar: self.avatar.clone(), display_name: self.display_name.clone() }
+        User {
+            id: self.id,
+            username: self.username.clone(),
+            role: self.role(owner),
+            avatar: self.avatar.clone(),
+            display_name: self.display_name.clone(),
+        }
     }
 
     pub fn account(&self, owner: &str) -> vox_proto::Account {
-        vox_proto::Account { has_password: self.has_password(), must_set_password: self.must_set_password(owner), ..Default::default() }
+        vox_proto::Account {
+            has_password: self.has_password(),
+            must_set_password: self.must_set_password(owner),
+            ..Default::default()
+        }
     }
 }
 
@@ -297,15 +322,27 @@ fn user_row(r: &rusqlite::Row) -> rusqlite::Result<UserRow> {
 }
 
 pub fn find_user(conn: &Connection, username: &str) -> rusqlite::Result<Option<UserRow>> {
-    conn.query_row(&format!("SELECT {USER_COLS} FROM users u WHERE u.username = ?"), [username], user_row).optional()
+    conn.query_row(
+        &format!("SELECT {USER_COLS} FROM users u WHERE u.username = ?"),
+        [username],
+        user_row,
+    )
+    .optional()
 }
 
 pub fn get_user(conn: &Connection, id: UserId) -> rusqlite::Result<Option<UserRow>> {
-    conn.query_row(&format!("SELECT {USER_COLS} FROM users u WHERE u.id = ?"), [id], user_row).optional()
+    conn.query_row(
+        &format!("SELECT {USER_COLS} FROM users u WHERE u.id = ?"),
+        [id],
+        user_row,
+    )
+    .optional()
 }
 
 pub fn list_users(conn: &Connection) -> rusqlite::Result<Vec<UserRow>> {
-    let mut st = conn.prepare(&format!("SELECT {USER_COLS} FROM users u ORDER BY u.username COLLATE NOCASE"))?;
+    let mut st = conn.prepare(&format!(
+        "SELECT {USER_COLS} FROM users u ORDER BY u.username COLLATE NOCASE"
+    ))?;
     let rows = st.query_map([], user_row)?;
     rows.collect()
 }
@@ -317,18 +354,34 @@ pub fn login(conn: &mut Connection, username: &str, token_hash: &str) -> rusqlit
 
 /// [`login`] for a name that must be new (an invite only creates accounts, v1.0.1): `None`, and no
 /// session, when the name already has an account (somebody took it since the check).
-pub fn login_new(conn: &mut Connection, username: &str, token_hash: &str) -> rusqlite::Result<Option<UserRow>> {
+pub fn login_new(
+    conn: &mut Connection,
+    username: &str,
+    token_hash: &str,
+) -> rusqlite::Result<Option<UserRow>> {
     login_inner(conn, username, token_hash, true)
 }
 
-fn login_inner(conn: &mut Connection, username: &str, token_hash: &str, only_new: bool) -> rusqlite::Result<Option<UserRow>> {
+fn login_inner(
+    conn: &mut Connection,
+    username: &str,
+    token_hash: &str,
+    only_new: bool,
+) -> rusqlite::Result<Option<UserRow>> {
     let tx = conn.transaction()?;
     let now = now_ms();
-    let created = tx.execute("INSERT OR IGNORE INTO users (username, created_at_ms) VALUES (?, ?)", params![username, now])? == 1;
+    let created = tx.execute(
+        "INSERT OR IGNORE INTO users (username, created_at_ms) VALUES (?, ?)",
+        params![username, now],
+    )? == 1;
     if only_new && !created {
         return Ok(None);
     }
-    let user = tx.query_row(&format!("SELECT {USER_COLS} FROM users u WHERE u.username = ?"), [username], user_row)?;
+    let user = tx.query_row(
+        &format!("SELECT {USER_COLS} FROM users u WHERE u.username = ?"),
+        [username],
+        user_row,
+    )?;
     tx.execute(
         "INSERT INTO sessions (token_hash, user_id, created_at_ms, expires_at_ms, auth_epoch) VALUES (?, ?, ?, ?, ?)",
         params![token_hash, user.id, now, now + SESSION_TTL_MS, SESSION_EPOCH],
@@ -347,7 +400,11 @@ pub fn user_for_session(conn: &Connection, token_hash: &str) -> rusqlite::Result
 }
 
 /// Remember a device for `user_id` (the token's sha256 is stored, never the token).
-pub fn add_device_token(conn: &Connection, user_id: UserId, token_hash: &str) -> rusqlite::Result<()> {
+pub fn add_device_token(
+    conn: &Connection,
+    user_id: UserId,
+    token_hash: &str,
+) -> rusqlite::Result<()> {
     let now = now_ms();
     conn.execute(
         "INSERT INTO device_tokens (token_hash, user_id, created_at_ms, last_used_ms, expires_at_ms) VALUES (?, ?, ?, ?, ?)",
@@ -357,7 +414,11 @@ pub fn add_device_token(conn: &Connection, user_id: UserId, token_hash: &str) ->
 }
 
 /// Is this a live device token of `user_id`? A valid one is refreshed (sliding expiry).
-pub fn use_device_token(conn: &Connection, user_id: UserId, token_hash: &str) -> rusqlite::Result<bool> {
+pub fn use_device_token(
+    conn: &Connection,
+    user_id: UserId,
+    token_hash: &str,
+) -> rusqlite::Result<bool> {
     let now = now_ms();
     let n = conn.execute(
         "UPDATE device_tokens SET last_used_ms = ?1, expires_at_ms = ?2
@@ -369,20 +430,33 @@ pub fn use_device_token(conn: &Connection, user_id: UserId, token_hash: &str) ->
 
 /// New personal password (or none), clearing any reset code. Revokes every device token and
 /// every session but `keep_session`.
-pub fn set_password(conn: &mut Connection, user_id: UserId, hash: Option<&str>, keep_session: Option<&str>) -> rusqlite::Result<()> {
+pub fn set_password(
+    conn: &mut Connection,
+    user_id: UserId,
+    hash: Option<&str>,
+    keep_session: Option<&str>,
+) -> rusqlite::Result<()> {
     let tx = conn.transaction()?;
     tx.execute(
         "UPDATE users SET password_hash = ?, reset_hash = NULL, reset_expires_ms = NULL WHERE id = ?",
         params![hash, user_id],
     )?;
     tx.execute("DELETE FROM device_tokens WHERE user_id = ?", [user_id])?;
-    tx.execute("DELETE FROM sessions WHERE user_id = ? AND token_hash IS NOT ?", params![user_id, keep_session])?;
+    tx.execute(
+        "DELETE FROM sessions WHERE user_id = ? AND token_hash IS NOT ?",
+        params![user_id, keep_session],
+    )?;
     tx.commit()
 }
 
-/// "Redefinir senha pessoal": the password is dropped, the name is protected by a one-time code
+/// "Reset personal password": the password is dropped, the name is protected by a one-time code
 /// instead, and every session and device token of the user ends.
-pub fn set_reset_code(conn: &mut Connection, user_id: UserId, code_hash: &str, expires_ms: i64) -> rusqlite::Result<()> {
+pub fn set_reset_code(
+    conn: &mut Connection,
+    user_id: UserId,
+    code_hash: &str,
+    expires_ms: i64,
+) -> rusqlite::Result<()> {
     let tx = conn.transaction()?;
     tx.execute(
         "UPDATE users SET password_hash = NULL, reset_hash = ?, reset_expires_ms = ? WHERE id = ?",
@@ -404,13 +478,23 @@ const SERVER_ID_KEY: &str = "server_id";
 /// ignores the row.
 pub fn server_id(conn: &Connection) -> rusqlite::Result<String> {
     let fresh = crate::util::random_hex::<16>();
-    conn.execute("INSERT OR IGNORE INTO server_meta (key, value) VALUES (?, ?)", params![SERVER_ID_KEY, fresh])?;
-    let id: String = conn.query_row("SELECT value FROM server_meta WHERE key = ?", [SERVER_ID_KEY], |r| r.get(0))?;
+    conn.execute(
+        "INSERT OR IGNORE INTO server_meta (key, value) VALUES (?, ?)",
+        params![SERVER_ID_KEY, fresh],
+    )?;
+    let id: String = conn.query_row(
+        "SELECT value FROM server_meta WHERE key = ?",
+        [SERVER_ID_KEY],
+        |r| r.get(0),
+    )?;
     if vox_proto::is_server_id(&id) {
         return Ok(id);
     }
     // A hand-edited value: a fresh one (the apps then see another server, which is the truth).
-    conn.execute("UPDATE server_meta SET value = ? WHERE key = ?", params![fresh, SERVER_ID_KEY])?;
+    conn.execute(
+        "UPDATE server_meta SET value = ? WHERE key = ?",
+        params![fresh, SERVER_ID_KEY],
+    )?;
     Ok(fresh)
 }
 
@@ -430,16 +514,25 @@ pub fn owner_row(conn: &Connection) -> rusqlite::Result<Option<UserRow>> {
 
 /// Make `user_id` the owner, but only if there is none: of two simultaneous claims exactly one wins.
 pub fn claim_owner(conn: &Connection, user_id: UserId) -> rusqlite::Result<bool> {
-    let n = conn.execute("INSERT OR IGNORE INTO server_meta (key, value) VALUES (?, ?)", params![OWNER_KEY, user_id.to_string()])?;
+    let n = conn.execute(
+        "INSERT OR IGNORE INTO server_meta (key, value) VALUES (?, ?)",
+        params![OWNER_KEY, user_id.to_string()],
+    )?;
     Ok(n == 1)
 }
 
 /// Hand the server from `from` (who must still be the owner) to `to`; `from` becomes Admin.
 pub fn transfer_owner(conn: &mut Connection, from: UserId, to: UserId) -> rusqlite::Result<bool> {
     let tx = conn.transaction()?;
-    let n = tx.execute("UPDATE server_meta SET value = ? WHERE key = ? AND value = ?", params![to.to_string(), OWNER_KEY, from.to_string()])?;
+    let n = tx.execute(
+        "UPDATE server_meta SET value = ? WHERE key = ? AND value = ?",
+        params![to.to_string(), OWNER_KEY, from.to_string()],
+    )?;
     if n == 1 {
-        tx.execute("UPDATE users SET role = ? WHERE id = ?", params![Role::Admin.wire_name(), from])?;
+        tx.execute(
+            "UPDATE users SET role = ? WHERE id = ?",
+            params![Role::Admin.wire_name(), from],
+        )?;
     }
     tx.commit()?;
     Ok(n == 1)
@@ -451,12 +544,18 @@ pub fn clear_owner(conn: &Connection) -> rusqlite::Result<bool> {
 }
 
 pub fn set_role(conn: &Connection, user_id: UserId, role: Role) -> rusqlite::Result<()> {
-    conn.execute("UPDATE users SET role = ? WHERE id = ?", params![role.min(Role::Admin).wire_name(), user_id])?;
+    conn.execute(
+        "UPDATE users SET role = ? WHERE id = ?",
+        params![role.min(Role::Admin).wire_name(), user_id],
+    )?;
     Ok(())
 }
 
 pub fn set_server_muted(conn: &Connection, user_id: UserId, muted: bool) -> rusqlite::Result<()> {
-    conn.execute("UPDATE users SET server_muted = ? WHERE id = ?", params![muted as i64, user_id])?;
+    conn.execute(
+        "UPDATE users SET server_muted = ? WHERE id = ?",
+        params![muted as i64, user_id],
+    )?;
     Ok(())
 }
 
@@ -471,13 +570,19 @@ pub fn server_muted_ids(conn: &Connection) -> rusqlite::Result<Vec<UserId>> {
 /// Every channel (with its access list when private, v0.9), in order. `id > 0` skips the
 /// downgrade guard row (`access.rs`), here and in every query on `channels`.
 pub fn list_channels(conn: &Connection) -> rusqlite::Result<Vec<Channel>> {
-    let mut st = conn.prepare("SELECT id, name, kind, position FROM channels WHERE id > 0 ORDER BY position, id")?;
+    let mut st = conn.prepare(
+        "SELECT id, name, kind, position FROM channels WHERE id > 0 ORDER BY position, id",
+    )?;
     let rows = st.query_map([], |r| {
         let kind: String = r.get(2)?;
         Ok(Channel {
             id: r.get(0)?,
             name: r.get(1)?,
-            kind: if kind == "voice" { ChannelKind::Voice } else { ChannelKind::Text },
+            kind: if kind == "voice" {
+                ChannelKind::Voice
+            } else {
+                ChannelKind::Text
+            },
             position: r.get(3)?,
             private: None,
         })
@@ -487,19 +592,43 @@ pub fn list_channels(conn: &Connection) -> rusqlite::Result<Vec<Channel>> {
     Ok(list)
 }
 
-pub fn create_channel(conn: &Connection, name: &str, kind: ChannelKind) -> rusqlite::Result<Channel> {
-    let pos: i32 = conn.query_row("SELECT COALESCE(MAX(position), -1) + 1 FROM channels WHERE id > 0", [], |r| r.get(0))?;
-    let k = if kind == ChannelKind::Voice { "voice" } else { "text" };
+pub fn create_channel(
+    conn: &Connection,
+    name: &str,
+    kind: ChannelKind,
+) -> rusqlite::Result<Channel> {
+    let pos: i32 = conn.query_row(
+        "SELECT COALESCE(MAX(position), -1) + 1 FROM channels WHERE id > 0",
+        [],
+        |r| r.get(0),
+    )?;
+    let k = if kind == ChannelKind::Voice {
+        "voice"
+    } else {
+        "text"
+    };
     // A fresh id: a deleted channel's id never comes back (the apps keep per-channel state).
     let id = crate::ids::insert_with(conn, crate::ids::Seq::Channels, |id| {
-        conn.execute("INSERT INTO channels (id, name, kind, position) VALUES (?, ?, ?, ?)", params![id, name, k, pos])?;
+        conn.execute(
+            "INSERT INTO channels (id, name, kind, position) VALUES (?, ?, ?, ?)",
+            params![id, name, k, pos],
+        )?;
         Ok(id)
     })?;
-    Ok(Channel { id, name: name.to_string(), kind, position: pos, private: None })
+    Ok(Channel {
+        id,
+        name: name.to_string(),
+        kind,
+        position: pos,
+        private: None,
+    })
 }
 
 pub fn rename_channel(conn: &Connection, id: i64, name: &str) -> rusqlite::Result<bool> {
-    Ok(conn.execute("UPDATE channels SET name = ? WHERE id = ?", params![name, id])? > 0)
+    Ok(conn.execute(
+        "UPDATE channels SET name = ? WHERE id = ?",
+        params![name, id],
+    )? > 0)
 }
 
 /// Deletes the channel and its messages.
@@ -518,7 +647,10 @@ pub fn delete_channel(conn: &mut Connection, id: i64) -> rusqlite::Result<bool> 
 pub fn reorder_channels(conn: &mut Connection, ids: &[i64]) -> rusqlite::Result<()> {
     let tx = conn.transaction()?;
     for (pos, id) in ids.iter().enumerate() {
-        tx.execute("UPDATE channels SET position = ? WHERE id = ?", params![pos as i64, id])?;
+        tx.execute(
+            "UPDATE channels SET position = ? WHERE id = ?",
+            params![pos as i64, id],
+        )?;
     }
     tx.commit()
 }
@@ -526,7 +658,13 @@ pub fn reorder_channels(conn: &mut Connection, ids: &[i64]) -> rusqlite::Result<
 // ---------------------------------------------------------------- messages
 
 /// Store a channel message whose extras were already checked ([`crate::chat::resolve_channel`]).
-fn insert_message(conn: &Connection, channel_id: i64, user: &User, content: &str, extras: crate::chat::Resolved) -> rusqlite::Result<Message> {
+fn insert_message(
+    conn: &Connection,
+    channel_id: i64,
+    user: &User,
+    content: &str,
+    extras: crate::chat::Resolved,
+) -> rusqlite::Result<Message> {
     let now = now_ms();
     // A fresh id: a deleted message's id never comes back (the apps' caches, reply quotes).
     let id = crate::ids::insert_with(conn, crate::ids::Seq::Messages, |id| {
@@ -571,50 +709,93 @@ pub fn insert_message_with(
     let extras = crate::chat::resolve_channel(&tx, user.id, channel_id, caption, draft, owner)?;
     let content = vox_proto::with_attachment_marker(caption, attachments.len());
     let mut msg = insert_message(&tx, channel_id, user, &content, extras)?;
-    msg.attachments = crate::attachments::link(&tx, attachments, crate::attachments::Owner::Channel(msg.id))?;
+    msg.attachments =
+        crate::attachments::link(&tx, attachments, crate::attachments::Owner::Channel(msg.id))?;
     tx.commit()?;
     Ok(Ok(msg))
 }
 
 /// Newest first; `before` is an exclusive message-id cursor. Authors carry their current role.
-pub fn list_messages(conn: &Connection, channel_id: i64, before: Option<i64>, limit: i64, owner: &str) -> rusqlite::Result<Vec<Message>> {
+pub fn list_messages(
+    conn: &Connection,
+    channel_id: i64,
+    before: Option<i64>,
+    limit: i64,
+    owner: &str,
+) -> rusqlite::Result<Vec<Message>> {
     let mut st = conn.prepare(
         "SELECT m.id, m.content, m.created_at_ms, u.id, u.username, u.role, u.avatar_version, u.display_name,
                 m.mentions, m.mention_everyone, m.reply_to FROM messages m
          JOIN users u ON u.id = m.user_id
          WHERE m.channel_id = ?1 AND m.id < ?2 ORDER BY m.id DESC LIMIT ?3",
     )?;
-    let rows = st.query_map(params![channel_id, before.unwrap_or(i64::MAX), limit], |r| {
-        let mut m = Message {
-            id: r.get(0)?,
-            channel_id,
-            content: r.get(1)?,
-            created_at_ms: r.get(2)?,
-            author: display_user(r.get(3)?, r.get(4)?, &r.get::<_, String>(5)?, r.get(6)?, r.get(7)?, owner),
-            attachments: Vec::new(),
-            mentions: Vec::new(),
-            mention_everyone: false,
-            reply: None,
-            reactions: Vec::new(),
-        };
-        crate::chat::raw_fields(&mut m, &r.get::<_, String>(8)?, r.get::<_, i64>(9)? != 0, r.get(10)?);
-        Ok(m)
-    })?;
+    let rows = st.query_map(
+        params![channel_id, before.unwrap_or(i64::MAX), limit],
+        |r| {
+            let mut m = Message {
+                id: r.get(0)?,
+                channel_id,
+                content: r.get(1)?,
+                created_at_ms: r.get(2)?,
+                author: display_user(
+                    r.get(3)?,
+                    r.get(4)?,
+                    &r.get::<_, String>(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                    owner,
+                ),
+                attachments: Vec::new(),
+                mentions: Vec::new(),
+                mention_everyone: false,
+                reply: None,
+                reactions: Vec::new(),
+            };
+            crate::chat::raw_fields(
+                &mut m,
+                &r.get::<_, String>(8)?,
+                r.get::<_, i64>(9)? != 0,
+                r.get(10)?,
+            );
+            Ok(m)
+        },
+    )?;
     let mut msgs = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     crate::attachments::fill_messages(conn, &mut msgs)?;
     crate::chat::fill_messages(conn, &mut msgs, owner)?;
     Ok(msgs)
 }
 
-pub(crate) fn display_user(id: UserId, username: String, stored_role: &str, avatar: Option<String>, display_name: Option<String>, owner: &str) -> User {
-    let role = if is_owner(&username, owner) { Role::Owner } else { Role::from_wire(stored_role).min(Role::Admin) };
-    User { id, username, role, avatar, display_name }
+pub(crate) fn display_user(
+    id: UserId,
+    username: String,
+    stored_role: &str,
+    avatar: Option<String>,
+    display_name: Option<String>,
+    owner: &str,
+) -> User {
+    let role = if is_owner(&username, owner) {
+        Role::Owner
+    } else {
+        Role::from_wire(stored_role).min(Role::Admin)
+    };
+    User {
+        id,
+        username,
+        role,
+        avatar,
+        display_name,
+    }
 }
 
 /// (channel, author id, content) of a message.
 pub fn get_message(conn: &Connection, id: i64) -> rusqlite::Result<Option<(i64, UserId, String)>> {
-    conn.query_row("SELECT channel_id, user_id, content FROM messages WHERE id = ?", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-        .optional()
+    conn.query_row(
+        "SELECT channel_id, user_id, content FROM messages WHERE id = ?",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )
+    .optional()
 }
 
 /// Deletes the message and its attachment rows (the caller collects the unused files).
@@ -626,7 +807,13 @@ pub fn delete_message(conn: &Connection, id: i64) -> rusqlite::Result<bool> {
 // ---------------------------------------------------------------- audit log
 
 /// `actor`: `None` = the host on the command line.
-pub fn audit(conn: &Connection, actor: Option<UserId>, action: &str, target: Option<UserId>, detail: &str) -> rusqlite::Result<()> {
+pub fn audit(
+    conn: &Connection,
+    actor: Option<UserId>,
+    action: &str,
+    target: Option<UserId>,
+    detail: &str,
+) -> rusqlite::Result<()> {
     crate::ids::insert_with(conn, crate::ids::Seq::AuditLog, |id| {
         conn.execute(
             "INSERT INTO audit_log (id, at_ms, actor_id, action, target_id, detail) VALUES (?, ?, ?, ?, ?, ?)",
@@ -637,7 +824,12 @@ pub fn audit(conn: &Connection, actor: Option<UserId>, action: &str, target: Opt
 }
 
 /// Newest first; `before` is an exclusive id cursor.
-pub fn list_audit(conn: &Connection, before: Option<i64>, limit: i64, owner: &str) -> rusqlite::Result<Vec<AuditEntry>> {
+pub fn list_audit(
+    conn: &Connection,
+    before: Option<i64>,
+    limit: i64,
+    owner: &str,
+) -> rusqlite::Result<Vec<AuditEntry>> {
     let mut st = conn.prepare(
         "SELECT a.id, a.at_ms, a.action, a.detail, au.id, au.username, au.role, au.avatar_version, au.display_name, tu.id, tu.username, tu.role, tu.avatar_version, tu.display_name
          FROM audit_log a
@@ -649,11 +841,25 @@ pub fn list_audit(conn: &Connection, before: Option<i64>, limit: i64, owner: &st
         let person = |i: usize| -> rusqlite::Result<Option<User>> {
             let id: Option<i64> = r.get(i)?;
             Ok(match id {
-                Some(id) => Some(display_user(id, r.get(i + 1)?, &r.get::<_, String>(i + 2)?, r.get(i + 3)?, r.get(i + 4)?, owner)),
+                Some(id) => Some(display_user(
+                    id,
+                    r.get(i + 1)?,
+                    &r.get::<_, String>(i + 2)?,
+                    r.get(i + 3)?,
+                    r.get(i + 4)?,
+                    owner,
+                )),
                 None => None,
             })
         };
-        Ok(AuditEntry { id: r.get(0)?, at_ms: r.get(1)?, action: r.get(2)?, detail: r.get(3)?, actor: person(4)?, target: person(9)? })
+        Ok(AuditEntry {
+            id: r.get(0)?,
+            at_ms: r.get(1)?,
+            action: r.get(2)?,
+            detail: r.get(3)?,
+            actor: person(4)?,
+            target: person(9)?,
+        })
     })?;
     rows.collect()
 }
@@ -661,6 +867,37 @@ pub fn list_audit(conn: &Connection, before: Option<i64>, limit: i64, owner: &st
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn english_defaults_do_not_rename_existing_channels() {
+        let dir = tempfile::tempdir().unwrap();
+        let fresh = Db::open(&dir.path().join("fresh.db")).unwrap();
+        let names = fresh
+            .call_now(|c| {
+                Ok(list_channels(c)?
+                    .into_iter()
+                    .map(|c| c.name)
+                    .collect::<Vec<_>>())
+            })
+            .unwrap();
+        assert_eq!(names, ["general", "Room 1", "Room 2"]);
+
+        // A real legacy schema contains user data, not text to translate on startup.
+        let legacy_path = dir.path().join("legacy.db");
+        v041_db(&legacy_path);
+        for _ in 0..2 {
+            let legacy = Db::open(&legacy_path).unwrap();
+            let names = legacy
+                .call_now(|c| {
+                    Ok(list_channels(c)?
+                        .into_iter()
+                        .map(|c| c.name)
+                        .collect::<Vec<_>>())
+                })
+                .unwrap();
+            assert_eq!(names, ["geral", "Sala 1"]);
+        }
+    }
 
     /// The v0.4.1 schema, exactly as `git show v0.4.1:hub/src/db.rs` creates it (plus the link
     /// preview table, unchanged since).
@@ -687,16 +924,41 @@ mod tests {
         for _ in 0..3 {
             let db = Db::open(&path).unwrap();
             db.call_now(|c| {
-                assert_eq!(c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))?, SCHEMA_VERSION);
+                assert_eq!(
+                    c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))?,
+                    SCHEMA_VERSION
+                );
                 let ana = find_user(c, "ana")?.unwrap();
-                assert_eq!((ana.stored_role, ana.has_password(), ana.server_muted), (Role::Member, false, false));
-                assert_eq!(ana.avatar, None, "no pictures in a v0.4.1 database, and the column exists");
-                assert_eq!(c.query_row("SELECT COUNT(*) FROM avatars", [], |r| r.get::<_, i64>(0))?, 0);
-                assert_eq!(ana.display_name, None, "no display names in a v0.4.1 database, and the column exists");
-                assert_eq!(c.query_row("SELECT COUNT(*) FROM profiles", [], |r| r.get::<_, i64>(0))?, 0);
-                assert_eq!(user_for_session(c, "h")?.unwrap().username, "Ana", "an unprotected name keeps its session");
+                assert_eq!(
+                    (ana.stored_role, ana.has_password(), ana.server_muted),
+                    (Role::Member, false, false)
+                );
+                assert_eq!(
+                    ana.avatar, None,
+                    "no pictures in a v0.4.1 database, and the column exists"
+                );
+                assert_eq!(
+                    c.query_row("SELECT COUNT(*) FROM avatars", [], |r| r.get::<_, i64>(0))?,
+                    0
+                );
+                assert_eq!(
+                    ana.display_name, None,
+                    "no display names in a v0.4.1 database, and the column exists"
+                );
+                assert_eq!(
+                    c.query_row("SELECT COUNT(*) FROM profiles", [], |r| r.get::<_, i64>(0))?,
+                    0
+                );
+                assert_eq!(
+                    user_for_session(c, "h")?.unwrap().username,
+                    "Ana",
+                    "an unprotected name keeps its session"
+                );
                 assert_eq!(list_messages(c, 1, None, 10, "dono")?.len(), 1);
-                assert_eq!(list_messages(c, 1, None, 10, "dono")?[0].author, User::new(1, "Ana"));
+                assert_eq!(
+                    list_messages(c, 1, None, 10, "dono")?[0].author,
+                    User::new(1, "Ana")
+                );
                 assert_eq!(find_user(c, "DONO")?.unwrap().role("dono"), Role::Owner);
                 Ok(())
             })
@@ -704,8 +966,18 @@ mod tests {
         }
         // The v0.4.1 hub's own queries still work on the migrated file (downgrade safety).
         let conn = Connection::open(&path).unwrap();
-        conn.execute("INSERT OR IGNORE INTO users (username, created_at_ms) VALUES ('Bia', 5)", []).unwrap();
-        let (id, name): (i64, String) = conn.query_row("SELECT id, username FROM users WHERE username = 'bia'", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO users (username, created_at_ms) VALUES ('Bia', 5)",
+            [],
+        )
+        .unwrap();
+        let (id, name): (i64, String) = conn
+            .query_row(
+                "SELECT id, username FROM users WHERE username = 'bia'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
         assert_eq!((id, name.as_str()), (3, "Bia"));
     }
 
@@ -736,7 +1008,10 @@ mod tests {
         drop(conn);
         let db = Db::open(&path).unwrap();
         db.call_now(|c| {
-            assert!(user_for_session(c, "legacy")?.is_none(), "made by the older hub: refused");
+            assert!(
+                user_for_session(c, "legacy")?.is_none(),
+                "made by the older hub: refused"
+            );
             assert_eq!(user_for_session(c, "mine")?.unwrap().username, "dono");
             Ok(())
         })
@@ -760,8 +1035,14 @@ mod tests {
         drop(conn);
         let db = Db::open(&path).unwrap();
         db.call_now(|c| {
-            assert!(user_for_session(c, "h")?.is_some(), "Ana has no personal password: kept");
-            assert!(user_for_session(c, "d")?.is_none(), "dono has one: logs in again");
+            assert!(
+                user_for_session(c, "h")?.is_some(),
+                "Ana has no personal password: kept"
+            );
+            assert!(
+                user_for_session(c, "d")?.is_none(),
+                "owner has one: logs in again"
+            );
             Ok(())
         })
         .unwrap();

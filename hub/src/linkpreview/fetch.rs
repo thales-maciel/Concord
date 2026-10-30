@@ -90,7 +90,11 @@ impl Fetcher {
             .read_timeout(Duration::from_secs(4))
             .pool_idle_timeout(Duration::from_secs(10))
             .build()?;
-        Ok(Fetcher { client, policy, limits })
+        Ok(Fetcher {
+            client,
+            policy,
+            limits,
+        })
     }
 
     pub fn policy(&self) -> &Arc<Policy> {
@@ -111,12 +115,14 @@ impl Fetcher {
             Kind::Json => "application/json",
         };
         for _hop in 0..=self.limits.max_redirects {
-            self.policy.check_url(&url).map_err(|_| FetchError::Blocked)?;
+            self.policy
+                .check_url(&url)
+                .map_err(|_| FetchError::Blocked)?;
             let mut resp = self
                 .client
                 .get(url.clone())
                 .header(ACCEPT, accept)
-                .header(ACCEPT_LANGUAGE, HeaderValue::from_static("pt-BR,pt;q=0.9,en;q=0.8"))
+                .header(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"))
                 .send()
                 .await
                 .map_err(|_| FetchError::Network)?;
@@ -153,11 +159,15 @@ impl Fetcher {
             }
             let mut body: Vec<u8> = Vec::new();
             loop {
-                let Some(chunk) = resp.chunk().await.map_err(|_| FetchError::Network)? else { break };
+                let Some(chunk) = resp.chunk().await.map_err(|_| FetchError::Network)? else {
+                    break;
+                };
                 let scan_from = body.len().saturating_sub(7);
                 body.extend_from_slice(&chunk);
                 if kind == Kind::Html {
-                    if body[scan_from..].windows(7).any(|w| w.eq_ignore_ascii_case(b"</head>") || w.eq_ignore_ascii_case(b"</head ")) {
+                    if body[scan_from..].windows(7).any(|w| {
+                        w.eq_ignore_ascii_case(b"</head>") || w.eq_ignore_ascii_case(b"</head ")
+                    }) {
                         break;
                     }
                     if body.len() >= cap {
@@ -168,7 +178,11 @@ impl Fetcher {
                     return Err(FetchError::TooLarge);
                 }
             }
-            return Ok(Fetched { url, content_type, body });
+            return Ok(Fetched {
+                url,
+                content_type,
+                body,
+            });
         }
         Err(FetchError::TooManyRedirects)
     }

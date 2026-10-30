@@ -1,4 +1,4 @@
-//! Chat images: the sending side's compression ("Imagens no chat"). Everything heavy happens
+//! Chat images: the sending side's compression ("Images no chat"). Everything heavy happens
 //! here, on the sender's PC, so the host's server only ever stores small files:
 //!
 //! 1. Decode PNG / JPEG / WebP / GIF / BMP under limits (header dimensions checked before any
@@ -90,9 +90,9 @@ impl Quality {
 
     pub fn label(self) -> &'static str {
         match self {
-            Quality::Normal => "Normal (até 1920 px, recomendado)",
-            Quality::High => "Alta (até 2560 px)",
-            Quality::Original => "Original (até 4096 px)",
+            Quality::Normal => "Normal (up to 1920 px, recommended)",
+            Quality::High => "High (up to 2560 px)",
+            Quality::Original => "Original (up to 4096 px)",
         }
     }
 }
@@ -119,9 +119,9 @@ impl Encoding {
     pub fn label(self) -> &'static str {
         match self {
             Encoding::WebpLossy => "WebP",
-            Encoding::WebpLossless => "WebP sem perdas",
+            Encoding::WebpLossless => "Lossless WebP",
             Encoding::Jpeg => "JPEG",
-            Encoding::AnimatedWebp => "WebP animado",
+            Encoding::AnimatedWebp => "Animated WebP",
             Encoding::Gif => "GIF",
         }
     }
@@ -184,11 +184,11 @@ pub enum CompressError {
 impl std::fmt::Display for CompressError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            CompressError::FileTooBig => "O arquivo é grande demais (mais de 64 MB).",
-            CompressError::NotImage => "Não é uma imagem que dê para enviar (use PNG, JPEG, WebP, GIF ou BMP).",
+            CompressError::FileTooBig => "The file is too large (over 64 MB).",
+            CompressError::NotImage => "Unsupported image (use PNG, JPEG, WebP, GIF or BMP).",
             CompressError::TooLarge => "A imagem tem pixels demais.",
-            CompressError::Damaged => "Não deu para ler a imagem (arquivo danificado?).",
-            CompressError::Failed => "Não deu para compactar a imagem.",
+            CompressError::Damaged => "Could not read the image (damaged file?).",
+            CompressError::Failed => "Could not compress the image.",
         })
     }
 }
@@ -213,7 +213,16 @@ fn map_err(e: image::ImageError) -> CompressError {
 
 /// The formats we read.
 pub fn sniff(bytes: &[u8]) -> Option<ImageFormat> {
-    image::guess_format(bytes).ok().filter(|f| matches!(f, ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::WebP | ImageFormat::Gif | ImageFormat::Bmp))
+    image::guess_format(bytes).ok().filter(|f| {
+        matches!(
+            f,
+            ImageFormat::Png
+                | ImageFormat::Jpeg
+                | ImageFormat::WebP
+                | ImageFormat::Gif
+                | ImageFormat::Bmp
+        )
+    })
 }
 
 /// Decode a still picture (first frame) with the EXIF orientation applied.
@@ -223,17 +232,28 @@ pub fn decode(bytes: &[u8]) -> Result<DynamicImage, CompressError> {
     reader.limits(limits());
     let mut dec = reader.into_decoder().map_err(map_err)?;
     let (w, h) = dec.dimensions();
-    if w == 0 || h == 0 || w > MAX_INPUT_SIDE || h > MAX_INPUT_SIDE || u64::from(w) * u64::from(h) > MAX_INPUT_PIXELS {
+    if w == 0
+        || h == 0
+        || w > MAX_INPUT_SIDE
+        || h > MAX_INPUT_SIDE
+        || u64::from(w) * u64::from(h) > MAX_INPUT_PIXELS
+    {
         return Err(CompressError::TooLarge);
     }
-    let orientation = dec.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+    let orientation = dec
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
     let mut img = DynamicImage::from_decoder(dec).map_err(map_err)?;
     img.apply_orientation(orientation);
     Ok(img)
 }
 
 /// Compress a file the person chose (or dropped). `progress` gets 0..=1.
-pub fn compress(bytes: &[u8], quality: Quality, progress: &dyn Fn(f32)) -> Result<Compressed, CompressError> {
+pub fn compress(
+    bytes: &[u8],
+    quality: Quality,
+    progress: &dyn Fn(f32),
+) -> Result<Compressed, CompressError> {
     let start = Instant::now();
     if bytes.len() > MAX_INPUT_BYTES {
         return Err(CompressError::FileTooBig);
@@ -251,7 +271,12 @@ pub fn compress(bytes: &[u8], quality: Quality, progress: &dyn Fn(f32)) -> Resul
 }
 
 /// Compress a decoded picture (a clipboard image). `original_bytes` is what it weighed before.
-pub fn compress_image(img: DynamicImage, original_bytes: u64, quality: Quality, progress: &dyn Fn(f32)) -> Result<Compressed, CompressError> {
+pub fn compress_image(
+    img: DynamicImage,
+    original_bytes: u64,
+    quality: Quality,
+    progress: &dyn Fn(f32),
+) -> Result<Compressed, CompressError> {
     let (w, h) = (img.width(), img.height());
     if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_INPUT_PIXELS {
         return Err(CompressError::TooLarge);
@@ -265,7 +290,10 @@ pub fn fit(w: u32, h: u32, side: u32) -> (u32, u32) {
         return (w, h);
     }
     let s = f64::from(side) / f64::from(w.max(h));
-    (((f64::from(w) * s).round() as u32).clamp(1, side), ((f64::from(h) * s).round() as u32).clamp(1, side))
+    (
+        ((f64::from(w) * s).round() as u32).clamp(1, side),
+        ((f64::from(h) * s).round() as u32).clamp(1, side),
+    )
 }
 
 /// Downscale to exactly `w`x`h`: an area average close to the target first (fast on huge
@@ -274,7 +302,11 @@ fn downscale(img: DynamicImage, w: u32, h: u32) -> DynamicImage {
     if (img.width(), img.height()) == (w, h) {
         return img;
     }
-    let img = if img.width() > w * 3 || img.height() > h * 3 { img.thumbnail_exact(w * 2, h * 2) } else { img };
+    let img = if img.width() > w * 3 || img.height() > h * 3 {
+        img.thumbnail_exact(w * 2, h * 2)
+    } else {
+        img
+    };
     img.resize_exact(w, h, FilterType::Lanczos3)
 }
 
@@ -300,7 +332,10 @@ pub fn looks_like_screenshot(px: &[u8], w: u32, h: u32, bpp: usize) -> bool {
     for y in (0..h).step_by(step) {
         let row = &px[y * w * bpp..(y + 1) * w * bpp];
         for x in 1..w {
-            let (a, b) = (&row[(x - 1) * bpp..(x - 1) * bpp + 3], &row[x * bpp..x * bpp + 3]);
+            let (a, b) = (
+                &row[(x - 1) * bpp..(x - 1) * bpp + 3],
+                &row[x * bpp..x * bpp + 3],
+            );
             same += u64::from(a == b);
             total += 1;
             if x % 5 == 0 && colors.len() < 4096 {
@@ -322,7 +357,8 @@ pub fn encode_jpeg(rgb: &[u8], w: u32, h: u32, quality: u8) -> Option<Vec<u8>> {
     e.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_2_0);
     e.set_progressive(true);
     e.set_optimized_huffman_tables(true);
-    e.encode(rgb, w as u16, h as u16, jpeg_encoder::ColorType::Rgb).ok()?;
+    e.encode(rgb, w as u16, h as u16, jpeg_encoder::ColorType::Rgb)
+        .ok()?;
     Some(out)
 }
 
@@ -331,25 +367,55 @@ fn smallest(cands: Vec<Option<(Vec<u8>, Encoding)>>) -> Option<(Vec<u8>, Encodin
 }
 
 /// Encode a resized picture; returns the bytes, how, and whether it looked like a screenshot.
-fn encode_still(img: &DynamicImage, alpha: bool, progress: &dyn Fn(f32)) -> Option<(Vec<u8>, Encoding, bool)> {
+fn encode_still(
+    img: &DynamicImage,
+    alpha: bool,
+    progress: &dyn Fn(f32),
+) -> Option<(Vec<u8>, Encoding, bool)> {
     let (w, h) = (img.width(), img.height());
-    let (px, bpp) = if alpha { (img.to_rgba8().into_raw(), 4) } else { (img.to_rgb8().into_raw(), 3) };
+    let (px, bpp) = if alpha {
+        (img.to_rgba8().into_raw(), 4)
+    } else {
+        (img.to_rgb8().into_raw(), 3)
+    };
     let screenshot = looks_like_screenshot(&px, w, h, bpp);
     progress(0.55);
-    let lossy = |q: f32, sharp: bool| webp::encode(&px, w, h, alpha, webp::Opts { lossless: false, quality: q, method: 4, sharp_yuv: sharp }).map(|b| (b, Encoding::WebpLossy));
-    let lossless = || webp::encode(&px, w, h, alpha, webp::Opts::lossless()).map(|b| (b, Encoding::WebpLossless));
+    let lossy = |q: f32, sharp: bool| {
+        webp::encode(
+            &px,
+            w,
+            h,
+            alpha,
+            webp::Opts {
+                lossless: false,
+                quality: q,
+                method: 4,
+                sharp_yuv: sharp,
+            },
+        )
+        .map(|b| (b, Encoding::WebpLossy))
+    };
+    let lossless = || {
+        webp::encode(&px, w, h, alpha, webp::Opts::lossless()).map(|b| (b, Encoding::WebpLossless))
+    };
     let chosen = if screenshot {
         let l = lossless();
         progress(0.7);
         let hq = lossy(WEBP_TEXT_QUALITY, true);
         match (l, hq) {
-            (Some(l), Some(hq)) if l.0.len() as f64 <= hq.0.len() as f64 * LOSSLESS_SLACK => Some(l),
+            (Some(l), Some(hq)) if l.0.len() as f64 <= hq.0.len() as f64 * LOSSLESS_SLACK => {
+                Some(l)
+            }
             (l, hq) => hq.or(l),
         }
     } else {
         let w80 = lossy(WEBP_QUALITY, false);
         progress(0.7);
-        let jpeg = if alpha { None } else { encode_jpeg(&px, w, h, JPEG_QUALITY).map(|b| (b, Encoding::Jpeg)) };
+        let jpeg = if alpha {
+            None
+        } else {
+            encode_jpeg(&px, w, h, JPEG_QUALITY).map(|b| (b, Encoding::Jpeg))
+        };
         let mut best = smallest(vec![w80, jpeg]);
         if u64::from(w) * u64::from(h) <= SMALL_PIXELS {
             best = smallest(vec![best, lossless()]);
@@ -362,7 +428,11 @@ fn encode_still(img: &DynamicImage, alpha: bool, progress: &dyn Fn(f32)) -> Opti
 
 fn preview_of(img: &DynamicImage) -> Preview {
     let p = img.thumbnail(PREVIEW_BOX, PREVIEW_BOX).to_rgba8();
-    Preview { w: p.width(), h: p.height(), rgba: p.into_raw() }
+    Preview {
+        w: p.width(),
+        h: p.height(),
+        rgba: p.into_raw(),
+    }
 }
 
 /// WebP thumbnail inside the thumbnail box (`None` when the picture already fits it).
@@ -372,7 +442,11 @@ fn thumb_of(img: &DynamicImage, alpha: bool) -> Option<(Vec<u8>, u32, u32)> {
     }
     let t = img.thumbnail(ATTACHMENT_THUMB_BOX, ATTACHMENT_THUMB_BOX);
     let (tw, th) = (t.width(), t.height());
-    let px = if alpha { t.to_rgba8().into_raw() } else { t.to_rgb8().into_raw() };
+    let px = if alpha {
+        t.to_rgba8().into_raw()
+    } else {
+        t.to_rgb8().into_raw()
+    };
     webp::encode(&px, tw, th, alpha, webp::Opts::lossy(THUMB_QUALITY)).map(|b| (b, tw, th))
 }
 
@@ -393,10 +467,22 @@ fn screenshot_at_full_size(img: &DynamicImage) -> bool {
     }
 }
 
-fn compress_still(img: DynamicImage, original_bytes: u64, quality: Quality, progress: &dyn Fn(f32), start: Instant) -> Result<Compressed, CompressError> {
+fn compress_still(
+    img: DynamicImage,
+    original_bytes: u64,
+    quality: Quality,
+    progress: &dyn Fn(f32),
+    start: Instant,
+) -> Result<Compressed, CompressError> {
     let (ow, oh) = (img.width(), img.height());
-    let screen = (ow > quality.max_side() || oh > quality.max_side()) && screenshot_at_full_size(&img);
-    let mut side = if screen { quality.max_side_screenshot() } else { quality.max_side() }.min(ATTACHMENT_MAX_SIDE);
+    let screen =
+        (ow > quality.max_side() || oh > quality.max_side()) && screenshot_at_full_size(&img);
+    let mut side = if screen {
+        quality.max_side_screenshot()
+    } else {
+        quality.max_side()
+    }
+    .min(ATTACHMENT_MAX_SIDE);
     let (w, h) = fit(ow, oh, side);
     let mut resized = downscale(img, w, h);
     progress(0.45);
@@ -409,8 +495,13 @@ fn compress_still(img: DynamicImage, original_bytes: u64, quality: Quality, prog
         side = (f64::from(side.min(resized.width().max(resized.height()))) * 0.75) as u32;
         let (w, h) = fit(resized.width(), resized.height(), side);
         resized = downscale(resized, w, h);
-        let px = if alpha { resized.to_rgba8().into_raw() } else { resized.to_rgb8().into_raw() };
-        let b = webp::encode(&px, w, h, alpha, webp::Opts::lossy(WEBP_QUALITY - 5.0)).ok_or(CompressError::Failed)?;
+        let px = if alpha {
+            resized.to_rgba8().into_raw()
+        } else {
+            resized.to_rgb8().into_raw()
+        };
+        let b = webp::encode(&px, w, h, alpha, webp::Opts::lossy(WEBP_QUALITY - 5.0))
+            .ok_or(CompressError::Failed)?;
         out = (b, Encoding::WebpLossy, out.2);
     }
     if out.0.len() > ATTACHMENT_MAX_BYTES {
@@ -418,7 +509,9 @@ fn compress_still(img: DynamicImage, original_bytes: u64, quality: Quality, prog
     }
     let thumb = thumb_of(&resized, alpha);
     progress(0.95);
-    let (tw, th) = thumb.as_ref().map_or((resized.width(), resized.height()), |t| (t.1, t.2));
+    let (tw, th) = thumb
+        .as_ref()
+        .map_or((resized.width(), resized.height()), |t| (t.1, t.2));
     let c = Compressed {
         bytes: out.0,
         encoding: out.1,
@@ -458,7 +551,13 @@ fn log(c: &Compressed) {
 
 /// An animation (GIF / animated WebP): `Ok(None)` = not animated after all, or not worth
 /// keeping animated (too big, too many frames): the caller sends the first frame.
-fn compress_animation(bytes: &[u8], fmt: ImageFormat, quality: Quality, progress: &dyn Fn(f32), start: Instant) -> Result<Option<Compressed>, CompressError> {
+fn compress_animation(
+    bytes: &[u8],
+    fmt: ImageFormat,
+    quality: Quality,
+    progress: &dyn Fn(f32),
+    start: Instant,
+) -> Result<Option<Compressed>, CompressError> {
     let frames = match fmt {
         ImageFormat::Gif => {
             let mut d = image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).map_err(map_err)?;
@@ -467,7 +566,8 @@ fn compress_animation(bytes: &[u8], fmt: ImageFormat, quality: Quality, progress
             d.into_frames()
         }
         ImageFormat::WebP => {
-            let mut d = image::codecs::webp::WebPDecoder::new(Cursor::new(bytes)).map_err(map_err)?;
+            let mut d =
+                image::codecs::webp::WebPDecoder::new(Cursor::new(bytes)).map_err(map_err)?;
             d.set_limits(limits()).map_err(map_err)?;
             if !d.has_animation() {
                 return Ok(None);
@@ -487,7 +587,10 @@ fn compress_animation(bytes: &[u8], fmt: ImageFormat, quality: Quality, progress
         decoded += buf.as_raw().len() as u64;
         list.push((buf, delay));
         if list.len() > MAX_FRAMES || decoded > MAX_ANIMATION_DECODED {
-            tracing::info!(frames = list.len(), "animation too long: sending its first frame");
+            tracing::info!(
+                frames = list.len(),
+                "animation too long: sending its first frame"
+            );
             return Ok(None);
         }
     }
@@ -517,13 +620,30 @@ fn compress_animation(bytes: &[u8], fmt: ImageFormat, quality: Quality, progress
         starts.push(t);
         t = t.saturating_add(*d as i32);
     }
-    let webp_frames: Vec<webp::Frame<'_>> = list.iter().zip(&starts).map(|((f, _), s)| webp::Frame { rgba: f.as_raw(), start_ms: *s }).collect();
-    let anim = webp::encode_animation(&webp_frames, w, h, t, ANIM_QUALITY).map(|b| (b, Encoding::AnimatedWebp));
+    let webp_frames: Vec<webp::Frame<'_>> = list
+        .iter()
+        .zip(&starts)
+        .map(|((f, _), s)| webp::Frame {
+            rgba: f.as_raw(),
+            start_ms: *s,
+        })
+        .collect();
+    let anim = webp::encode_animation(&webp_frames, w, h, t, ANIM_QUALITY)
+        .map(|b| (b, Encoding::AnimatedWebp));
     progress(0.85);
-    let gif = if fmt == ImageFormat::Gif && !resized { strip_gif(bytes).map(|b| (b, Encoding::Gif)) } else { None };
-    let Some((out, encoding)) = smallest(vec![anim, gif]) else { return Ok(None) };
+    let gif = if fmt == ImageFormat::Gif && !resized {
+        strip_gif(bytes).map(|b| (b, Encoding::Gif))
+    } else {
+        None
+    };
+    let Some((out, encoding)) = smallest(vec![anim, gif]) else {
+        return Ok(None);
+    };
     if out.len() > MAX_ANIMATED_BYTES {
-        tracing::info!(bytes = out.len(), "animation too big after compression: sending its first frame");
+        tracing::info!(
+            bytes = out.len(),
+            "animation too big after compression: sending its first frame"
+        );
         return Ok(None);
     }
     let first = DynamicImage::ImageRgba8(list.swap_remove(0).0);
@@ -552,7 +672,12 @@ fn compress_animation(bytes: &[u8], fmt: ImageFormat, quality: Quality, progress
 }
 
 fn check_dims((w, h): (u32, u32)) -> Result<(), CompressError> {
-    if w == 0 || h == 0 || w > MAX_INPUT_SIDE || h > MAX_INPUT_SIDE || u64::from(w) * u64::from(h) > MAX_INPUT_PIXELS {
+    if w == 0
+        || h == 0
+        || w > MAX_INPUT_SIDE
+        || h > MAX_INPUT_SIDE
+        || u64::from(w) * u64::from(h) > MAX_INPUT_PIXELS
+    {
         return Err(CompressError::TooLarge);
     }
     Ok(())
@@ -609,7 +734,12 @@ pub fn strip_gif(b: &[u8]) -> Option<Vec<u8>> {
             }
             0x21 => {
                 let label = *b.get(i + 1)?;
-                let keep = label == 0xf9 || (label == 0xff && b.get(i + 2..i + 14).is_some_and(|id| id[0] == 11 && (&id[1..] == b"NETSCAPE2.0" || &id[1..] == b"ANIMEXTS1.0")));
+                let keep = label == 0xf9
+                    || (label == 0xff
+                        && b.get(i + 2..i + 14).is_some_and(|id| {
+                            id[0] == 11
+                                && (&id[1..] == b"NETSCAPE2.0" || &id[1..] == b"ANIMEXTS1.0")
+                        }));
                 if keep {
                     out.extend([0x21, label]);
                     i = gif_sub_blocks(b, i + 2, Some(&mut out))?;

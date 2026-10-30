@@ -12,5 +12,10 @@ pub mod trim;
 mod webm;
 
 pub use cache::{SoundCache, SoundPcm};
-pub use process::{apply_fades, prepare, prepare_file, Prepared, ProcessError, Trim, DEFAULT_FADE_MS, MAX_EDIT_SECS, MAX_SOURCE_BYTES, SUPPORTED_FORMATS};
-pub use trim::{analyze, format_time, Overview, OverviewBuilder, Selection, MAX_SELECTION, MIN_SELECTION};
+pub use process::{
+    apply_fades, prepare, prepare_file, Prepared, ProcessError, Trim, DEFAULT_FADE_MS,
+    MAX_EDIT_SECS, MAX_SOURCE_BYTES, SUPPORTED_FORMATS,
+};
+pub use trim::{
+    analyze, format_time, Overview, OverviewBuilder, Selection, MAX_SELECTION, MIN_SELECTION,
+};

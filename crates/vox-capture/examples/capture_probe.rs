@@ -773,7 +773,10 @@ fn cmd_encode(args: &[String]) -> Result<()> {
     } else {
         return Err("need --monitor N or --window HWND".into());
     };
-    let secs = opt(args, "--secs").map(parse_int).transpose()?.unwrap_or(10) as u64;
+    let secs = opt(args, "--secs")
+        .map(parse_int)
+        .transpose()?
+        .unwrap_or(10) as u64;
     let fps = opt(args, "--fps").map(parse_int).transpose()?.unwrap_or(30) as u32;
     let (mw, mh) = match opt(args, "--max") {
         Some(s) => {
@@ -834,17 +837,31 @@ fn cmd_encode(args: &[String]) -> Result<()> {
             None => Ok(None),
         }
     };
-    let preview_fps = opt(args, "--preview-fps").map(parse_int).transpose()?.unwrap_or(0) as u32;
+    let preview_fps = opt(args, "--preview-fps")
+        .map(parse_int)
+        .transpose()?
+        .unwrap_or(0) as u32;
     let (pw, ph) = size_arg("--preview-size")?.unwrap_or((640, 360));
     let preview_png = opt(args, "--preview-png").map(str::to_string);
-    let preview_toggle = opt(args, "--preview-toggle").map(parse_int).transpose()?.map(|v| v as u64);
-    let preview_fps2 = opt(args, "--preview-fps2").map(parse_int).transpose()?.map(|v| v as u32);
+    let preview_toggle = opt(args, "--preview-toggle")
+        .map(parse_int)
+        .transpose()?
+        .map(|v| v as u64);
+    let preview_fps2 = opt(args, "--preview-fps2")
+        .map(parse_int)
+        .transpose()?
+        .map(|v| v as u32);
     let (pw2, ph2) = size_arg("--preview-size2")?.unwrap_or((pw, ph));
     let preview_last: Arc<Mutex<Option<FirstFrame>>> = Arc::new(Mutex::new(None));
     let preview_sizes: Arc<Mutex<Vec<(u32, u32)>>> = Arc::new(Mutex::new(Vec::new()));
     let screen_preview = if preview_fps > 0 {
         let sp = ScreenPreview::new().map_err(|e| e.to_string())?;
-        sp.set(PreviewConfig { on: true, fps: preview_fps, max_width: pw, max_height: ph });
+        sp.set(PreviewConfig {
+            on: true,
+            fps: preview_fps,
+            max_width: pw,
+            max_height: ph,
+        });
         Some(sp)
     } else {
         None
@@ -872,7 +889,12 @@ fn cmd_encode(args: &[String]) -> Result<()> {
                 for r in 0..h / 2 {
                     uv.extend_from_slice(&f.uv[r * f.uv_stride as usize..][..w]);
                 }
-                *last.lock().unwrap() = Some(FirstFrame { w: f.width, h: f.height, y, uv });
+                *last.lock().unwrap() = Some(FirstFrame {
+                    w: f.width,
+                    h: f.height,
+                    y,
+                    uv,
+                });
             }
         });
         cb
@@ -947,7 +969,12 @@ fn cmd_encode(args: &[String]) -> Result<()> {
             }
             if let Some(f2) = preview_fps2 {
                 if s == secs / 2 {
-                    sp.set(PreviewConfig { on: true, fps: f2, max_width: pw2, max_height: ph2 });
+                    sp.set(PreviewConfig {
+                        on: true,
+                        fps: f2,
+                        max_width: pw2,
+                        max_height: ph2,
+                    });
                     println!("  -> preview {f2} fps, fit {pw2}x{ph2}");
                 }
             }
@@ -982,7 +1009,11 @@ fn cmd_encode(args: &[String]) -> Result<()> {
         );
         if let Some(sp) = &screen_preview {
             let n = sp.frames();
-            println!("          preview: +{} frames ({:?})", n - prev_preview, sp.config());
+            println!(
+                "          preview: +{} frames ({:?})",
+                n - prev_preview,
+                sp.config()
+            );
             prev_preview = n;
         }
         prev = st;
@@ -1013,7 +1044,10 @@ fn cmd_encode(args: &[String]) -> Result<()> {
         st.frames_dropped,
         st.keyframes
     );
-    println!("avg encode latency (submit->output): {} us", st.avg_encode_us);
+    println!(
+        "avg encode latency (submit->output): {} us",
+        st.avg_encode_us
+    );
     let total_kbps = l.bytes as f64 * 8.0 / elapsed / 1000.0;
     println!(
         "output bitrate: {total_kbps:.0} kbps avg vs target {} kbps ({:.0}%)",
@@ -1063,7 +1097,11 @@ fn cmd_encode(args: &[String]) -> Result<()> {
     }
     println!("drop(EncodedVideoCapture) took {drop_ms:.1} ms");
     if let Some(sp) = &screen_preview {
-        println!("preview: {} frames delivered, sizes seen {:?}", sp.frames(), preview_sizes.lock().unwrap());
+        println!(
+            "preview: {} frames delivered, sizes seen {:?}",
+            sp.frames(),
+            preview_sizes.lock().unwrap()
+        );
         if let (Some(p), Some(f)) = (&preview_png, preview_last.lock().unwrap().take()) {
             save_png(&f, p)?;
             println!("last preview frame {}x{} saved to {p}", f.w, f.h);
@@ -1080,8 +1118,14 @@ fn cmd_encode(args: &[String]) -> Result<()> {
 
 /// `encode-cycle`: start -> 1.5 s -> drop, N times. Logs handles / private bytes per round.
 fn cmd_encode_cycle(args: &[String]) -> Result<()> {
-    let rounds = opt(args, "--rounds").map(parse_int).transpose()?.unwrap_or(5);
-    let mon = opt(args, "--monitor").map(parse_int).transpose()?.unwrap_or(0) as usize;
+    let rounds = opt(args, "--rounds")
+        .map(parse_int)
+        .transpose()?
+        .unwrap_or(5);
+    let mon = opt(args, "--monitor")
+        .map(parse_int)
+        .transpose()?
+        .unwrap_or(0) as usize;
     let backend = parse_backend(args)?;
     println!("before: {}", proc_counters());
     for r in 1..=rounds {
@@ -1316,7 +1360,11 @@ mod testwin {
                     if last_resize.elapsed().as_secs_f64() >= every {
                         last_resize = std::time::Instant::now();
                         big = !big;
-                        let (w, h) = if big { size } else { (size.0 * 3 / 4, size.1 * 5 / 6) };
+                        let (w, h) = if big {
+                            size
+                        } else {
+                            (size.0 * 3 / 4, size.1 * 5 / 6)
+                        };
                         let _ = SetWindowPos(
                             hwnd,
                             None,
@@ -1339,8 +1387,14 @@ mod testwin {
 
 fn cmd_testwin(args: &[String]) -> Result<()> {
     let fps = opt(args, "--fps").map(parse_int).transpose()?.unwrap_or(60) as u32;
-    let secs = opt(args, "--secs").map(parse_int).transpose()?.unwrap_or(120) as u64;
-    let noise = opt(args, "--noise").map(parse_int).transpose()?.unwrap_or(25) as u32;
+    let secs = opt(args, "--secs")
+        .map(parse_int)
+        .transpose()?
+        .unwrap_or(120) as u64;
+    let noise = opt(args, "--noise")
+        .map(parse_int)
+        .transpose()?
+        .unwrap_or(25) as u32;
     testwin::NOISE_PCT.store(noise.min(100), Ordering::Relaxed);
     let resize_every = opt(args, "--resize-every")
         .map(|s| s.parse::<f64>().map_err(|e| e.to_string()))
@@ -1372,7 +1426,11 @@ fn cmd_testwin(args: &[String]) -> Result<()> {
 fn cmd_cameras() -> Result<()> {
     let t = Instant::now();
     let cams = list_cameras().map_err(|e| e.to_string())?;
-    println!("{} camera(s) ({:.0} ms):", cams.len(), t.elapsed().as_secs_f64() * 1000.0);
+    println!(
+        "{} camera(s) ({:.0} ms):",
+        cams.len(),
+        t.elapsed().as_secs_f64() * 1000.0
+    );
     for c in cams {
         println!("  {:<32} {}", c.name, c.id);
     }
@@ -1383,7 +1441,10 @@ fn cmd_cameras() -> Result<()> {
 /// bitrate, CPU and memory. Frames are only counted: nothing is written anywhere (privacy).
 fn cmd_camera(args: &[String]) -> Result<()> {
     let device = opt(args, "--device").unwrap_or("").to_string();
-    let secs = opt(args, "--secs").map(parse_int).transpose()?.unwrap_or(10) as u64;
+    let secs = opt(args, "--secs")
+        .map(parse_int)
+        .transpose()?
+        .unwrap_or(10) as u64;
     let fps = opt(args, "--fps").map(parse_int).transpose()?.unwrap_or(30) as u32;
     let (w, h) = match opt(args, "--size") {
         Some(s) => {
@@ -1392,10 +1453,20 @@ fn cmd_camera(args: &[String]) -> Result<()> {
         }
         None => (1280, 720),
     };
-    let bitrate = opt(args, "--bitrate").map(parse_int).transpose()?.unwrap_or(1_200_000) as u32;
+    let bitrate = opt(args, "--bitrate")
+        .map(parse_int)
+        .transpose()?
+        .unwrap_or(1_200_000) as u32;
     let mode = opt(args, "--mode").unwrap_or("encoded");
     let preview = args.iter().any(|a| a == "--preview");
-    let cfg = CameraConfig { width: w, height: h, fps, bitrate_bps: bitrate, backend: parse_backend(args)?, ..Default::default() };
+    let cfg = CameraConfig {
+        width: w,
+        height: h,
+        fps,
+        bitrate_bps: bitrate,
+        backend: parse_backend(args)?,
+        ..Default::default()
+    };
     let bytes = Arc::new(AtomicU64::new(0));
     let keys = Arc::new(AtomicU64::new(0));
     let frames = Arc::new(AtomicU64::new(0));
@@ -1448,17 +1519,30 @@ fn cmd_camera(args: &[String]) -> Result<()> {
         o => return Err(format!("unknown --mode {o} (encoded|raw|preview)")),
     };
     let cam = cam.map_err(|e| format!("start failed: {:?}: {}", e.fault, e.detail))?;
-    println!("started in {:.0} ms: {:?}, backend {:?}", t0.elapsed().as_secs_f64() * 1000.0, cam.format(), cam.backend());
+    println!(
+        "started in {:.0} ms: {:?}, backend {:?}",
+        t0.elapsed().as_secs_f64() * 1000.0,
+        cam.format(),
+        cam.backend()
+    );
     println!("before: {before}");
     // Skip the first second (start-up), then measure.
     std::thread::sleep(Duration::from_secs(1));
-    let (f0, p0, b0) = (frames.load(Ordering::Relaxed), previews.load(Ordering::Relaxed), bytes.load(Ordering::Relaxed));
+    let (f0, p0, b0) = (
+        frames.load(Ordering::Relaxed),
+        previews.load(Ordering::Relaxed),
+        bytes.load(Ordering::Relaxed),
+    );
     let a = ProcSample::now();
     let end = Instant::now() + Duration::from_secs(secs);
     let mut toggled = false;
     while Instant::now() < end && cam.is_running() {
         std::thread::sleep(Duration::from_millis(250));
-        if preview && args.iter().any(|a| a == "--toggle-preview") && !toggled && Instant::now() + Duration::from_secs(secs / 2) > end {
+        if preview
+            && args.iter().any(|a| a == "--toggle-preview")
+            && !toggled
+            && Instant::now() + Duration::from_secs(secs / 2) > end
+        {
             toggled = true;
             cam.set_preview(false);
             println!("preview off (half time)");
@@ -1466,7 +1550,11 @@ fn cmd_camera(args: &[String]) -> Result<()> {
     }
     let b = ProcSample::now();
     let wall = (b.wall - a.wall).as_secs_f64();
-    let (f1, p1, b1) = (frames.load(Ordering::Relaxed), previews.load(Ordering::Relaxed), bytes.load(Ordering::Relaxed));
+    let (f1, p1, b1) = (
+        frames.load(Ordering::Relaxed),
+        previews.load(Ordering::Relaxed),
+        bytes.load(Ordering::Relaxed),
+    );
     let st = cam.stats();
     println!(
         "{:.1} s: output {:.1} fps, preview {:.1} fps, {:.0} kbps, keyframes {}, captured {}, dropped {}, encoder {:?}",
@@ -1485,7 +1573,11 @@ fn cmd_camera(args: &[String]) -> Result<()> {
     }
     let t = Instant::now();
     drop(cam);
-    println!("released in {:.0} ms; after: {}", t.elapsed().as_secs_f64() * 1000.0, proc_counters());
+    println!(
+        "released in {:.0} ms; after: {}",
+        t.elapsed().as_secs_f64() * 1000.0,
+        proc_counters()
+    );
     Ok(())
 }
 
@@ -1511,8 +1603,13 @@ fn grab_printwindow(hwnd: isize, max_w: u32, max_h: u32) -> Result<RgbaImage, St
         let mut rc = RECT::default();
         GetWindowRect(h, &mut rc).map_err(|e| e.to_string())?;
         let (w, hh) = ((rc.right - rc.left).max(1), (rc.bottom - rc.top).max(1));
-        let s = (max_w as f64 / w as f64).min(max_h as f64 / hh as f64).min(1.0);
-        let (tw, th) = (((w as f64 * s) as i32).max(1), ((hh as f64 * s) as i32).max(1));
+        let s = (max_w as f64 / w as f64)
+            .min(max_h as f64 / hh as f64)
+            .min(1.0);
+        let (tw, th) = (
+            ((w as f64 * s) as i32).max(1),
+            ((hh as f64 * s) as i32).max(1),
+        );
         let screen = GetDC(None);
         let full_dc = CreateCompatibleDC(Some(screen));
         let full_bmp = CreateCompatibleBitmap(screen, w, hh);
@@ -1532,13 +1629,15 @@ fn grab_printwindow(hwnd: isize, max_w: u32, max_h: u32) -> Result<RgbaImage, St
             ..Default::default()
         };
         let mut bits = std::ptr::null_mut();
-        let small_bmp = CreateDIBSection(Some(small_dc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0).map_err(|e| e.to_string())?;
+        let small_bmp = CreateDIBSection(Some(small_dc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
+            .map_err(|e| e.to_string())?;
         let old_small = SelectObject(small_dc, HGDIOBJ(small_bmp.0));
         SetStretchBltMode(small_dc, HALFTONE);
         let _ = SetBrushOrgEx(small_dc, 0, 0, None);
         let _ = StretchBlt(small_dc, 0, 0, tw, th, Some(full_dc), 0, 0, w, hh, SRCCOPY);
         let _ = GdiFlush();
-        let mut data = std::slice::from_raw_parts(bits as *const u8, (tw * th * 4) as usize).to_vec();
+        let mut data =
+            std::slice::from_raw_parts(bits as *const u8, (tw * th * 4) as usize).to_vec();
         for px in data.chunks_mut(4) {
             px.swap(0, 2);
             px[3] = 255;
@@ -1553,7 +1652,11 @@ fn grab_printwindow(hwnd: isize, max_w: u32, max_h: u32) -> Result<RgbaImage, St
         if ok == 0 {
             return Err("PrintWindow failed".into());
         }
-        Ok(RgbaImage { width: tw as u32, height: th as u32, data })
+        Ok(RgbaImage {
+            width: tw as u32,
+            height: th as u32,
+            data,
+        })
     }
 }
 
@@ -1575,7 +1678,12 @@ fn cmd_thumbs(args: &[String]) -> Result<(), String> {
         None => (240, 135),
     };
     let method = opt(args, "--method").unwrap_or("wgc").to_string();
-    let timeout = Duration::from_millis(opt(args, "--timeout").map(parse_int).transpose()?.unwrap_or(2500) as u64);
+    let timeout = Duration::from_millis(
+        opt(args, "--timeout")
+            .map(parse_int)
+            .transpose()?
+            .unwrap_or(2500) as u64,
+    );
 
     // One window to a PNG (a window of our own, like `testwin`, so no private content is saved).
     if let Some(w) = opt(args, "--window") {
@@ -1586,9 +1694,15 @@ fn cmd_thumbs(args: &[String]) -> Result<(), String> {
         } else {
             let mut g = ThumbnailGrabber::new().map_err(|e| e.to_string())?;
             g.set_timeout(timeout);
-            g.grab(VideoTarget::Window(hwnd), mw, mh).map_err(|e| e.to_string())?
+            g.grab(VideoTarget::Window(hwnd), mw, mh)
+                .map_err(|e| e.to_string())?
         };
-        println!("{method}: {}x{} in {:.0} ms", img.width, img.height, t.elapsed().as_secs_f64() * 1000.0);
+        println!(
+            "{method}: {}x{} in {:.0} ms",
+            img.width,
+            img.height,
+            t.elapsed().as_secs_f64() * 1000.0
+        );
         if let Some(p) = opt(args, "--png") {
             save_rgba_png(&img, p)?;
             println!("saved {p}");
@@ -1596,24 +1710,52 @@ fn cmd_thumbs(args: &[String]) -> Result<(), String> {
         return Ok(());
     }
 
-    let threads = opt(args, "--threads").map(parse_int).transpose()?.unwrap_or(3).max(1) as usize;
-    let repeat = opt(args, "--repeat").map(parse_int).transpose()?.unwrap_or(1).max(1);
+    let threads = opt(args, "--threads")
+        .map(parse_int)
+        .transpose()?
+        .unwrap_or(3)
+        .max(1) as usize;
+    let repeat = opt(args, "--repeat")
+        .map(parse_int)
+        .transpose()?
+        .unwrap_or(1)
+        .max(1);
     let only = opt(args, "--only").unwrap_or("all").to_string();
     // (label, target, minimized)
     let mut jobs: Vec<(String, VideoTarget, bool)> = Vec::new();
     if only != "monitors" {
-        for (i, w) in list_windows().map_err(|e| e.to_string())?.into_iter().enumerate() {
-            jobs.push((format!("window#{i} {}", w.exe_name), VideoTarget::Window(w.hwnd), is_window_minimized(w.hwnd)));
+        for (i, w) in list_windows()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .enumerate()
+        {
+            jobs.push((
+                format!("window#{i} {}", w.exe_name),
+                VideoTarget::Window(w.hwnd),
+                is_window_minimized(w.hwnd),
+            ));
         }
     }
     if only != "windows" {
         for m in list_monitors().map_err(|e| e.to_string())? {
-            jobs.push((format!("monitor#{} {}x{}", m.index, m.width, m.height), VideoTarget::Monitor(m.index), false));
+            jobs.push((
+                format!("monitor#{} {}x{}", m.index, m.width, m.height),
+                VideoTarget::Monitor(m.index),
+                false,
+            ));
         }
     }
-    println!("{} targets, {threads} thread(s), method {method}, timeout {} ms, max {mw}x{mh}", jobs.len(), timeout.as_millis());
+    println!(
+        "{} targets, {threads} thread(s), method {method}, timeout {} ms, max {mw}x{mh}",
+        jobs.len(),
+        timeout.as_millis()
+    );
     for round in 1..=repeat {
-        let queue = Arc::new(Mutex::new(jobs.iter().cloned().collect::<std::collections::VecDeque<_>>()));
+        let queue = Arc::new(Mutex::new(
+            jobs.iter()
+                .cloned()
+                .collect::<std::collections::VecDeque<_>>(),
+        ));
         type Row = (String, bool, f64, String);
         let results: Arc<Mutex<Vec<Row>>> = Arc::default();
         let cpu0 = ProcSample::now();
@@ -1632,7 +1774,10 @@ fn cmd_thumbs(args: &[String]) -> Result<(), String> {
                         g
                     };
                     loop {
-                        let Some((label, target, minimized)) = queue.lock().unwrap().pop_front() else { break };
+                        let Some((label, target, minimized)) = queue.lock().unwrap().pop_front()
+                        else {
+                            break;
+                        };
                         let t = Instant::now();
                         let r: Result<RgbaImage, String> = if minimized {
                             Err("minimized".into())
@@ -1666,7 +1811,13 @@ fn cmd_thumbs(args: &[String]) -> Result<(), String> {
         println!("--- round {round}: all {} done in {total:.0} ms", res.len());
         if round == 1 {
             for (label, ok, ms, note) in res.iter() {
-                println!("  {:>6.0} ms  {:<4} {:<40} {}", ms, if *ok { "ok" } else { "FAIL" }, label, note);
+                println!(
+                    "  {:>6.0} ms  {:<4} {:<40} {}",
+                    ms,
+                    if *ok { "ok" } else { "FAIL" },
+                    label,
+                    note
+                );
             }
         }
         let oks: Vec<f64> = res.iter().filter(|r| r.1).map(|r| r.2).collect();

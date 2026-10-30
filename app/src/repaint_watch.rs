@@ -1,20 +1,6 @@
-//! The continuous-repaint watch (v1.0, "leveza": nothing repaints without a reason).
-//!
-//! Counts the frames per two-second window. A window with more than [`BUSY_FPS`] frames a second
-//! that the person did not cause (no input in them) is "busy": during the next window egui's own
-//! record of who asked for each repaint (`Context::repaint_causes`, file and line of the
-//! `request_repaint` call) is collected and, when that window is busy too (a loop, not a burst),
-//! the busiest callers go to the log ("continuous repaint", every 10 s at most). So a repaint loop names itself in the log of whoever hits it, and the autotests can
-//! check that an idle screen stays idle (`snapshot`).
-//!
-//! The autotests' own tick (a frame every 100 ms while a role is still doing something) is not a
-//! loop: the role declares it ([`set_expected_fps`]) and the threshold rises by that much, and its
-//! call site is left out of the names. Video does not count either: on Windows it never asks egui
-//! for a frame (watched streams and cameras present in their own native child windows; v1.0 phase
-//! 4 measured 1 to 4 backend wake-ups per 2 s while watching a 30 fps stream), and on macOS, where
-//! egui draws them, a pass that drew a new picture counts as input ([`video_frame`]).
-//!
-//! Cheap: a few integers per frame; the causes are only collected while a loop is suspected.
+//! Detects sustained unsolicited repaints across two-second windows. Causes are collected
+//! only after a busy window, then logged if the next window is also busy.
+//! Declared autotest ticks raise the threshold; macOS video frames count as input.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -69,10 +55,18 @@ pub fn video_frame() {
 /// Call once per frame (from `logic`).
 pub fn frame(ctx: &egui::Context) {
     let video = VIDEO_FRAME.swap(false, std::sync::atomic::Ordering::Relaxed);
-    let input = video || ctx.input(|i| !i.events.is_empty() || i.pointer.is_moving() || i.pointer.any_down());
-    let collecting = WATCH.lock().map(|w| w.as_ref().is_some_and(|w| w.collecting)).unwrap_or(false);
+    let input = video
+        || ctx.input(|i| !i.events.is_empty() || i.pointer.is_moving() || i.pointer.any_down());
+    let collecting = WATCH
+        .lock()
+        .map(|w| w.as_ref().is_some_and(|w| w.collecting))
+        .unwrap_or(false);
     // (Outside the lock: egui's own lock is taken here.)
-    let causes = if collecting && !input { ctx.repaint_causes() } else { Vec::new() };
+    let causes = if collecting && !input {
+        ctx.repaint_causes()
+    } else {
+        Vec::new()
+    };
     let Ok(mut guard) = WATCH.lock() else { return };
     let w = guard.get_or_insert_with(Watch::default);
     w.tick(Instant::now(), input, causes.iter().map(|c| c.to_string()));
@@ -93,7 +87,16 @@ fn declared(cause: &str) -> bool {
 
 /// What the watch saw so far.
 pub fn snapshot() -> Snapshot {
-    WATCH.lock().ok().and_then(|g| g.as_ref().map(|w| Snapshot { busy_windows: w.busy_windows, last_causes: w.last_causes.clone() })).unwrap_or_default()
+    WATCH
+        .lock()
+        .ok()
+        .and_then(|g| {
+            g.as_ref().map(|w| Snapshot {
+                busy_windows: w.busy_windows,
+                last_causes: w.last_causes.clone(),
+            })
+        })
+        .unwrap_or_default()
 }
 
 impl Watch {
@@ -118,7 +121,10 @@ impl Watch {
             let mut top: Vec<(String, u32)> = self.causes.drain().collect();
             top.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
             top.truncate(6);
-            if self.last_report.is_none_or(|t| now.duration_since(t) >= REPORT_EVERY) {
+            if self
+                .last_report
+                .is_none_or(|t| now.duration_since(t) >= REPORT_EVERY)
+            {
                 self.last_report = Some(now);
                 tracing::warn!(frames = self.frames, without_input = idle, secs = format!("{:.1}", elapsed.as_secs_f32()), causes = ?top, "continuous repaint");
             }
@@ -144,7 +150,11 @@ mod tests {
         let step = Duration::from_secs(1) / fps;
         for _ in 0..fps * secs {
             t += step;
-            w.tick(t, input, std::iter::once(cause.to_string()).filter(|c| !c.is_empty()));
+            w.tick(
+                t,
+                input,
+                std::iter::once(cause.to_string()).filter(|c| !c.is_empty()),
+            );
         }
         t
     }
@@ -163,7 +173,10 @@ mod tests {
     fn input_is_not_a_loop() {
         let mut w = Watch::default();
         run(&mut w, Instant::now(), 60, 6, true, "egui/scroll.rs:1");
-        assert_eq!(w.busy_windows, 0, "moving the mouse repaints, and that is fine");
+        assert_eq!(
+            w.busy_windows, 0,
+            "moving the mouse repaints, and that is fine"
+        );
     }
 
     #[test]
@@ -171,26 +184,53 @@ mod tests {
         let mut w = Watch::default();
         let t = run(&mut w, Instant::now(), 30, 2, false, "app/src/menu.rs:1 ");
         run(&mut w, t, 1, 10, false, "app/src/menu.rs:1 ");
-        assert!(w.last_causes.is_empty(), "one busy window, then quiet: nothing named");
+        assert!(
+            w.last_causes.is_empty(),
+            "one busy window, then quiet: nothing named"
+        );
     }
 
     #[test]
     fn a_declared_tick_is_not_a_loop() {
         // The autotests' 10 a second plus a few backend wake-ups (watching a stream): quiet.
-        let mut w = Watch { expected_fps: 10.0, ..Default::default() };
-        run(&mut w, Instant::now(), 14, 8, false, "app/src/autotest.rs:1429 ");
+        let mut w = Watch {
+            expected_fps: 10.0,
+            ..Default::default()
+        };
+        run(
+            &mut w,
+            Instant::now(),
+            14,
+            8,
+            false,
+            "app/src/autotest.rs:1429 ",
+        );
         assert_eq!(w.busy_windows, 0);
         assert!(w.last_causes.is_empty());
         // A real loop on top of the tick is still caught, and named without the tick.
-        let mut w = Watch { expected_fps: 10.0, ..Default::default() };
+        let mut w = Watch {
+            expected_fps: 10.0,
+            ..Default::default()
+        };
         let t = Instant::now();
         let step = Duration::from_secs(1) / 40;
         for i in 0..40 * 7 {
-            let cause = if i % 4 == 0 { "app/src/autotest.rs:1429 " } else { "app/src/x.rs:10 " };
-            w.tick(t + step * (i + 1), false, std::iter::once(cause.to_string()));
+            let cause = if i % 4 == 0 {
+                "app/src/autotest.rs:1429 "
+            } else {
+                "app/src/x.rs:10 "
+            };
+            w.tick(
+                t + step * (i + 1),
+                false,
+                std::iter::once(cause.to_string()),
+            );
         }
         assert!(w.busy_windows >= 2);
-        assert_eq!(w.last_causes.first().map(|c| c.0.as_str()), Some("app/src/x.rs:10 "));
+        assert_eq!(
+            w.last_causes.first().map(|c| c.0.as_str()),
+            Some("app/src/x.rs:10 ")
+        );
         assert!(w.last_causes.iter().all(|c| !c.0.contains("autotest")));
     }
 
@@ -199,7 +239,10 @@ mod tests {
         let mut w = Watch::default();
         run(&mut w, Instant::now(), 36, 7, false, "app/src/x.rs:10 ");
         assert!(w.busy_windows >= 2);
-        assert_eq!(w.last_causes.first().map(|c| c.0.as_str()), Some("app/src/x.rs:10 "));
+        assert_eq!(
+            w.last_causes.first().map(|c| c.0.as_str()),
+            Some("app/src/x.rs:10 ")
+        );
         assert!(w.last_causes[0].1 > 30);
     }
 }

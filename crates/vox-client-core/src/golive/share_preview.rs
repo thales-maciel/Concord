@@ -7,7 +7,7 @@
 //! remote participant of our own room). Frames go to a local viewer tile ([`SELF_SHARE_KEY`]) that
 //! the app places in the call view.
 //!
-//! A source switch ("Trocar tela") runs a second capture next to the first for a moment; only the
+//! A source switch ("Switch screen") runs a second capture next to the first for a moment; only the
 //! capture that owns the stream shows its frames (`active` generation), the retired one is turned
 //! off.
 
@@ -39,7 +39,13 @@ pub struct SharePreview(Arc<State>);
 impl SharePreview {
     /// `sink` is the tile [`SELF_SHARE_KEY`]; `counters` count the frames shown.
     pub fn new(sink: ViewerStream, counters: Arc<StreamCounters>, cfg: PreviewConfig) -> Self {
-        Self(Arc::new(State { sink, counters, cfg: Mutex::new(cfg), active: AtomicU64::new(0), next: AtomicU64::new(1) }))
+        Self(Arc::new(State {
+            sink,
+            counters,
+            cfg: Mutex::new(cfg),
+            active: AtomicU64::new(0),
+            next: AtomicU64::new(1),
+        }))
     }
 
     pub fn config(&self) -> PreviewConfig {
@@ -64,7 +70,11 @@ impl SharePreview {
             }
         };
         let gen = self.0.next.fetch_add(1, Ordering::Relaxed);
-        Some(CaptureTap { sp, gen, owner: self.clone() })
+        Some(CaptureTap {
+            sp,
+            gen,
+            owner: self.clone(),
+        })
     }
 }
 
@@ -115,13 +125,25 @@ mod tests {
 
     fn frame_of(cb: &mut FrameCallback) {
         let (y, uv) = (vec![0u8; 16 * 16], vec![128u8; 16 * 8]);
-        cb(&vox_capture::Nv12Frame { width: 16, height: 16, timestamp_us: 0, y: &y, y_stride: 16, uv: &uv, uv_stride: 16 });
+        cb(&vox_capture::Nv12Frame {
+            width: 16,
+            height: 16,
+            timestamp_us: 0,
+            y: &y,
+            y_stride: 16,
+            uv: &uv,
+            uv_stride: 16,
+        });
     }
 
     #[test]
     fn only_the_active_capture_shows_frames() {
         let counters = Arc::new(StreamCounters::default());
-        let p = SharePreview::new(ViewerStream::null(), counters.clone(), PreviewConfig::default());
+        let p = SharePreview::new(
+            ViewerStream::null(),
+            counters.clone(),
+            PreviewConfig::default(),
+        );
         let (old, new) = (p.attach().unwrap(), p.attach().unwrap());
         let (mut cb_old, mut cb_new) = (old.callback(), new.callback());
         // Nobody owns the stream yet.
@@ -132,7 +154,12 @@ mod tests {
         frame_of(&mut cb_new);
         assert_eq!(counters.frames.load(Ordering::Relaxed), 1);
         // A source switch hands the stream over; the retired capture is quiet and switched off.
-        p.set_config(PreviewConfig { on: true, fps: 15, max_width: 960, max_height: 540 });
+        p.set_config(PreviewConfig {
+            on: true,
+            fps: 15,
+            max_width: 960,
+            max_height: 540,
+        });
         new.activate();
         old.deactivate();
         frame_of(&mut cb_old);
@@ -141,7 +168,10 @@ mod tests {
         assert!(!old.sp.config().on);
         assert_eq!(new.sp.config(), p.config());
         // Settings changes reach only the capture that owns the stream.
-        let cfg = PreviewConfig { on: false, ..p.config() };
+        let cfg = PreviewConfig {
+            on: false,
+            ..p.config()
+        };
         old.apply(cfg);
         assert!(!old.sp.config().on);
         new.apply(cfg);

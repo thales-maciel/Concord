@@ -3,12 +3,12 @@
 //! - `shots3b-a` (the owner, "dono"): makes a few channels (one private), an invite and a
 //!   moderation line, then saves the server window's five pages (and the "Acesso" editor), a
 //!   confirmation dialog, the person menu and a stage card's menu, the profile card and its
-//!   editor, a DM's header (and blocked), "Nova mensagem", the incoming call, a toast and the
-//!   "Apagar mensagem" dialog.
+//!   editor, a DM's header (and blocked), "New message", the incoming call, a toast and the
+//!   "Delete message" dialog.
 //! - `shots3b-b` ("lua"): fills in a profile (name, about, status, colour), sits in the voice room
 //!   and, on cue, calls the owner (for the ringing window).
 //! - `shots3b-host`: hosts a server in the app (the gate's host-mode test environment: test ports,
-//!   no router), and saves "Meu servidor", the "Parar servidor" dialog and the home tab.
+//!   no router), and saves "My server", the "Stop server" dialog and the home tab.
 //!
 //! With `VOX_AUTOTEST_SHOT_DIR=<dir>` each screen is `<dir>/<name>.png` (`tools\shots.ps1
 //! -Phase3b`). Cues go through #bastidores. Every check has a time limit; the windows stay behind
@@ -32,10 +32,10 @@ const OWNER_PW: &str = "shots-dono-123";
 const PARTNER: &str = "lua";
 const CUES: &str = "bastidores";
 const JOGATINA: &str = "jogatina-de-sexta";
-const ADM: &str = "administração";
-const SALA2: &str = "Sala 2";
+const ADM: &str = "administration";
+const SALA2: &str = "Room 2";
 const BIO: &str = "Toco baixo nas sextas e organizo a jogatina. Pergunte sobre o placar de ontem!";
-const HELLO: &str = "alguém viu o placar de ontem?";
+const HELLO: &str = "anyone see yesterday's score?";
 
 #[derive(Default)]
 pub struct State {
@@ -50,11 +50,16 @@ pub struct State {
 }
 
 fn channel_id(app: &App, name: &str, kind: ChannelKind) -> Option<i64> {
-    app.channels.iter().find(|c| c.name == name && c.kind == kind).map(|c| c.id)
+    app.channels
+        .iter()
+        .find(|c| c.name == name && c.kind == kind)
+        .map(|c| c.id)
 }
 
 fn cued(app: &App, ch: i64, text: &str) -> bool {
-    app.logs.get(&ch).is_some_and(|l| l.msgs.iter().any(|m| m.content == text))
+    app.logs
+        .get(&ch)
+        .is_some_and(|l| l.msgs.iter().any(|m| m.content == text))
 }
 
 impl Auto {
@@ -76,7 +81,11 @@ impl Auto {
     }
 
     fn s3_cue(&mut self, app: &mut App, text: &str) {
-        app.backend.send(crate::backend::Cmd::SendMessage { channel: self.s3b.cues, content: text.to_string(), extras: Default::default() });
+        app.backend.send(crate::backend::Cmd::SendMessage {
+            channel: self.s3b.cues,
+            content: text.to_string(),
+            extras: Default::default(),
+        });
     }
 
     /// Close whatever menu is open.
@@ -96,14 +105,22 @@ impl Auto {
             }
             1 => {
                 if !self.logged_in(app) {
-                    return if self.waited(30) { self.fail("could not log in") } else { None };
+                    return if self.waited(30) {
+                        self.fail("could not log in")
+                    } else {
+                        None
+                    };
                 }
                 if app.roles.account.is_some_and(|a| a.must_set_password) {
                     if !self.s3b.created {
                         self.s3b.created = true;
                         app.set_personal_password(None, Some(OWNER_PW.into()));
                     }
-                    return if self.waited(20) { self.fail("the personal password was not set") } else { None };
+                    return if self.waited(20) {
+                        self.fail("the personal password was not set")
+                    } else {
+                        None
+                    };
                 }
                 if self.s3b.sent == 0 {
                     self.s3b.sent = 1;
@@ -114,14 +131,29 @@ impl Auto {
                         (SALA2, ChannelKind::Voice, None),
                     ] {
                         if channel_id(app, name, kind).is_none() {
-                            app.admin(AdminCmd::CreateChannel { name: name.into(), kind, private });
+                            app.admin(AdminCmd::CreateChannel {
+                                name: name.into(),
+                                kind,
+                                private,
+                            });
                         }
                     }
                 }
-                let ids = (Self::first_text(app), channel_id(app, JOGATINA, ChannelKind::Text), channel_id(app, CUES, ChannelKind::Text), channel_id(app, ADM, ChannelKind::Text), channel_id(app, SALA2, ChannelKind::Voice));
+                let ids = (
+                    Self::first_text(app),
+                    channel_id(app, JOGATINA, ChannelKind::Text),
+                    channel_id(app, CUES, ChannelKind::Text),
+                    channel_id(app, ADM, ChannelKind::Text),
+                    channel_id(app, SALA2, ChannelKind::Voice),
+                );
                 match ids {
                     (Some(g), Some(j), Some(c), Some(a), Some(_)) => {
-                        (self.s3b.geral, self.s3b.jogatina, self.s3b.cues, self.s3b.adm) = (g, j, c, a);
+                        (
+                            self.s3b.geral,
+                            self.s3b.jogatina,
+                            self.s3b.cues,
+                            self.s3b.adm,
+                        ) = (g, j, c, a);
                         app.select_text(c);
                         app.select_text(g);
                         self.s3_next(2, "channels ready; waiting for lua");
@@ -132,14 +164,26 @@ impl Auto {
             }
             2 => {
                 if !cued(app, self.s3b.cues, "pronto") {
-                    return if self.waited(120) { self.fail("lua never got ready") } else { None };
+                    return if self.waited(120) {
+                        self.fail("lua never got ready")
+                    } else {
+                        None
+                    };
                 }
-                let Some(peer) = app.online.iter().find(|u| u.username == PARTNER).cloned() else { return self.fail("lua is not online") };
+                let Some(peer) = app.online.iter().find(|u| u.username == PARTNER).cloned() else {
+                    return self.fail("lua is not online");
+                };
                 self.s3b.peer = Some(peer.clone());
                 Self::say(app, HELLO);
                 // The moderation log gets a line or two, and the invite page a code.
-                app.admin(AdminCmd::Mute { user: peer.id, muted: true });
-                app.admin(AdminCmd::Mute { user: peer.id, muted: false });
+                app.admin(AdminCmd::Mute {
+                    user: peer.id,
+                    muted: true,
+                });
+                app.admin(AdminCmd::Mute {
+                    user: peer.id,
+                    muted: false,
+                });
                 app.create_invite();
                 if let Some(vc) = Self::first_voice(app) {
                     app.join_voice(vc);
@@ -148,7 +192,11 @@ impl Auto {
             }
             3 => {
                 if app.voice.channel.is_none() || app.members_here().len() < 2 {
-                    return if self.waited(60) { self.fail("could not join the room with lua") } else { None };
+                    return if self.waited(60) {
+                        self.fail("could not join the room with lua")
+                    } else {
+                        None
+                    };
                 }
                 app.select_text(self.s3b.geral);
                 app.set_center_mode(crate::layout::CenterMode::Chat);
@@ -156,14 +204,21 @@ impl Auto {
                 app.roles.tab = ServerTab::Members;
                 self.s3_next(4, "server window: Membros e cargos");
             }
-            4 if app.roles.members_loaded && self.s3_lingered(2.0) => self.s3_shot(app, "admin-membros", 5),
+            4 if app.roles.members_loaded && self.s3_lingered(2.0) => {
+                self.s3_shot(app, "admin-membros", 5)
+            }
             5 => {
                 app.roles.tab = ServerTab::Channels;
-                self.s3_next(6, "Canais");
+                self.s3_next(6, "Channels");
             }
             6 if self.s3_lingered(1.5) => {
                 shots::save(app, "admin-canais");
-                let draft = AccessDraft::of(app.channels.iter().find(|c| c.id == self.s3b.adm).and_then(|c| c.private.as_ref()));
+                let draft = AccessDraft::of(
+                    app.channels
+                        .iter()
+                        .find(|c| c.id == self.s3b.adm)
+                        .and_then(|c| c.private.as_ref()),
+                );
                 app.roles.editing_access = Some((self.s3b.adm, draft));
                 self.s3_next(7, "the Acesso editor of the private channel");
             }
@@ -171,18 +226,22 @@ impl Auto {
                 shots::save(app, "admin-canais-acesso");
                 app.roles.editing_access = None;
                 app.roles.tab = ServerTab::Invites;
-                self.s3_next(8, "Convites");
+                self.s3_next(8, "Invites");
             }
-            8 if (app.host.inv.last.is_some() || self.waited(10)) && self.s3_lingered(1.5) => self.s3_shot(app, "admin-convites", 9),
+            8 if (app.host.inv.last.is_some() || self.waited(10)) && self.s3_lingered(1.5) => {
+                self.s3_shot(app, "admin-convites", 9)
+            }
             9 => {
                 app.roles.tab = ServerTab::Audit;
                 app.admin(AdminCmd::Audit { before: None });
-                self.s3_next(10, "Registro de moderação");
+                self.s3_next(10, "Moderation log");
             }
-            10 if app.roles.audit_loaded && self.s3_lingered(1.5) => self.s3_shot(app, "admin-registro", 11),
+            10 if app.roles.audit_loaded && self.s3_lingered(1.5) => {
+                self.s3_shot(app, "admin-registro", 11)
+            }
             11 => {
                 app.roles.tab = ServerTab::Settings;
-                self.s3_next(12, "Configurações do servidor");
+                self.s3_next(12, "Server settings");
             }
             12 if self.s3_lingered(1.5) => {
                 shots::save(app, "admin-config");
@@ -195,7 +254,13 @@ impl Auto {
                 app.roles.confirm_delete = None;
                 app.roles.server_open = false;
                 let peer = self.s3b.peer.clone()?;
-                app.open_person_menu(&ctx, &peer, Origin::Sidebar, Lead::None, egui::pos2(150.0, 330.0));
+                app.open_person_menu(
+                    &ctx,
+                    &peer,
+                    Origin::Sidebar,
+                    Lead::None,
+                    egui::pos2(150.0, 330.0),
+                );
                 self.s3_next(14, "lua's menu from the sidebar");
             }
             14 if self.s3_lingered(1.5) => {
@@ -210,8 +275,18 @@ impl Auto {
             }
             15 if self.s3_lingered(2.0) => {
                 let peer = self.s3b.peer.clone()?;
-                let Some(card) = app.call.drawn.iter().find(|d| d.key == TileKey::Member(peer.id)).map(|d| d.rect) else {
-                    return if self.waited(20) { self.fail("lua's card is not on the stage") } else { None };
+                let Some(card) = app
+                    .call
+                    .drawn
+                    .iter()
+                    .find(|d| d.key == TileKey::Member(peer.id))
+                    .map(|d| d.rect)
+                else {
+                    return if self.waited(20) {
+                        self.fail("lua's card is not on the stage")
+                    } else {
+                        None
+                    };
                 };
                 let pos = egui::pos2(card.center().x, card.top() + 14.0);
                 if !app.open_card_menu(&ctx, TileKey::Member(peer.id), pos) {
@@ -230,13 +305,17 @@ impl Auto {
             17 => {
                 let peer = self.s3b.peer.clone()?;
                 if app.profile.popout_drawn != Some((peer.id, true)) {
-                    return if self.waited(20) { self.fail("lua's card never showed the profile") } else { None };
+                    return if self.waited(20) {
+                        self.fail("lua's card never showed the profile")
+                    } else {
+                        None
+                    };
                 }
                 if self.s3_lingered(1.5) {
                     shots::save(app, "perfil-cartao");
                     app.close_profile();
                     app.open_settings_at(crate::app::SettingsPage::Account);
-                    self.s3_next(18, "the profile editor (Configurações)");
+                    self.s3_next(18, "the profile editor (Settings)");
                 }
             }
             18 if self.s3_lingered(2.5) => {
@@ -248,11 +327,15 @@ impl Auto {
             }
             19 => {
                 if app.dms.selected.is_none() {
-                    return if self.waited(20) { self.fail("the DM did not open") } else { None };
+                    return if self.waited(20) {
+                        self.fail("the DM did not open")
+                    } else {
+                        None
+                    };
                 }
                 if self.s3b.sent < 2 && self.s3_lingered(1.0) {
                     self.s3b.sent = 2;
-                    app.dms.input = "oi! você vem hoje?".into();
+                    app.dms.input = "hi! are you coming today?".into();
                     app.send_dm();
                 }
                 if self.s3_lingered(3.0) {
@@ -263,16 +346,24 @@ impl Auto {
                 }
             }
             20 => {
-                let blocked = app.dms.selected.and_then(|d| app.dms.conv(d)).is_some_and(|c| c.blocked);
+                let blocked = app
+                    .dms
+                    .selected
+                    .and_then(|d| app.dms.conv(d))
+                    .is_some_and(|c| c.blocked);
                 if !blocked {
-                    return if self.waited(20) { self.fail("the block did not show") } else { None };
+                    return if self.waited(20) {
+                        self.fail("the block did not show")
+                    } else {
+                        None
+                    };
                 }
                 if self.s3_lingered(1.5) {
                     shots::save(app, "dm-bloqueado");
                     let peer = self.s3b.peer.clone()?;
                     app.block_user(&peer, false);
                     app.open_dm_picker();
-                    self.s3_next(21, "Nova mensagem");
+                    self.s3_next(21, "New message");
                 }
             }
             21 if !app.dms.picker.loading && self.s3_lingered(1.5) => {
@@ -283,7 +374,11 @@ impl Auto {
             }
             22 => {
                 if app.dms.incoming(app.my_id()).is_none() {
-                    return if self.waited(40) { self.fail("lua's call never rang") } else { None };
+                    return if self.waited(40) {
+                        self.fail("lua's call never rang")
+                    } else {
+                        None
+                    };
                 }
                 if self.s3_lingered(1.5) {
                     shots::save(app, "chamada-recebida");
@@ -296,10 +391,18 @@ impl Auto {
             23 if self.s3_lingered(1.0) => {
                 shots::save(app, "aviso");
                 app.call.toast = None;
-                let mine = app.logs.get(&self.s3b.geral).and_then(|l| l.msgs.iter().rev().find(|m| m.content == HELLO).map(|m| m.id));
-                let Some(id) = mine else { return self.fail("my message is gone") };
+                let mine = app.logs.get(&self.s3b.geral).and_then(|l| {
+                    l.msgs
+                        .iter()
+                        .rev()
+                        .find(|m| m.content == HELLO)
+                        .map(|m| m.id)
+                });
+                let Some(id) = mine else {
+                    return self.fail("my message is gone");
+                };
                 app.ask_delete(Target::Channel(self.s3b.geral), id, false);
-                self.s3_next(24, "the Apagar mensagem dialog");
+                self.s3_next(24, "the Delete message dialog");
             }
             24 if self.s3_lingered(1.5) => {
                 shots::save(app, "dialogo-apagar-mensagem");
@@ -323,7 +426,11 @@ impl Auto {
             0 => self.connect(app),
             1 => {
                 if !self.logged_in(app) || app.profile.form.loaded.is_none() {
-                    return if self.waited(30) { self.fail("could not log in") } else { None };
+                    return if self.waited(30) {
+                        self.fail("could not log in")
+                    } else {
+                        None
+                    };
                 }
                 app.set_presence(vox_proto::Presence::Online);
                 let f = &mut app.profile.form;
@@ -341,11 +448,19 @@ impl Auto {
                     app.save_status();
                     self.s3_next(3, "setting my status");
                 } else if self.waited(20) {
-                    return self.fail(&format!("the profile was not saved: {:?}", app.profile.form.msg));
+                    return self.fail(&format!(
+                        "the profile was not saved: {:?}",
+                        app.profile.form.msg
+                    ));
                 }
             }
             3 => {
-                let ok = app.profile.form.status_msg.as_ref().is_some_and(|(ok, _)| *ok);
+                let ok = app
+                    .profile
+                    .form
+                    .status_msg
+                    .as_ref()
+                    .is_some_and(|(ok, _)| *ok);
                 let cues = channel_id(app, CUES, ChannelKind::Text);
                 match (ok, cues, Self::first_voice(app)) {
                     (true, Some(c), Some(vc)) => {
@@ -354,13 +469,19 @@ impl Auto {
                         app.join_voice(vc);
                         self.s3_next(4, "joining the room");
                     }
-                    _ if self.waited(60) => return self.fail("the status or the owner's channels never came"),
+                    _ if self.waited(60) => {
+                        return self.fail("the status or the owner's channels never came")
+                    }
                     _ => {}
                 }
             }
             4 => {
                 if app.voice.channel.is_none() {
-                    return if self.waited(60) { self.fail("could not join the room") } else { None };
+                    return if self.waited(60) {
+                        self.fail("could not join the room")
+                    } else {
+                        None
+                    };
                 }
                 if self.s3_lingered(1.0) {
                     self.s3_cue(app, "pronto");
@@ -369,7 +490,12 @@ impl Auto {
             }
             5 => {
                 if cued(app, self.s3b.cues, "ligar") && self.s3b.sent == 0 {
-                    if let Some(owner) = app.online.iter().find(|u| u.username == "dono").map(|u| u.id) {
+                    if let Some(owner) = app
+                        .online
+                        .iter()
+                        .find(|u| u.username == "dono")
+                        .map(|u| u.id)
+                    {
                         self.s3b.sent = 1;
                         app.call_user(owner);
                     }
@@ -401,14 +527,25 @@ impl Auto {
             }
             1 => {
                 if !self.logged_in(app) {
-                    return if self.waited(90) { self.fail(&format!("the hosted server did not come up: {:?}", app.form.error)) } else { None };
+                    return if self.waited(90) {
+                        self.fail(&format!(
+                            "the hosted server did not come up: {:?}",
+                            app.form.error
+                        ))
+                    } else {
+                        None
+                    };
                 }
                 if app.roles.account.is_some_and(|a| a.must_set_password) {
                     if !self.s3b.created {
                         self.s3b.created = true;
                         app.set_personal_password(None, Some(OWNER_PW.into()));
                     }
-                    return if self.waited(20) { self.fail("the personal password was not set") } else { None };
+                    return if self.waited(20) {
+                        self.fail("the personal password was not set")
+                    } else {
+                        None
+                    };
                 }
                 app.host.panel_open = true;
                 app.create_invite();
@@ -416,7 +553,11 @@ impl Auto {
             }
             2 => {
                 if app.host.inv.last.is_none() {
-                    return if self.waited(20) { self.fail(&format!("no invite: {:?}", app.host.inv.error)) } else { None };
+                    return if self.waited(20) {
+                        self.fail(&format!("no invite: {:?}", app.host.inv.error))
+                    } else {
+                        None
+                    };
                 }
                 if self.s3_lingered(2.0) {
                     shots::save(app, "host-painel");
@@ -433,7 +574,11 @@ impl Auto {
             }
             4 => {
                 if app.screen != Screen::Connect || app.host.hosting() {
-                    return if self.waited(30) { self.fail("the server did not stop") } else { None };
+                    return if self.waited(30) {
+                        self.fail("the server did not stop")
+                    } else {
+                        None
+                    };
                 }
                 app.host.tab = HomeTab::Host;
                 app.refresh_servers();

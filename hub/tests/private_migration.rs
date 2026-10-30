@@ -26,12 +26,19 @@ fn old_hub() -> Option<PathBuf> {
     std::env::var_os("VOX_V082_HUB")
         .map(PathBuf::from)
         .into_iter()
-        .chain([root.join("releases/v0.8.2/voxhub-server.exe"), root.join("target-v02/v082-hub/voxhub-server.exe")])
+        .chain([
+            root.join("releases/v0.8.2/voxhub-server.exe"),
+            root.join("target-v02/v082-hub/voxhub-server.exe"),
+        ])
         .find(|p| p.exists())
 }
 
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
 }
 
 fn config(dir: &Path, port: u16) {
@@ -74,8 +81,14 @@ fn spawn_old(bin: &Path, dir: &Path, stderr: Stdio) -> OldHub {
 async fn run_old(bin: &Path, dir: &Path, port: u16) -> OldHub {
     let hub = spawn_old(bin, dir, Stdio::null());
     let t = Instant::now();
-    while tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_err() {
-        assert!(t.elapsed() < Duration::from_secs(15), "the old hub did not start");
+    while tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .is_err()
+    {
+        assert!(
+            t.elapsed() < Duration::from_secs(15),
+            "the old hub did not start"
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     hub
@@ -86,16 +99,27 @@ async fn old_refuses(bin: &Path, dir: &Path, port: u16) {
     let mut hub = spawn_old(bin, dir, Stdio::piped());
     let t = Instant::now();
     loop {
-        assert!(tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_err(), "the v0.8.2 hub started on a database with a private channel");
+        assert!(
+            tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_err(),
+            "the v0.8.2 hub started on a database with a private channel"
+        );
         if let Some(status) = hub.0.try_wait().unwrap() {
             assert!(!status.success(), "it must fail, not end normally");
             // ...and because of the guard row (`access.rs`), not anything else.
             let mut err = String::new();
             std::io::Read::read_to_string(&mut hub.0.stderr.take().unwrap(), &mut err).unwrap();
-            assert!(err.contains("Invalid column type") && err.contains("position"), "{err}");
+            assert!(
+                err.contains("Invalid column type") && err.contains("position"),
+                "{err}"
+            );
             return;
         }
-        assert!(t.elapsed() < Duration::from_secs(20), "the v0.8.2 hub neither started nor exited");
+        assert!(
+            t.elapsed() < Duration::from_secs(20),
+            "the v0.8.2 hub neither started nor exited"
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
@@ -110,7 +134,12 @@ fn copy_db(from: &Path, to: &Path) {
 }
 
 fn new_hub(dir: &Path) -> Options {
-    Options { data_dir: dir.to_path_buf(), no_livekit: true, livekit_bin: "unused".into(), bind_override: None }
+    Options {
+        data_dir: dir.to_path_buf(),
+        no_livekit: true,
+        livekit_bin: "unused".into(),
+        bind_override: None,
+    }
 }
 
 struct Hub {
@@ -120,7 +149,10 @@ struct Hub {
 
 impl Hub {
     fn at(http: &reqwest::Client, port: u16) -> Hub {
-        Hub { http: http.clone(), base: format!("http://127.0.0.1:{port}") }
+        Hub {
+            http: http.clone(),
+            base: format!("http://127.0.0.1:{port}"),
+        }
     }
 
     async fn login(&self, name: &str, personal: Option<&str>) -> String {
@@ -138,7 +170,14 @@ impl Hub {
     }
 
     async fn ok<T: serde::de::DeserializeOwned>(&self, token: &str, path: &str, body: Value) -> T {
-        let r = self.http.post(format!("{}{path}", self.base)).bearer_auth(token).json(&body).send().await.unwrap();
+        let r = self
+            .http
+            .post(format!("{}{path}", self.base))
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
         let status = r.status();
         let text = r.text().await.unwrap();
         assert_eq!(status, StatusCode::OK, "{path}: {text}");
@@ -146,11 +185,23 @@ impl Hub {
     }
 
     async fn get_status(&self, token: &str, path: &str) -> StatusCode {
-        self.http.get(format!("{}{path}", self.base)).bearer_auth(token).send().await.unwrap().status()
+        self.http
+            .get(format!("{}{path}", self.base))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+            .status()
     }
 
     async fn get<T: serde::de::DeserializeOwned>(&self, token: &str, path: &str) -> T {
-        let r = self.http.get(format!("{}{path}", self.base)).bearer_auth(token).send().await.unwrap();
+        let r = self
+            .http
+            .get(format!("{}{path}", self.base))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::OK, "{path}");
         r.json().await.unwrap()
     }
@@ -159,9 +210,20 @@ impl Hub {
     async fn say(&self, token: &str, channel: i64, text: &str) -> i64 {
         let ws_url = format!("{}/ws?token={token}", self.base.replace("http://", "ws://"));
         let (mut ws, _) = tokio_tungstenite::connect_async(ws_url).await.unwrap();
-        ws.send(WsMsg::Text(json!({"type": "send_message", "channel_id": channel, "content": text}).to_string().into())).await.unwrap();
+        ws.send(WsMsg::Text(
+            json!({"type": "send_message", "channel_id": channel, "content": text})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
         loop {
-            let Some(Ok(WsMsg::Text(t))) = tokio::time::timeout(Duration::from_secs(5), ws.next()).await.unwrap() else { continue };
+            let Some(Ok(WsMsg::Text(t))) = tokio::time::timeout(Duration::from_secs(5), ws.next())
+                .await
+                .unwrap()
+            else {
+                continue;
+            };
             let v: Value = serde_json::from_str(&t).unwrap();
             if v["type"] == "message_created" && v["message"]["content"] == text {
                 return v["message"]["id"].as_i64().unwrap();
@@ -192,12 +254,20 @@ async fn private_channels_on_a_v082_database_and_the_downgrade_guard() {
     let old = run_old(&bin, &old_dir, port).await;
     let hub = Hub::at(&http, port);
     let dt = hub.login("Dono", None).await;
-    let _: Value = hub.ok(&dt, "/api/account/password", json!({"new": OWNER_PW})).await;
+    let _: Value = hub
+        .ok(&dt, "/api/account/password", json!({"new": OWNER_PW}))
+        .await;
     let bt = hub.login("Bruno", None).await;
     let ct = hub.login("Carla", None).await;
     let geral = hub.channel_ids(&bt).await[0];
     hub.say(&bt, geral, "oi do v0.8.2").await;
-    let segredos: Value = hub.ok(&dt, "/api/admin/channels", json!({"name": "segredos", "kind": "text"})).await;
+    let segredos: Value = hub
+        .ok(
+            &dt,
+            "/api/admin/channels",
+            json!({"name": "segredos", "kind": "text"}),
+        )
+        .await;
     let segredos = segredos["id"].as_i64().unwrap();
     let old_msg = hub.say(&ct, segredos, "conversa antiga").await;
     drop(old); // killed like a crash
@@ -211,28 +281,66 @@ async fn private_channels_on_a_v082_database_and_the_downgrade_guard() {
         let server = start(new_hub(&new_dir)).await.unwrap();
         let chans: Vec<Channel> = hub.get(&dt, "/api/channels").await;
         assert!(chans.iter().any(|c| c.id == geral), "round {round}");
-        let s = chans.iter().find(|c| c.id == segredos).unwrap_or_else(|| panic!("round {round}: the owner always sees it"));
+        let s = chans
+            .iter()
+            .find(|c| c.id == segredos)
+            .unwrap_or_else(|| panic!("round {round}: the owner always sees it"));
         if round == 0 {
             assert!(s.private.is_none(), "a v0.8.2 channel reads as public");
             assert!(hub.channel_ids(&bt).await.contains(&segredos));
             // Private for Carla (by name), staff always.
-            let carla = hub.get::<Vec<MemberInfo>>(&dt, "/api/admin/users").await.into_iter().find(|m| m.user.username == "Carla").unwrap().user.id;
-            let _: OkResponse = hub.ok(&dt, &format!("/api/admin/channels/{segredos}/access"), json!({"private": {"users": [carla]}})).await;
+            let carla = hub
+                .get::<Vec<MemberInfo>>(&dt, "/api/admin/users")
+                .await
+                .into_iter()
+                .find(|m| m.user.username == "Carla")
+                .unwrap()
+                .user
+                .id;
+            let _: OkResponse = hub
+                .ok(
+                    &dt,
+                    &format!("/api/admin/channels/{segredos}/access"),
+                    json!({"private": {"users": [carla]}}),
+                )
+                .await;
         } else {
-            assert!(s.private.as_ref().is_some_and(|p| p.users.len() == 1), "round {round}: still private after a restart: {s:?}");
+            assert!(
+                s.private.as_ref().is_some_and(|p| p.users.len() == 1),
+                "round {round}: still private after a restart: {s:?}"
+            );
         }
         // Bruno (the old session from the v0.8.2 hub still works) sees nothing of it, Carla does.
-        assert!(!hub.channel_ids(&bt).await.contains(&segredos), "round {round}");
-        assert_eq!(hub.get_status(&bt, &format!("/api/channels/{segredos}/messages")).await, StatusCode::NOT_FOUND);
-        let msgs: Vec<Message> = hub.get(&ct, &format!("/api/channels/{segredos}/messages")).await;
-        assert!(msgs.iter().any(|m| m.id == old_msg), "round {round}: Carla reads the old history");
+        assert!(
+            !hub.channel_ids(&bt).await.contains(&segredos),
+            "round {round}"
+        );
+        assert_eq!(
+            hub.get_status(&bt, &format!("/api/channels/{segredos}/messages"))
+                .await,
+            StatusCode::NOT_FOUND
+        );
+        let msgs: Vec<Message> = hub
+            .get(&ct, &format!("/api/channels/{segredos}/messages"))
+            .await;
+        assert!(
+            msgs.iter().any(|m| m.id == old_msg),
+            "round {round}: Carla reads the old history"
+        );
         assert!(hub.channel_ids(&bt).await.contains(&geral));
         server.shutdown().await;
     }
     let db = voxhub_server::db::Db::open(&new_dir.join("voxhub.db")).unwrap();
     db.call_now(|c| {
-        assert_eq!(c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))?, voxhub_server::db::SCHEMA_VERSION, "no version bump");
-        assert_eq!(voxhub_server::access::min_hub_version(c)?.as_deref(), Some(voxhub_server::access::PRIVATE_MIN_HUB_VERSION));
+        assert_eq!(
+            c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))?,
+            voxhub_server::db::SCHEMA_VERSION,
+            "no version bump"
+        );
+        assert_eq!(
+            voxhub_server::access::min_hub_version(c)?.as_deref(),
+            Some(voxhub_server::access::PRIVATE_MIN_HUB_VERSION)
+        );
         Ok(())
     })
     .unwrap();
@@ -248,7 +356,13 @@ async fn private_channels_on_a_v082_database_and_the_downgrade_guard() {
     config(&new_dir, port);
     let hub = Hub::at(&http, port);
     let server = start(new_hub(&new_dir)).await.unwrap();
-    let _: OkResponse = hub.ok(&dt, &format!("/api/admin/channels/{segredos}/access"), json!({})).await;
+    let _: OkResponse = hub
+        .ok(
+            &dt,
+            &format!("/api/admin/channels/{segredos}/access"),
+            json!({}),
+        )
+        .await;
     assert!(hub.channel_ids(&bt).await.contains(&segredos));
     server.shutdown().await;
 
@@ -258,8 +372,13 @@ async fn private_channels_on_a_v082_database_and_the_downgrade_guard() {
     let old = run_old(&bin, &new_dir, port).await;
     let hub = Hub::at(&http, port);
     let ids = hub.channel_ids(&bt).await;
-    assert!(ids.contains(&segredos) && ids.contains(&geral) && ids.iter().all(|id| *id > 0), "{ids:?}");
-    let msgs: Vec<Message> = hub.get(&bt, &format!("/api/channels/{segredos}/messages")).await;
+    assert!(
+        ids.contains(&segredos) && ids.contains(&geral) && ids.iter().all(|id| *id > 0),
+        "{ids:?}"
+    );
+    let msgs: Vec<Message> = hub
+        .get(&bt, &format!("/api/channels/{segredos}/messages"))
+        .await;
     assert!(msgs.iter().any(|m| m.id == old_msg));
     hub.say(&bt, geral, "de volta ao v0.8.2").await;
     drop(old);
@@ -269,7 +388,9 @@ async fn private_channels_on_a_v082_database_and_the_downgrade_guard() {
     config(&new_dir, port);
     let hub = Hub::at(&http, port);
     let server = start(new_hub(&new_dir)).await.unwrap();
-    let msgs: Vec<Message> = hub.get(&bt, &format!("/api/channels/{geral}/messages")).await;
+    let msgs: Vec<Message> = hub
+        .get(&bt, &format!("/api/channels/{geral}/messages"))
+        .await;
     assert!(msgs.iter().any(|m| m.content == "de volta ao v0.8.2"));
     server.shutdown().await;
 }

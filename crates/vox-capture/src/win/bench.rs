@@ -193,10 +193,12 @@ pub fn run(
             .parse(&spec.mf)
             .map_err(CaptureError::Unsupported)?,
     };
-    let hmon = super::enumerate::monitors_with_handles().ok().and_then(|m| {
-        let primary = m.iter().position(|(_, i)| i.primary).unwrap_or(0);
-        m.into_iter().nth(primary).map(|(h, _)| h)
-    });
+    let hmon = super::enumerate::monitors_with_handles()
+        .ok()
+        .and_then(|m| {
+            let primary = m.iter().position(|(_, i)| i.primary).unwrap_or(0);
+            m.into_iter().nth(primary).map(|(h, _)| h)
+        });
     let adapter = hmon.and_then(super::enumerate::adapter_for_monitor);
     let (device, ctx, info) = video::create_device(adapter.as_ref())?;
     let mut conv = video::Converter::new(&device, &ctx)?;
@@ -267,7 +269,11 @@ pub fn run(
     let control = EncoderControl::default();
     let es = Arc::new(EncShared::default());
     // Without the pacer emulation an fps cap would only skew the rate compensation.
-    let degradation = if spec.apply_fps_cap { spec.degradation } else { DegradationPreference::Smoothness };
+    let degradation = if spec.apply_fps_cap {
+        spec.degradation
+    } else {
+        DegradationPreference::Smoothness
+    };
     let mut sink = EncoderSink::new(enc, ev, control.clone(), cb, es, p, degradation);
     sink.set_rate_compensation(spec.rate_compensation);
     let encoder = sink.name();
@@ -309,7 +315,11 @@ pub fn run(
                 if ts_us < due - interval / 4 {
                     continue;
                 }
-                next_due_us = Some(if ts_us - due > interval { ts_us + interval } else { due + interval });
+                next_due_us = Some(if ts_us - due > interval {
+                    ts_us + interval
+                } else {
+                    due + interval
+                });
             } else {
                 next_due_us = Some(ts_us + interval);
             }
@@ -338,7 +348,9 @@ pub fn run(
                 index: i,
                 bytes: c.data.len() as u32,
                 keyframe: c.keyframe,
-                latency_us: c.at.map_or(0, |a| a.duration_since(t_submit).as_micros() as u32),
+                latency_us: c
+                    .at
+                    .map_or(0, |a| a.duration_since(t_submit).as_micros() as u32),
                 encoder_bps: sink.encoder_bitrate(),
                 fps_cap: sink.fps_cap().unwrap_or(spec.fps),
             });
@@ -358,7 +370,10 @@ pub fn run(
                     timestamp_us: ts_us,
                     y: std::slice::from_raw_parts(base, pitch * h as usize),
                     y_stride: pitch as u32,
-                    uv: std::slice::from_raw_parts(base.add(pitch * h as usize), pitch * (h as usize / 2)),
+                    uv: std::slice::from_raw_parts(
+                        base.add(pitch * h as usize),
+                        pitch * (h as usize / 2),
+                    ),
                     uv_stride: pitch as u32,
                 };
                 cb(&f);

@@ -39,7 +39,9 @@ pub enum ThumbError {
 /// metadata itself is dropped with the original container). Shared by the link-preview
 /// thumbnails and the profile pictures.
 pub fn decode_untrusted(bytes: &[u8]) -> Result<DynamicImage, ThumbError> {
-    let mut reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format().map_err(|_| ThumbError::Unsupported)?;
+    let mut reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|_| ThumbError::Unsupported)?;
     if reader.format().is_none() {
         return Err(ThumbError::Unsupported);
     }
@@ -50,10 +52,13 @@ pub fn decode_untrusted(bytes: &[u8]) -> Result<DynamicImage, ThumbError> {
     reader.limits(limits);
     let mut decoder = reader.into_decoder().map_err(map_err)?;
     let (w, h) = decoder.dimensions();
-    if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE || u64::from(w) * u64::from(h) > MAX_PIXELS {
+    if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE || u64::from(w) * u64::from(h) > MAX_PIXELS
+    {
         return Err(ThumbError::TooLarge);
     }
-    let orientation = decoder.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
     let mut img = DynamicImage::from_decoder(decoder).map_err(map_err)?;
     img.apply_orientation(orientation);
     Ok(img)
@@ -69,13 +74,21 @@ pub fn make(bytes: &[u8], crop_16_9: bool) -> Result<Thumb, ThumbError> {
     let rgb = flatten_on_white(&img);
     let (w, h) = (rgb.width(), rgb.height());
     let rgb = if w > MAX_W || h > MAX_H {
-        DynamicImage::ImageRgb8(rgb).thumbnail(MAX_W, MAX_H).to_rgb8()
+        DynamicImage::ImageRgb8(rgb)
+            .thumbnail(MAX_W, MAX_H)
+            .to_rgb8()
     } else {
         rgb
     };
     let mut out = Vec::with_capacity(32 * 1024);
-    JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY).encode_image(&rgb).map_err(|_| ThumbError::Decode)?;
-    Ok(Thumb { jpeg: out, w: rgb.width(), h: rgb.height() })
+    JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY)
+        .encode_image(&rgb)
+        .map_err(|_| ThumbError::Decode)?;
+    Ok(Thumb {
+        jpeg: out,
+        w: rgb.width(),
+        h: rgb.height(),
+    })
 }
 
 fn map_err(e: image::ImageError) -> ThumbError {
@@ -127,7 +140,9 @@ pub mod test_images {
     pub fn jpeg(w: u32, h: u32) -> Vec<u8> {
         let img = RgbImage::from_fn(w, h, |x, y| Rgb([(x % 256) as u8, (y % 256) as u8, 200]));
         let mut out = Vec::new();
-        JpegEncoder::new_with_quality(&mut out, 90).encode_image(&img).unwrap();
+        JpegEncoder::new_with_quality(&mut out, 90)
+            .encode_image(&img)
+            .unwrap();
         out
     }
 
@@ -145,7 +160,11 @@ pub mod test_images {
         for &b in data {
             crc ^= u32::from(b);
             for _ in 0..8 {
-                crc = if crc & 1 != 0 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 };
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0xedb8_8320
+                } else {
+                    crc >> 1
+                };
             }
         }
         !crc
@@ -168,7 +187,11 @@ pub mod test_images {
         ihdr.extend(h.to_be_bytes());
         ihdr.extend([1, 0, 0, 0, 0]); // 1-bit greyscale, deflate, no filter, no interlace
         chunk(&mut out, b"IHDR", &ihdr);
-        chunk(&mut out, b"IDAT", &[0x78, 0x9c, 0x01, 0x00, 0x00, 0xff, 0xff]);
+        chunk(
+            &mut out,
+            b"IDAT",
+            &[0x78, 0x9c, 0x01, 0x00, 0x00, 0xff, 0xff],
+        );
         chunk(&mut out, b"IEND", &[]);
         out
     }
@@ -180,7 +203,9 @@ mod tests {
     use super::*;
 
     fn decode(t: &Thumb) -> image::RgbImage {
-        image::load_from_memory_with_format(&t.jpeg, image::ImageFormat::Jpeg).unwrap().to_rgb8()
+        image::load_from_memory_with_format(&t.jpeg, image::ImageFormat::Jpeg)
+            .unwrap()
+            .to_rgb8()
     }
 
     #[test]
@@ -226,10 +251,22 @@ mod tests {
 
     #[test]
     fn decompression_bombs_and_junk_are_refused() {
-        assert_eq!(make(&png_claiming(20000, 20000), false), Err(ThumbError::TooLarge));
-        assert_eq!(make(&png_claiming(9000, 9000), false), Err(ThumbError::TooLarge)); // 81 MP
-        assert_eq!(make(&png_claiming(65535, 1), false), Err(ThumbError::TooLarge));
-        assert_eq!(make(b"<html>not an image</html>", false), Err(ThumbError::Unsupported));
+        assert_eq!(
+            make(&png_claiming(20000, 20000), false),
+            Err(ThumbError::TooLarge)
+        );
+        assert_eq!(
+            make(&png_claiming(9000, 9000), false),
+            Err(ThumbError::TooLarge)
+        ); // 81 MP
+        assert_eq!(
+            make(&png_claiming(65535, 1), false),
+            Err(ThumbError::TooLarge)
+        );
+        assert_eq!(
+            make(b"<html>not an image</html>", false),
+            Err(ThumbError::Unsupported)
+        );
         assert_eq!(make(b"", false), Err(ThumbError::Unsupported));
         let mut cut = png(800, 600);
         cut.truncate(cut.len() / 2);

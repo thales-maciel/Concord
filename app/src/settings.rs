@@ -22,19 +22,24 @@ pub enum Preset {
     #[default]
     P1080p30,
     P1080p60,
-    /// "Máxima": 1080p60 with more bits, for fast games / 3D on a good connection.
+    /// "Maximum": 1080p60 with more bits, for fast games / 3D on a good connection.
     Max1080p60,
 }
 
 impl Preset {
-    pub const ALL: [Preset; 4] = [Preset::P720p30, Preset::P1080p30, Preset::P1080p60, Preset::Max1080p60];
+    pub const ALL: [Preset; 4] = [
+        Preset::P720p30,
+        Preset::P1080p30,
+        Preset::P1080p60,
+        Preset::Max1080p60,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Preset::P720p30 => "720p 30 fps",
             Preset::P1080p30 => "1080p 30 fps",
             Preset::P1080p60 => "1080p 60 fps",
-            Preset::Max1080p60 => "Máxima (1080p 60 fps)",
+            Preset::Max1080p60 => "Maximum (1080p 60 fps)",
         }
     }
 
@@ -58,7 +63,7 @@ impl Preset {
     }
 }
 
-/// Webcam quality ("Qualidade da câmera"), all at 30 fps. The bitrate follows the size (about
+/// Webcam streaming quality, all at 30 fps. The bitrate follows the size (about
 /// 1.2 Mbps at 720p, see `vox_client_core::golive::camera::camera_bitrate`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CameraPreset {
@@ -70,7 +75,12 @@ pub enum CameraPreset {
 }
 
 impl CameraPreset {
-    pub const ALL: [CameraPreset; 4] = [CameraPreset::P360, CameraPreset::P540, CameraPreset::P720, CameraPreset::P1080];
+    pub const ALL: [CameraPreset; 4] = [
+        CameraPreset::P360,
+        CameraPreset::P540,
+        CameraPreset::P720,
+        CameraPreset::P1080,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -107,7 +117,12 @@ pub struct UserAudioPref {
 
 impl Default for UserAudioPref {
     fn default() -> Self {
-        Self { volume_pct: 100, muted: false, stream_volume_pct: 100, stream_muted: false }
+        Self {
+            volume_pct: 100,
+            muted: false,
+            stream_volume_pct: 100,
+            stream_muted: false,
+        }
     }
 }
 
@@ -140,29 +155,29 @@ pub struct Settings {
     pub volume_pct: u32,
     pub preset: Preset,
     pub share_audio: bool,
-    /// "Priorizar fluidez": keep the frame rate under congestion (default: drop fps first).
+    /// "Prioritize smoothness": keep the frame rate under congestion (default: drop fps first).
     pub share_smooth: bool,
     pub ptt_enabled: bool,
     pub ptt_vk: u32,
     pub ptt_name: String,
-    /// Input sensitivity ("Sensibilidade de entrada"): automatic or manual voice-activity gate.
+    /// Input sensitivity ("Input sensitivity"): automatic or manual voice-activity gate.
     pub input_gate: GateConfig,
-    /// "Supressão de ruído": Padrão (WebRTC), IA leve (RNNoise, the default) or IA máxima
+    /// "Noise suppression": Default (WebRTC), Light AI (RNNoise, the default) or Maximum AI
     /// (DeepFilterNet3).
     pub noise_suppression: NoiseLevel,
-    /// "Modificador de voz": effect and intensity (older files get "Desligado").
+    /// "Voice changer": effect and intensity (older files get "Off").
     pub voice_fx: VoiceFxConfig,
     /// Local volume / mute per person, keyed by username (identities are per-session ids).
     pub user_audio: BTreeMap<String, UserAudioPref>,
     /// Alert sounds (only I hear them).
     pub alerts: AlertSettings,
-    /// "Abrir transmissões em janela separada": watched streams open in their own window
+    /// "Open streams in a separate window": watched streams open in their own window
     /// instead of inside the call view.
     pub stream_popout: bool,
-    /// "Ouvir só as transmissões fixadas": with several watched streams, only the pinned ones (or
+    /// "Only play pinned streams": with several watched streams, only the pinned ones (or
     /// the fullscreen one) play sound. Off by default: every watched stream is heard.
     pub stream_focus_audio: bool,
-    /// "Mostrar prévia da minha transmissão" (item 8a): while I am live, my stream tile shows a
+    /// "Show my stream preview" (item 8a): while I am live, my stream tile shows a
     /// small picture of what I share. Off tears the preview tap down completely (no second
     /// video processor, no staging textures). Older files get the default (on).
     pub show_self_preview: bool,
@@ -174,21 +189,21 @@ pub struct Settings {
     /// Per camera (by device link, else name): native format, image controls, mirror / rotation /
     /// zoom (v0.6). Only cameras with non-default choices are stored.
     pub camera_profiles: crate::camera_cfg::CameraProfiles,
-    /// "Aceleração de hardware" (v0.7): off = the processor encodes the screen share and the
+    /// "Hardware acceleration" (v0.7): off = the processor encodes the screen share and the
     /// camera. Older files get on.
     pub hw_accel: bool,
-    /// "Codificador": a specific encoder (`vox_capture::EncoderCandidate::id`, stable across
-    /// reboots); `None` = "Automático (recomendado)".
+    /// "Encoder": a specific encoder (`vox_capture::EncoderCandidate::id`, stable across
+    /// reboots); `None` = "Automatic (recommended)".
     pub video_encoder: Option<String>,
-    /// "Mostrar prévia de links": cards with title and thumbnail under chat links (the hub
+    /// "Show link previews": cards with title and thumbnail under chat links (the hub
     /// fetches them). Added with item 10, so older settings.json files get the default (on).
     pub show_link_previews: bool,
     /// "Qualidade das imagens enviadas" (chat images): Normal (1920 px), Alta (2560) or Original
     /// (up to 4096). Older files get Normal.
     pub image_quality: vox_client_core::images::Quality,
-    /// "Mostrar imagens automaticamente": chat images load by themselves (off: click to load).
+    /// "Load images automatically": chat images load by themselves (off: click to load).
     pub auto_show_images: bool,
-    /// Item 12: per-device login tokens ("Lembrar este computador"), keyed by
+    /// Item 12: per-device login tokens ("Lembrar this computer"), keyed by
     /// `server|username` (lowercase), each DPAPI-encrypted and hex encoded like the password.
     pub device_tokens: BTreeMap<String, String>,
     /// v1.0.1: the identity (`HealthResponse::server_id`) of the server that issued each login
@@ -198,15 +213,15 @@ pub struct Settings {
     pub device_token_servers: BTreeMap<String, String>,
     /// Soundboard volume, mute and silenced sounds (added after v0.4.1: older files get the defaults).
     pub soundboard: crate::soundboard::SoundboardSettings,
-    /// Profile settings of this computer (idle time before "Ausente"); older files get the defaults.
+    /// Profile settings of this computer (idle time before "Away"); older files get the defaults.
     pub profile: crate::profile::ProfileSettings,
-    /// Windows notifications and the tray ("Notificações"); older files get the defaults.
+    /// Windows notifications and the tray ("Notifications"); older files get the defaults.
     pub notify: crate::app::notify::NotifySettings,
-    /// Reactions I used last, newest first (the picker's "Recentes"; v0.8).
+    /// Reactions I used last, newest first (the picker's "Recent"; v0.8).
     pub recent_reactions: Vec<String>,
     /// The v1.0 shell's remembered choices (center mode, docked chat width, member list).
     pub layout: crate::layout::LayoutSettings,
-    /// "Seus servidores salvos" (v0.9.1). Kept in `servers.json` next to this file, not in it: an
+    /// "Your servers salvos" (v0.9.1). Kept in `servers.json` next to this file, not in it: an
     /// older app rewrites settings.json without it (see `servers.rs`). `server`, `username`,
     /// `remember_password` and `password_enc` above mirror its most recently used entry.
     #[serde(skip)]
@@ -282,7 +297,13 @@ fn path() -> Option<PathBuf> {
     // macOS: ~/Library/Application Support/concord (there is no %APPDATA%).
     #[cfg(target_os = "macos")]
     if let Some(home) = std::env::var_os("HOME") {
-        return Some(PathBuf::from(home).join("Library").join("Application Support").join("concord").join("settings.json"));
+        return Some(
+            PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("concord")
+                .join("settings.json"),
+        );
     }
     None
 }
@@ -311,7 +332,9 @@ pub fn encoder_cache_path() -> Option<PathBuf> {
 
 impl Settings {
     pub fn load() -> Self {
-        let Some(p) = path() else { return Self::default() };
+        let Some(p) = path() else {
+            return Self::default();
+        };
         Self::load_at(&p)
     }
 
@@ -326,12 +349,18 @@ impl Settings {
             Err(_) => Self::default(),
         };
         let list = std::fs::read_to_string(servers_path(p)).ok();
-        s.servers = list.as_deref().and_then(crate::servers::ServerList::from_json).unwrap_or_default();
+        s.servers = list
+            .as_deref()
+            .and_then(crate::servers::ServerList::from_json)
+            .unwrap_or_default();
         if list.is_some() && s.servers.servers.is_empty() && s.servers.next_id == 0 {
             warn!("servers.json is invalid; starting a new list");
         }
         if s.merge_legacy_server(crate::app::now_ms()) {
-            info!(entries = s.servers.servers.len(), "server list: the saved server of an older version joined the list");
+            info!(
+                entries = s.servers.servers.len(),
+                "server list: the saved server of an older version joined the list"
+            );
         }
         s
     }
@@ -346,7 +375,9 @@ impl Settings {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let res = serde_json::to_string_pretty(self).map_err(|e| e.to_string()).and_then(|text| write_atomic(p, &text));
+        let res = serde_json::to_string_pretty(self)
+            .map_err(|e| e.to_string())
+            .and_then(|text| write_atomic(p, &text));
         if let Err(e) = res {
             warn!(error = %e, "cannot save settings");
         }
@@ -364,12 +395,19 @@ impl Settings {
     }
 
     fn device_key(server: &str, username: &str) -> String {
-        format!("{}|{}", server.trim().to_ascii_lowercase(), username.trim().to_ascii_lowercase())
+        format!(
+            "{}|{}",
+            server.trim().to_ascii_lowercase(),
+            username.trim().to_ascii_lowercase()
+        )
     }
 
     /// This computer's login token for `username` on `server` (item 12), decrypted.
     pub fn device_token(&self, server: &str, username: &str) -> Option<String> {
-        unprotect(self.device_tokens.get(&Self::device_key(server, username))?)
+        unprotect(
+            self.device_tokens
+                .get(&Self::device_key(server, username))?,
+        )
     }
 
     /// Remember (DPAPI-encrypted) or forget this computer's login token for a name. A new token
@@ -390,7 +428,10 @@ impl Settings {
     /// v1.0.1: the identity of the server that issued this computer's login token for `username`
     /// on `server`, when known.
     pub fn device_token_server(&self, server: &str, username: &str) -> Option<String> {
-        self.device_token_servers.get(&Self::device_key(server, username)).filter(|id| vox_proto::is_server_id(id)).cloned()
+        self.device_token_servers
+            .get(&Self::device_key(server, username))
+            .filter(|id| vox_proto::is_server_id(id))
+            .cloned()
     }
 
     /// v1.0.1: tie the login token saved for `username` on `server` (if there is one) to a server
@@ -406,9 +447,12 @@ impl Settings {
             }
         }
     }
-    /// The video encoder choice for vox-client-core (Settings → Vídeo).
+    /// The video encoder choice for vox-client-core (Settings → Video).
     pub fn encoder_pref(&self) -> vox_client_core::golive::encoders::EncoderPref {
-        vox_client_core::golive::encoders::EncoderPref { hardware: self.hw_accel, encoder: self.video_encoder.clone() }
+        vox_client_core::golive::encoders::EncoderPref {
+            hardware: self.hw_accel,
+            encoder: self.video_encoder.clone(),
+        }
     }
 
     /// Saved local audio settings of `username` (defaults when none).
@@ -426,7 +470,6 @@ impl Settings {
             self.user_audio.insert(username.to_string(), pref);
         }
     }
-
 }
 
 // ---------------------------------------------------------------- DPAPI
@@ -471,7 +514,16 @@ pub(crate) fn protect(plain: &str) -> Option<String> {
     // SAFETY: the blobs point at live buffers for the duration of the call; the output buffer is
     // allocated by DPAPI and released with LocalFree after copying it out.
     unsafe {
-        if CryptProtectData(&input, std::ptr::null(), &entropy, std::ptr::null(), std::ptr::null(), 0, &mut out) == 0 {
+        if CryptProtectData(
+            &input,
+            std::ptr::null(),
+            &entropy,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            &mut out,
+        ) == 0
+        {
             return None;
         }
         let hex = to_hex(std::slice::from_raw_parts(out.pbData, out.cbData as usize));
@@ -511,7 +563,9 @@ pub(crate) fn unprotect(hex: &str) -> Option<String> {
         {
             return None;
         }
-        let plain = String::from_utf8(std::slice::from_raw_parts(out.pbData, out.cbData as usize).to_vec()).ok();
+        let plain =
+            String::from_utf8(std::slice::from_raw_parts(out.pbData, out.cbData as usize).to_vec())
+                .ok();
         LocalFree(out.pbData as *mut core::ffi::c_void);
         plain
     }
@@ -582,12 +636,15 @@ mod keychain {
     fn new_id() -> Option<String> {
         use std::io::Read;
         let mut b = [0u8; 16];
-        std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).ok()?;
+        std::fs::File::open("/dev/urandom")
+            .and_then(|mut f| f.read_exact(&mut b))
+            .ok()?;
         Some(super::to_hex(&b))
     }
 
     pub(super) fn is_reference(s: &str) -> bool {
-        s.strip_prefix(PREFIX).is_some_and(|id| id.len() == 32 && id.bytes().all(|c| c.is_ascii_hexdigit()))
+        s.strip_prefix(PREFIX)
+            .is_some_and(|id| id.len() == 32 && id.bytes().all(|c| c.is_ascii_hexdigit()))
     }
 
     /// The item's bytes (`Ok(None)`: there is no item yet).
@@ -600,7 +657,8 @@ mod keychain {
     }
 
     pub(super) fn item_set(account: &str, bytes: &[u8]) -> Result<(), String> {
-        security_framework::passwords::set_generic_password(SERVICE, account, bytes).map_err(|e| format!("{e} ({})", e.code()))
+        security_framework::passwords::set_generic_password(SERVICE, account, bytes)
+            .map_err(|e| format!("{e} ({})", e.code()))
     }
 
     pub(super) fn item_delete(account: &str) -> Result<(), String> {
@@ -624,7 +682,12 @@ mod keychain {
         if map.is_empty() {
             return item_delete(&a);
         }
-        item_set(&a, serde_json::to_string(map).map_err(|e| e.to_string())?.as_bytes())
+        item_set(
+            &a,
+            serde_json::to_string(map)
+                .map_err(|e| e.to_string())?
+                .as_bytes(),
+        )
     }
 
     // Unit tests never touch the user's Keychain.
@@ -656,7 +719,11 @@ mod keychain {
     pub(super) fn protect(plain: &str) -> Option<String> {
         let mut cache = cached()?;
         let map = cache.as_mut()?;
-        if let Some(id) = map.iter().find(|(_, v)| v.as_str() == plain).map(|(k, _)| k.clone()) {
+        if let Some(id) = map
+            .iter()
+            .find(|(_, v)| v.as_str() == plain)
+            .map(|(k, _)| k.clone())
+        {
             return Some(format!("{PREFIX}{id}"));
         }
         let id = new_id()?;
@@ -695,7 +762,11 @@ mod keychain {
             return;
         }
         match store(map) {
-            Ok(()) => tracing::info!(dropped, kept = map.len(), "keychain: unused saved secrets removed"),
+            Ok(()) => tracing::info!(
+                dropped,
+                kept = map.len(),
+                "keychain: unused saved secrets removed"
+            ),
             Err(e) => tracing::warn!(error = %e, "keychain: cannot clean up"),
         }
     }
@@ -712,7 +783,9 @@ pub fn keychain_gc() {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(String::new()),
         Err(_) => None,
     };
-    let (Some(a), Some(b)) = (read(&p), read(&servers_path(&p))) else { return };
+    let (Some(a), Some(b)) = (read(&p), read(&servers_path(&p))) else {
+        return;
+    };
     keychain::gc(&format!("{a}\n{b}"));
 }
 
@@ -727,7 +800,10 @@ mod tests {
         let old: Settings = serde_json::from_str(r#"{"server":"h","username":"ana"}"#).unwrap();
         assert!(old.show_self_preview);
         // Off survives the file.
-        let off = Settings { show_self_preview: false, ..Default::default() };
+        let off = Settings {
+            show_self_preview: false,
+            ..Default::default()
+        };
         let back: Settings = serde_json::from_str(&serde_json::to_string(&off).unwrap()).unwrap();
         assert!(!back.show_self_preview);
     }
@@ -740,9 +816,16 @@ mod tests {
         let account = format!("unit-test-{}", std::process::id());
         match keychain::item_set(&account, b"{\"x\":\"y\"}") {
             Ok(()) => {
-                assert_eq!(keychain::item_get(&account).unwrap().as_deref(), Some(&b"{\"x\":\"y\"}"[..]));
+                assert_eq!(
+                    keychain::item_get(&account).unwrap().as_deref(),
+                    Some(&b"{\"x\":\"y\"}"[..])
+                );
                 keychain::item_set(&account, b"{}").unwrap();
-                assert_eq!(keychain::item_get(&account).unwrap().as_deref(), Some(&b"{}"[..]), "replaced in place");
+                assert_eq!(
+                    keychain::item_get(&account).unwrap().as_deref(),
+                    Some(&b"{}"[..]),
+                    "replaced in place"
+                );
                 keychain::item_delete(&account).unwrap();
                 assert_eq!(keychain::item_get(&account).unwrap(), None);
                 keychain::item_delete(&account).unwrap();
@@ -752,13 +835,24 @@ mod tests {
         }
         let r = protect("senha do Mac").unwrap();
         assert!(keychain::is_reference(&r) && !r.contains("senha"), "{r}");
-        assert_eq!(protect("senha do Mac"), Some(r.clone()), "the same secret keeps its reference");
+        assert_eq!(
+            protect("senha do Mac"),
+            Some(r.clone()),
+            "the same secret keeps its reference"
+        );
         assert_ne!(protect("outra senha"), Some(r.clone()));
         assert_eq!(unprotect(&r).as_deref(), Some("senha do Mac"));
         assert_eq!(unprotect("kc1:00000000000000000000000000000000"), None);
-        assert_eq!(unprotect("01000000d08c9ddf"), None, "a Windows DPAPI value means nothing here");
+        assert_eq!(
+            unprotect("01000000d08c9ddf"),
+            None,
+            "a Windows DPAPI value means nothing here"
+        );
         // The startup clean-up keeps exactly what the files mention.
-        let mut m: std::collections::HashMap<String, String> = [("a".repeat(32), "1".into()), ("b".repeat(32), "2".into())].into_iter().collect();
+        let mut m: std::collections::HashMap<String, String> =
+            [("a".repeat(32), "1".into()), ("b".repeat(32), "2".into())]
+                .into_iter()
+                .collect();
         let text = format!("{{\"password_enc\":\"kc1:{}\"}}", "a".repeat(32));
         assert_eq!(keychain::keep_referenced(&mut m, &text), 1);
         assert_eq!(m.keys().cloned().collect::<Vec<_>>(), vec!["a".repeat(32)]);
@@ -774,7 +868,8 @@ mod tests {
 
     #[test]
     fn settings_roundtrip_through_the_file_without_plaintext_password() {
-        let dir = std::env::temp_dir().join(format!("concord-settings-test-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("concord-settings-test-{}", std::process::id()));
         // Only this test touches APPDATA.
         std::env::set_var("APPDATA", &dir);
         let s = Settings {
@@ -811,9 +906,20 @@ mod tests {
     fn user_audio_is_kept_per_username_and_defaults_are_not_stored() {
         let mut s = Settings::default();
         assert!(s.user_audio("ana").is_default());
-        let pref = UserAudioPref { volume_pct: 150, muted: true, stream_volume_pct: 40, stream_muted: false };
+        let pref = UserAudioPref {
+            volume_pct: 150,
+            muted: true,
+            stream_volume_pct: 40,
+            stream_muted: false,
+        };
         s.set_user_audio("ana", pref);
-        s.set_user_audio("bob", UserAudioPref { volume_pct: 30, ..Default::default() });
+        s.set_user_audio(
+            "bob",
+            UserAudioPref {
+                volume_pct: 30,
+                ..Default::default()
+            },
+        );
         assert_eq!(s.user_audio("ana"), pref);
         assert_eq!(s.user_audio("bob").volume_pct, 30);
         assert!(s.user_audio("cat").is_default());
@@ -826,15 +932,34 @@ mod tests {
         // Back to defaults removes the entry; huge values are clamped to 200 %.
         s.set_user_audio("ana", UserAudioPref::default());
         assert!(!s.user_audio.contains_key("ana"));
-        s.set_user_audio("bob", UserAudioPref { volume_pct: 9000, stream_volume_pct: 201, ..Default::default() });
-        assert_eq!((s.user_audio("bob").volume_pct, s.user_audio("bob").stream_volume_pct), (200, 200));
+        s.set_user_audio(
+            "bob",
+            UserAudioPref {
+                volume_pct: 9000,
+                stream_volume_pct: 201,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            (
+                s.user_audio("bob").volume_pct,
+                s.user_audio("bob").stream_volume_pct
+            ),
+            (200, 200)
+        );
     }
 
     #[test]
     fn alert_settings_default_on_except_presence_and_roundtrip() {
         let s: Settings = serde_json::from_str(r#"{"server":"x"}"#).unwrap();
         assert_eq!(s.alerts, AlertSettings::default());
-        assert!(s.alerts.enabled && s.alerts.room && s.alerts.streams && s.alerts.own_state && !s.alerts.presence);
+        assert!(
+            s.alerts.enabled
+                && s.alerts.room
+                && s.alerts.streams
+                && s.alerts.own_state
+                && !s.alerts.presence
+        );
         let mut s = s;
         s.alerts.volume_pct = 35;
         s.alerts.presence = true;
@@ -861,24 +986,49 @@ mod tests {
         assert_eq!(s.input_gate, GateConfig::default());
         assert_eq!(s.input_gate.mode, GateMode::Auto);
         let mut s = s;
-        s.input_gate = GateConfig { mode: GateMode::Manual, threshold_db: -38.0, hold_ms: 500 };
+        s.input_gate = GateConfig {
+            mode: GateMode::Manual,
+            threshold_db: -38.0,
+            hold_ms: 500,
+        };
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains("\"manual\""));
         let back: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(back.input_gate, s.input_gate);
         // A hand-edited file with silly values is clamped when applied.
-        let s: Settings = serde_json::from_str(r#"{"input_gate":{"mode":"manual","threshold_db":-400.0,"hold_ms":0}}"#).unwrap();
-        assert_eq!(s.input_gate.sanitized().threshold_db, vox_client_core::audio::gate::THRESHOLD_MIN_DB);
+        let s: Settings = serde_json::from_str(
+            r#"{"input_gate":{"mode":"manual","threshold_db":-400.0,"hold_ms":0}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            s.input_gate.sanitized().threshold_db,
+            vox_client_core::audio::gate::THRESHOLD_MIN_DB
+        );
     }
 
     #[test]
     fn voice_fx_defaults_to_off_and_roundtrips() {
         use vox_client_core::VoiceEffect;
         let s: Settings = serde_json::from_str("{}").unwrap();
-        assert_eq!(s.voice_fx, VoiceFxConfig { effect: VoiceEffect::Off, intensity_pct: 50 });
-        let s = Settings { voice_fx: VoiceFxConfig { effect: VoiceEffect::Cave, intensity_pct: 80 }, ..Settings::default() };
+        assert_eq!(
+            s.voice_fx,
+            VoiceFxConfig {
+                effect: VoiceEffect::Off,
+                intensity_pct: 50
+            }
+        );
+        let s = Settings {
+            voice_fx: VoiceFxConfig {
+                effect: VoiceEffect::Cave,
+                intensity_pct: 80,
+            },
+            ..Settings::default()
+        };
         let json = serde_json::to_string(&s).unwrap();
-        assert!(json.contains(r#""voice_fx":{"effect":"cave","intensity_pct":80}"#), "{json}");
+        assert!(
+            json.contains(r#""voice_fx":{"effect":"cave","intensity_pct":80}"#),
+            "{json}"
+        );
         let back: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(back.voice_fx, s.voice_fx);
         // An effect this version does not know: off.
@@ -893,13 +1043,18 @@ mod tests {
         let mut s = s;
         s.noise_suppression = NoiseLevel::Standard;
         let json = serde_json::to_string(&s).unwrap();
-        assert!(json.contains("\"noise_suppression\":\"standard\""), "{json}");
+        assert!(
+            json.contains("\"noise_suppression\":\"standard\""),
+            "{json}"
+        );
         let back: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(back.noise_suppression, NoiseLevel::Standard);
-        // IA máxima persists as "ai_max".
+        // Maximum AI persists as "ai_max".
         let s: Settings = serde_json::from_str(r#"{"noise_suppression":"ai_max"}"#).unwrap();
         assert_eq!(s.noise_suppression, NoiseLevel::AiMax);
-        assert!(serde_json::to_string(&s).unwrap().contains("\"noise_suppression\":\"ai_max\""));
+        assert!(serde_json::to_string(&s)
+            .unwrap()
+            .contains("\"noise_suppression\":\"ai_max\""));
         // A level this version does not know (a newer app's file) falls back to the default.
         let s: Settings = serde_json::from_str(r#"{"noise_suppression":"ai_ultra"}"#).unwrap();
         assert_eq!(s.noise_suppression, NoiseLevel::AiLight);
@@ -908,7 +1063,10 @@ mod tests {
     #[test]
     fn camera_settings_default_and_roundtrip() {
         let s: Settings = serde_json::from_str("{}").unwrap();
-        assert_eq!((s.camera_device.clone(), s.camera_preset), (None, CameraPreset::P720));
+        assert_eq!(
+            (s.camera_device.clone(), s.camera_preset),
+            (None, CameraPreset::P720)
+        );
         let s = Settings {
             camera_device: Some(r"\\?\usb#vid_046d&pid_082d#{e5323777}\global".into()),
             camera_name: Some("HD Pro Webcam C920".into()),
@@ -927,17 +1085,36 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{"server":"x"}"#).unwrap();
         assert!(s.hw_accel && s.video_encoder.is_none());
         assert_eq!(s.encoder_pref(), Default::default());
-        let s = Settings { hw_accel: false, video_encoder: Some("nvenc:10de:1f99:00001234:0".into()), ..Default::default() };
+        let s = Settings {
+            hw_accel: false,
+            video_encoder: Some("nvenc:10de:1f99:00001234:0".into()),
+            ..Default::default()
+        };
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert!(!back.hw_accel);
-        assert_eq!(back.encoder_pref().encoder.as_deref(), Some("nvenc:10de:1f99:00001234:0"));
-        assert_eq!(encoder_cache_path().map(|p| p.file_name().unwrap().to_owned()), Some("encoders.json".into()));
+        assert_eq!(
+            back.encoder_pref().encoder.as_deref(),
+            Some("nvenc:10de:1f99:00001234:0")
+        );
+        assert_eq!(
+            encoder_cache_path().map(|p| p.file_name().unwrap().to_owned()),
+            Some("encoders.json".into())
+        );
     }
 
     #[test]
     fn pref_converts_to_core_gains() {
-        let c = UserAudioPref { volume_pct: 200, muted: true, stream_volume_pct: 50, stream_muted: false }.to_core();
-        assert_eq!((c.volume, c.muted, c.stream_volume, c.stream_muted), (2.0, true, 0.5, false));
+        let c = UserAudioPref {
+            volume_pct: 200,
+            muted: true,
+            stream_volume_pct: 50,
+            stream_muted: false,
+        }
+        .to_core();
+        assert_eq!(
+            (c.volume, c.muted, c.stream_volume, c.stream_muted),
+            (2.0, true, 0.5, false)
+        );
         assert!(UserAudioPref::default().to_core().is_default());
     }
 
@@ -946,12 +1123,18 @@ mod tests {
         let mut s = Settings::default();
         s.set_device_token("http://1.2.3.4:7890", "Ana", Some("tok-ana"));
         s.set_device_token("http://1.2.3.4:7890", "Bia", Some("tok-bia"));
-        assert_eq!(s.device_token("HTTP://1.2.3.4:7890 ", "ana").as_deref(), Some("tok-ana"));
+        assert_eq!(
+            s.device_token("HTTP://1.2.3.4:7890 ", "ana").as_deref(),
+            Some("tok-ana")
+        );
         assert_eq!(s.device_token("http://other:7890", "Ana"), None);
         let json = serde_json::to_string(&s).unwrap();
         assert!(!json.contains("tok-ana"), "stored encrypted");
         let back: Settings = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.device_token("http://1.2.3.4:7890", "Bia").as_deref(), Some("tok-bia"));
+        assert_eq!(
+            back.device_token("http://1.2.3.4:7890", "Bia").as_deref(),
+            Some("tok-bia")
+        );
         s.set_device_token("http://1.2.3.4:7890", "Ana", None);
         assert_eq!(s.device_token("http://1.2.3.4:7890", "Ana"), None);
         // Settings files from before item 12 load with none.

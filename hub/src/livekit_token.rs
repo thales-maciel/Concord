@@ -25,11 +25,16 @@ pub const ADMIN_TOKEN_TTL_SECS: i64 = 10 * 60;
 /// What a server-muted member may still publish (item 12): everything but the microphone.
 pub const SOURCES_WITHOUT_MIC: [&str; 3] = ["camera", "screen_share", "screen_share_audio"];
 /// What any member may publish: the four kinds the app makes (no `UNKNOWN`-source tracks).
-pub const MEMBER_SOURCES: [&str; 4] = ["camera", "microphone", "screen_share", "screen_share_audio"];
+pub const MEMBER_SOURCES: [&str; 4] =
+    ["camera", "microphone", "screen_share", "screen_share_audio"];
 
 /// The sources a member may publish (`server_muted`: no microphone).
 pub fn publish_sources(server_muted: bool) -> &'static [&'static str] {
-    if server_muted { &SOURCES_WITHOUT_MIC } else { &MEMBER_SOURCES }
+    if server_muted {
+        &SOURCES_WITHOUT_MIC
+    } else {
+        &MEMBER_SOURCES
+    }
 }
 
 fn sign(api_secret: &str, claims: &Value) -> String {
@@ -39,18 +44,37 @@ fn sign(api_secret: &str, claims: &Value) -> String {
         URL_SAFE_NO_PAD.encode(header.to_string()),
         URL_SAFE_NO_PAD.encode(claims.to_string())
     );
-    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(api_secret.as_bytes()).expect("HMAC accepts any key length");
+    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(api_secret.as_bytes())
+        .expect("HMAC accepts any key length");
     mac.update(signing.as_bytes());
-    format!("{signing}.{}", URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
+    format!(
+        "{signing}.{}",
+        URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+    )
 }
 
-pub fn join_token(api_key: &str, api_secret: &str, room: &str, identity: &str, name: &str, now_secs: i64) -> String {
+pub fn join_token(
+    api_key: &str,
+    api_secret: &str,
+    room: &str,
+    identity: &str,
+    name: &str,
+    now_secs: i64,
+) -> String {
     join_token_with(api_key, api_secret, room, identity, name, now_secs, false)
 }
 
 /// A join token: the four sources the app publishes ([`MEMBER_SOURCES`]); `server_muted` leaves
 /// the microphone out.
-pub fn join_token_with(api_key: &str, api_secret: &str, room: &str, identity: &str, name: &str, now_secs: i64, server_muted: bool) -> String {
+pub fn join_token_with(
+    api_key: &str,
+    api_secret: &str,
+    room: &str,
+    identity: &str,
+    name: &str,
+    now_secs: i64,
+    server_muted: bool,
+) -> String {
     let video = json!({
         "room": room,
         "roomJoin": true,
@@ -99,10 +123,20 @@ mod tests {
     #[test]
     fn join_tokens_are_short_lived_and_limit_sources() {
         let t = claims(&join_token("k", "s", "voice-2", "7", "Ana", 1000));
-        assert_eq!(t["exp"].as_i64().unwrap() - 1000, 60, "one minute to enter the room");
-        assert_eq!(t["video"]["canPublishSources"], json!(["camera", "microphone", "screen_share", "screen_share_audio"]));
+        assert_eq!(
+            t["exp"].as_i64().unwrap() - 1000,
+            60,
+            "one minute to enter the room"
+        );
+        assert_eq!(
+            t["video"]["canPublishSources"],
+            json!(["camera", "microphone", "screen_share", "screen_share_audio"])
+        );
         let muted = claims(&join_token_with("k", "s", "dm-1-2", "7", "Ana", 1000, true));
-        assert_eq!(muted["video"]["canPublishSources"], json!(["camera", "screen_share", "screen_share_audio"]));
+        assert_eq!(
+            muted["video"]["canPublishSources"],
+            json!(["camera", "screen_share", "screen_share_audio"])
+        );
         assert_eq!(muted["video"]["room"], "dm-1-2");
         let list = claims(&admin_token("k", "s", None, 1000));
         assert_eq!(list["video"], json!({ "roomList": true }));
@@ -112,8 +146,17 @@ mod tests {
     /// so a member who lost access to a private room cannot keep coming back with an old one.
     #[test]
     fn join_tokens_expire_within_ninety_seconds() {
-        const { assert!(TOKEN_TTL_SECS >= 1 && TOKEN_TTL_SECS <= 90 && TOKEN_USABLE_SECS <= 90 + LIVEKIT_LEEWAY_SECS) };
-        for t in [join_token("k", "s", "voice-2", "7", "Ana", 5000), join_token_with("k", "s", "dm-1-2", "7", "Ana", 5000, false)] {
+        const {
+            assert!(
+                TOKEN_TTL_SECS >= 1
+                    && TOKEN_TTL_SECS <= 90
+                    && TOKEN_USABLE_SECS <= 90 + LIVEKIT_LEEWAY_SECS
+            )
+        };
+        for t in [
+            join_token("k", "s", "voice-2", "7", "Ana", 5000),
+            join_token_with("k", "s", "dm-1-2", "7", "Ana", 5000, false),
+        ] {
             let c = claims(&t);
             let (nbf, exp) = (c["nbf"].as_i64().unwrap(), c["exp"].as_i64().unwrap());
             assert!(exp > 5000 && exp - 5000 <= 90, "exp {exp}");

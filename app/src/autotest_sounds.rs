@@ -1,7 +1,7 @@
 //! Soundboard autotest (a child module of `autotest`, so it drives the same `Auto` steps).
 //!
 //! - `sound-a`: joins the first voice channel, uploads a generated WAV (44.1 kHz stereo, silence
-//!   around a sine) and the Vorbis fixture the way the "Adicionar som" dialog does, checks that a
+//!   around a sine) and the Vorbis fixture the way the "Add sound" dialog does, checks that a
 //!   text file and a 6 s clip are refused with a reason, then plays the first sound, plays it again
 //!   while B is deafened, again while B has the soundboard muted, renames it and deletes the second.
 //! - `sound-b`: in the same voice channel. Sees both sounds appear, checks that A's play reaches
@@ -10,9 +10,9 @@
 //!   the rename, and that it is not allowed to delete A's sound.
 //!
 //! - `sound-trim`: one process, the trim editor. It generates a 20 s file of tone bursts, opens the
-//!   "Adicionar som" dialog on it, checks the editor's read (duration, the default selection is
+//!   "Add sound" dialog on it, checks the editor's read (duration, the default selection is
 //!   the loudest 5 s), selects 3.2 s inside a burst (5 s is the most a selection can ever be),
-//!   asks for "Ouvir trecho" (silent: it only reports the clip's length), uploads the selection
+//!   asks for "Listen to clip" (silent: it only reports the clip's length), uploads the selection
 //!   and checks the hub stored a clip of about 3.2 s; then an 11 minute file is refused with a
 //!   friendly message. It refuses to run without `VOX_NO_PLAYBACK`: the preview would be heard.
 //!
@@ -47,7 +47,7 @@ pub struct State {
     /// B: how many plays and mixer measurements it had seen before the step it is waiting in.
     plays_before: usize,
     mix_before: usize,
-    /// `--show panel`: the "Adicionar som" dialog has been opened for a look.
+    /// `--show panel`: the "Add sound" dialog has been opened for a look.
     add_shown: bool,
     /// `sound-trim`: how many sounds the hub had before the upload.
     base: usize,
@@ -72,7 +72,10 @@ pub(super) fn test_wav(tone_s: f32) -> Vec<u8> {
     for i in 0..total {
         let (l, r) = if i >= n(0.4) && i < n(0.4) + n(tone_s) {
             let t = (i - n(0.4)) as f32 / rate as f32;
-            ((t * 440.0 * std::f32::consts::TAU).sin() * 0.2, (t * 660.0 * std::f32::consts::TAU).sin() * 0.2)
+            (
+                (t * 440.0 * std::f32::consts::TAU).sin() * 0.2,
+                (t * 660.0 * std::f32::consts::TAU).sin() * 0.2,
+            )
         } else {
             (0.0, 0.0)
         };
@@ -115,7 +118,10 @@ impl Auto {
             return Some(None);
         }
         if self.waited(30) || (app.form.error.is_some() && !app.form.busy) {
-            return Some(self.fail(&format!("could not log in: {}", app.form.error.clone().unwrap_or_default())));
+            return Some(self.fail(&format!(
+                "could not log in: {}",
+                app.form.error.clone().unwrap_or_default()
+            )));
         }
         None
     }
@@ -126,7 +132,9 @@ impl Auto {
             Some(None) => {}
             None => return None,
         }
-        let Some(vc) = Self::first_voice(app) else { return self.fail("no voice channel") };
+        let Some(vc) = Self::first_voice(app) else {
+            return self.fail("no voice channel");
+        };
         app.join_voice(vc);
         self.goto(2, "joining voice");
         None
@@ -137,12 +145,15 @@ impl Auto {
     }
 
     fn snd_dir(&mut self) -> PathBuf {
-        self.sound.dir.get_or_insert_with(|| {
-            let d = std::env::temp_dir().join(format!("concord-sound-autotest-{}", self.args.run_id));
-            let _ = std::fs::create_dir_all(&d);
-            d
-        })
-        .clone()
+        self.sound
+            .dir
+            .get_or_insert_with(|| {
+                let d = std::env::temp_dir()
+                    .join(format!("concord-sound-autotest-{}", self.args.run_id));
+                let _ = std::fs::create_dir_all(&d);
+                d
+            })
+            .clone()
     }
 
     fn snd_play(&mut self, app: &mut App, id: SoundId) {
@@ -152,7 +163,9 @@ impl Auto {
 
     /// Two seconds between plays (the hub's gap per person, and the app's own click gap).
     fn snd_can_play(&self) -> bool {
-        self.sound.last_play.is_none_or(|t| t.elapsed() > Duration::from_millis(2400))
+        self.sound
+            .last_play
+            .is_none_or(|t| t.elapsed() > Duration::from_millis(2400))
     }
 
     pub(super) fn run_sound_a(&mut self, app: &mut App) -> Option<i32> {
@@ -164,16 +177,28 @@ impl Auto {
                     if let Some(e) = app.voice.error.clone() {
                         return self.fail(&format!("voice join failed: {e}"));
                     }
-                    return if self.waited(60) { self.fail("voice join took too long") } else { None };
+                    return if self.waited(60) {
+                        self.fail("voice join took too long")
+                    } else {
+                        None
+                    };
                 }
                 if !app.sb.supported {
-                    return if self.waited(20) { self.fail("the hub reports no soundboard") } else { None };
+                    return if self.waited(20) {
+                        self.fail("the hub reports no soundboard")
+                    } else {
+                        None
+                    };
                 }
                 let dir = self.snd_dir();
                 let wav = dir.join("bipe.wav");
                 std::fs::write(&wav, test_wav(0.9)).ok();
                 std::fs::write(dir.join("vorbis.ogg"), OGG).ok();
-                std::fs::write(dir.join("nao-e-audio.mp3"), b"this is plain text, not an mp3 file at all").ok();
+                std::fs::write(
+                    dir.join("nao-e-audio.mp3"),
+                    b"this is plain text, not an mp3 file at all",
+                )
+                .ok();
                 std::fs::write(dir.join("longo.wav"), test_wav(6.0)).ok();
                 if let Err(e) = app.add_sound(wav, "bipe", "🎺") {
                     return self.fail(&format!("could not start the upload: {e}"));
@@ -183,9 +208,13 @@ impl Auto {
             3 => {
                 if app.sb.uploaded_ok >= 1 && app.sb.sounds.len() == 1 {
                     let s = app.sb.sounds[0].clone();
-                    log(&format!("WAV uploaded: {:?} {} ms, {} bytes, by {}", s.name, s.duration_ms, s.size, s.uploader.username));
+                    log(&format!(
+                        "WAV uploaded: {:?} {} ms, {} bytes, by {}",
+                        s.name, s.duration_ms, s.size, s.uploader.username
+                    ));
                     // 0.9 s of tone plus the 10 ms pads, 44.1 kHz stereo (different channels) kept stereo.
-                    if !(900..=950).contains(&s.duration_ms) || s.size < 150_000 || s.emoji != "🎺" {
+                    if !(900..=950).contains(&s.duration_ms) || s.size < 150_000 || s.emoji != "🎺"
+                    {
                         return self.fail(&format!("unexpected stored sound: {s:?}"));
                     }
                     self.sound.ids.push(s.id);
@@ -203,8 +232,13 @@ impl Auto {
             4 => {
                 if app.sb.uploaded_ok >= 2 && app.sb.sounds.len() == 2 {
                     let ogg = app.sb.sounds.iter().find(|s| s.name == "vorbis").cloned();
-                    let Some(ogg) = ogg else { return self.fail("the OGG sound is not in the list") };
-                    log(&format!("OGG uploaded: {} ms, {} bytes", ogg.duration_ms, ogg.size));
+                    let Some(ogg) = ogg else {
+                        return self.fail("the OGG sound is not in the list");
+                    };
+                    log(&format!(
+                        "OGG uploaded: {} ms, {} bytes",
+                        ogg.duration_ms, ogg.size
+                    ));
                     if !(780..=900).contains(&ogg.duration_ms) {
                         return self.fail(&format!("unexpected OGG duration {}", ogg.duration_ms));
                     }
@@ -221,7 +255,7 @@ impl Auto {
             }
             5 => {
                 if let Some((false, e)) = Self::snd_message(app) {
-                    if !e.contains("Não consegui ler") {
+                    if !e.contains("Could not read") {
                         return self.fail(&format!("unexpected refusal for a text file: {e}"));
                     }
                     log(&format!("text file refused: {e}"));
@@ -235,7 +269,7 @@ impl Auto {
             }
             6 => {
                 if let Some((false, e)) = Self::snd_message(app) {
-                    if !e.contains("máximo") {
+                    if !e.contains("maximum") {
                         return self.fail(&format!("unexpected refusal for a long clip: {e}"));
                     }
                     log(&format!("6 s clip refused: {e}"));
@@ -243,7 +277,10 @@ impl Auto {
                         return self.fail("a refused upload changed the list");
                     }
                     if self.args.show.as_deref() == Some("panel") {
-                        self.goto(20, "`--show panel`: uploading more sounds for a look at the panel");
+                        self.goto(
+                            20,
+                            "`--show panel`: uploading more sounds for a look at the panel",
+                        );
                         return None;
                     }
                     self.snd_say(app, "a-ready");
@@ -262,13 +299,31 @@ impl Auto {
                 }
             }
             8 => {
-                let mine = app.sb.mixer_heard.iter().find(|h| h.0 == self.sound.ids[0]).cloned();
-                let mine_ok = if headless() { mine.is_some() } else { app.sb.played.iter().any(|p| p.0 == self.sound.ids[0] && p.2 == Heard::Playing) };
+                let mine = app
+                    .sb
+                    .mixer_heard
+                    .iter()
+                    .find(|h| h.0 == self.sound.ids[0])
+                    .cloned();
+                let mine_ok = if headless() {
+                    mine.is_some()
+                } else {
+                    app.sb
+                        .played
+                        .iter()
+                        .any(|p| p.0 == self.sound.ids[0] && p.2 == Heard::Playing)
+                };
                 if mine_ok && self.snd_saw(app, "b-heard") {
                     if let Some(h) = mine {
-                        log(&format!("my own mixer got it: rms {:.1} dBFS, peak {:.3}, {} ms", h.1, h.2, h.3));
+                        log(&format!(
+                            "my own mixer got it: rms {:.1} dBFS, peak {:.3}, {} ms",
+                            h.1, h.2, h.3
+                        ));
                         if !RMS_RANGE.contains(&h.1) {
-                            return self.fail(&format!("my mixer level {:.1} dBFS is not in {RMS_RANGE:?}", h.1));
+                            return self.fail(&format!(
+                                "my mixer level {:.1} dBFS is not in {RMS_RANGE:?}",
+                                h.1
+                            ));
                         }
                     }
                     self.snd_say(app, "a-deaf-ask");
@@ -278,7 +333,10 @@ impl Auto {
                 }
             }
             9 => {
-                let b_deaf = app.voice_members.values().any(|m| Some(m.user.id) != app.my_id() && m.deafened);
+                let b_deaf = app
+                    .voice_members
+                    .values()
+                    .any(|m| Some(m.user.id) != app.my_id() && m.deafened);
                 if self.snd_saw(app, "b-deaf") && b_deaf && self.snd_can_play() {
                     let id = self.sound.ids[0];
                     self.snd_play(app, id);
@@ -290,7 +348,10 @@ impl Auto {
             10 => {
                 if self.snd_saw(app, "b-gated") {
                     self.snd_say(app, "a-unmute-ask");
-                    self.goto(11, "B heard nothing while deafened; asked B to mute the soundboard");
+                    self.goto(
+                        11,
+                        "B heard nothing while deafened; asked B to mute the soundboard",
+                    );
                 } else if self.waited(40) {
                     return self.fail("B did not confirm the deafen gate");
                 }
@@ -307,7 +368,11 @@ impl Auto {
             12 => {
                 if self.snd_saw(app, "b-muted-ok") {
                     app.sb.message = None;
-                    app.backend.send(Cmd::Sound(SoundCmd::Rename { id: self.sound.ids[0], name: "bipe novo".into(), emoji: "🎺".into() }));
+                    app.backend.send(Cmd::Sound(SoundCmd::Rename {
+                        id: self.sound.ids[0],
+                        name: "bipe novo".into(),
+                        emoji: "🎺".into(),
+                    }));
                     self.goto(13, "renamed the first sound");
                 } else if self.waited(40) {
                     return self.fail("B did not confirm the soundboard mute");
@@ -337,7 +402,8 @@ impl Auto {
             // `--show panel`: five sounds in the panel, open, with a play every few seconds (the
             // tile flashes); no B.
             20 => {
-                const EXTRA: [(&str, &str); 3] = [("buzina", "📯"), ("aplausos", "👏"), ("risada", "😂")];
+                const EXTRA: [(&str, &str); 3] =
+                    [("buzina", "📯"), ("aplausos", "👏"), ("risada", "😂")];
                 let k = (app.sb.uploaded_ok as usize).saturating_sub(2);
                 if k < EXTRA.len() && app.sb.sounds.len() == 2 + k && !app.sb.busy {
                     let ogg = self.snd_dir().join("vorbis.ogg");
@@ -355,7 +421,14 @@ impl Auto {
                     self.sound.add_shown = true;
                     app.open_add_sound();
                     if let Some(f) = app.sb.add.as_mut() {
-                        f.path = self.sound.dir.clone().unwrap_or_default().join("vorbis.ogg").display().to_string();
+                        f.path = self
+                            .sound
+                            .dir
+                            .clone()
+                            .unwrap_or_default()
+                            .join("vorbis.ogg")
+                            .display()
+                            .to_string();
                         f.name = "novo som".into();
                         f.emoji = "🎉".into();
                     }
@@ -388,10 +461,18 @@ impl Auto {
                     if let Some(e) = app.voice.error.clone() {
                         return self.fail(&format!("voice join failed: {e}"));
                     }
-                    return if self.waited(60) { self.fail("voice join took too long") } else { None };
+                    return if self.waited(60) {
+                        self.fail("voice join took too long")
+                    } else {
+                        None
+                    };
                 }
                 if !app.sb.supported {
-                    return if self.waited(20) { self.fail("the hub reports no soundboard") } else { None };
+                    return if self.waited(20) {
+                        self.fail("the hub reports no soundboard")
+                    } else {
+                        None
+                    };
                 }
                 self.goto(3, "in voice; waiting for A's sounds");
             }
@@ -399,10 +480,17 @@ impl Auto {
                 if app.sb.sounds.len() == 2 && self.snd_saw(app, "a-ready") {
                     let names: Vec<_> = app.sb.sounds.iter().map(|s| s.name.clone()).collect();
                     log(&format!("B sees the sounds {names:?}"));
-                    if !names.contains(&"bipe".to_string()) || !names.contains(&"vorbis".to_string()) {
+                    if !names.contains(&"bipe".to_string())
+                        || !names.contains(&"vorbis".to_string())
+                    {
                         return self.fail(&format!("unexpected sounds {names:?}"));
                     }
-                    if app.sb.sounds.iter().any(|s| Some(s.uploader.id) == app.my_id()) {
+                    if app
+                        .sb
+                        .sounds
+                        .iter()
+                        .any(|s| Some(s.uploader.id) == app.my_id())
+                    {
                         return self.fail("the uploader should be A");
                     }
                     self.snd_say(app, "b-listed");
@@ -413,13 +501,19 @@ impl Auto {
             }
             4 => {
                 let probe = app.sb.mixer_heard.first().cloned();
-                if let (Some(p), true) = (app.sb.played.first().cloned(), probe.is_some() || !headless()) {
+                if let (Some(p), true) = (
+                    app.sb.played.first().cloned(),
+                    probe.is_some() || !headless(),
+                ) {
                     log(&format!("heard {p:?}; mixer probe {probe:?}"));
                     if !matches!(p.2, Heard::Playing | Heard::Downloading) {
                         return self.fail(&format!("expected the sound to play, got {:?}", p.2));
                     }
                     if let Some(h) = probe.filter(|h| !RMS_RANGE.contains(&h.1)) {
-                        return self.fail(&format!("the mixer level {:.1} dBFS is not in {RMS_RANGE:?}", h.1));
+                        return self.fail(&format!(
+                            "the mixer level {:.1} dBFS is not in {RMS_RANGE:?}",
+                            h.1
+                        ));
                     }
                     self.snd_say(app, "b-heard");
                     self.goto(5, "heard the first sound");
@@ -506,7 +600,13 @@ impl Auto {
             13 => {
                 if app.sb.sounds.iter().any(|s| s.name == "bipe novo") {
                     // Not mine: the delete must be refused.
-                    let Some(other) = app.sb.sounds.iter().find(|s| s.name == "vorbis").map(|s| s.id) else {
+                    let Some(other) = app
+                        .sb
+                        .sounds
+                        .iter()
+                        .find(|s| s.name == "vorbis")
+                        .map(|s| s.id)
+                    else {
                         return self.fail("the second sound is gone too early");
                     };
                     app.sb.message = None;
@@ -518,7 +618,7 @@ impl Auto {
             }
             14 => {
                 if let Some((false, e)) = Self::snd_message(app) {
-                    if !e.contains("Só quem enviou") {
+                    if !e.contains("Only the uploader") {
                         return self.fail(&format!("unexpected refusal: {e}"));
                     }
                     log(&format!("delete of A's sound refused: {e}"));
@@ -559,7 +659,9 @@ fn mono_wav(rate: u32, secs: f32, f: impl Fn(f32) -> f32) -> Vec<u8> {
     let n = (secs * rate as f32) as usize;
     let mut data = Vec::with_capacity(n * 2);
     for i in 0..n {
-        data.extend_from_slice(&((f(i as f32 / rate as f32).clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+        data.extend_from_slice(
+            &((f(i as f32 / rate as f32).clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes(),
+        );
     }
     let mut v = Vec::with_capacity(44 + data.len());
     v.extend_from_slice(b"RIFF");
@@ -593,41 +695,69 @@ impl Auto {
                     if let Some(e) = app.voice.error.clone() {
                         return self.fail(&format!("voice join failed: {e}"));
                     }
-                    return if self.waited(60) { self.fail("voice join took too long") } else { None };
+                    return if self.waited(60) {
+                        self.fail("voice join took too long")
+                    } else {
+                        None
+                    };
                 }
                 if !app.sb.supported {
-                    return if self.waited(20) { self.fail("the hub reports no soundboard") } else { None };
+                    return if self.waited(20) {
+                        self.fail("the hub reports no soundboard")
+                    } else {
+                        None
+                    };
                 }
                 self.sound.base = app.sb.sounds.len();
                 let dir = self.snd_dir();
                 // 20 s: tone bursts at 1-5 s, 8-12 s (both quiet) and 15-19 s (loud).
                 let burst = |t: f32| match t {
-                    t if (1.0..5.0).contains(&t) || (8.0..12.0).contains(&t) => (t * 440.0 * std::f32::consts::TAU).sin() * 0.15,
-                    t if (15.0..19.0).contains(&t) => (t * 523.0 * std::f32::consts::TAU).sin() * 0.6,
+                    t if (1.0..5.0).contains(&t) || (8.0..12.0).contains(&t) => {
+                        (t * 440.0 * std::f32::consts::TAU).sin() * 0.15
+                    }
+                    t if (15.0..19.0).contains(&t) => {
+                        (t * 523.0 * std::f32::consts::TAU).sin() * 0.6
+                    }
                     _ => 0.0,
                 };
                 std::fs::write(dir.join("rajadas.wav"), mono_wav(16_000, 20.0, burst)).ok();
                 // 11 minutes (8 kHz mono, 10 MB): over the editor's 10 minute limit.
-                std::fs::write(dir.join("longo.wav"), mono_wav(8_000, 660.0, |t| (t * 200.0 * std::f32::consts::TAU).sin() * 0.1)).ok();
+                std::fs::write(
+                    dir.join("longo.wav"),
+                    mono_wav(8_000, 660.0, |t| {
+                        (t * 200.0 * std::f32::consts::TAU).sin() * 0.1
+                    }),
+                )
+                .ok();
                 app.open_add_sound();
                 app.trim_choose(dir.join("rajadas.wav"));
                 self.goto(3, "reading the 20 s file in the add dialog");
             }
             3 => {
-                let Some(ed) = app.trim_editor() else { return self.fail("the add dialog is gone") };
+                let Some(ed) = app.trim_editor() else {
+                    return self.fail("the add dialog is gone");
+                };
                 if let Some(e) = ed.error.clone() {
                     return self.fail(&format!("the editor could not read the file: {e}"));
                 }
                 if ed.ready() {
                     let dur = ed.duration();
                     let default = ed.sel;
-                    log(&format!("editor read the file: {dur:.2} s; default selection {:.2}..{:.2} s", default.start, default.end));
+                    log(&format!(
+                        "editor read the file: {dur:.2} s; default selection {:.2}..{:.2} s",
+                        default.start, default.end
+                    ));
                     if !(19.9..=20.1).contains(&dur) {
                         return self.fail(&format!("unexpected duration {dur}"));
                     }
                     // The loud burst (15-19 s) must be inside the default 5 s.
-                    if (default.len() - 5.0).abs() > 0.01 || default.start > 15.05 || default.end < 18.95 {
-                        return self.fail(&format!("the default selection {default:?} does not hold the loudest burst"));
+                    if (default.len() - 5.0).abs() > 0.01
+                        || default.start > 15.05
+                        || default.end < 18.95
+                    {
+                        return self.fail(&format!(
+                            "the default selection {default:?} does not hold the loudest burst"
+                        ));
                     }
                     // However it is asked, the selection stays within 5 s and the file.
                     ed.set_selection(8.0, 20.0);
@@ -637,7 +767,10 @@ impl Auto {
                     ed.set_selection(8.5, 11.7);
                     ed.fade_in = true;
                     ed.fade_out = true;
-                    log(&format!("selected {:.2}..{:.2} s", ed.sel.start, ed.sel.end));
+                    log(&format!(
+                        "selected {:.2}..{:.2} s",
+                        ed.sel.start, ed.sel.end
+                    ));
                     app.trim_preview();
                     self.goto(4, "asked for the preview (silent)");
                 } else if self.waited(40) {
@@ -645,7 +778,9 @@ impl Auto {
                 }
             }
             4 => {
-                let Some(ed) = app.trim_editor() else { return self.fail("the add dialog is gone") };
+                let Some(ed) = app.trim_editor() else {
+                    return self.fail("the add dialog is gone");
+                };
                 if let Some(e) = ed.preview_error.clone() {
                     return self.fail(&format!("preview failed: {e}"));
                 }
@@ -653,9 +788,12 @@ impl Auto {
                     let ms = ed.last_preview_ms;
                     log(&format!("preview clip is {ms} ms"));
                     if !(3_150..=3_250).contains(&ms) {
-                        return self.fail(&format!("the previewed clip is {ms} ms, expected about 3200"));
+                        return self.fail(&format!(
+                            "the previewed clip is {ms} ms, expected about 3200"
+                        ));
                     }
-                    if let Err(e) = app.trim_submit(&format!("trecho {}", self.args.run_id), "🎺") {
+                    if let Err(e) = app.trim_submit(&format!("trecho {}", self.args.run_id), "🎺")
+                    {
                         return self.fail(&format!("could not upload the selection: {e}"));
                     }
                     self.goto(5, "uploading the selection");
@@ -665,10 +803,25 @@ impl Auto {
             }
             5 => {
                 if app.sb.uploaded_ok >= 1 && app.sb.sounds.len() == self.sound.base + 1 {
-                    let Some(s) = app.sb.sounds.iter().filter(|s| s.name == format!("trecho {}", self.args.run_id)).max_by_key(|s| s.id).cloned() else { return self.fail("the uploaded sound is not in the list") };
-                    log(&format!("selection uploaded: {:?} {} ms, {} bytes", s.name, s.duration_ms, s.size));
+                    let Some(s) = app
+                        .sb
+                        .sounds
+                        .iter()
+                        .filter(|s| s.name == format!("trecho {}", self.args.run_id))
+                        .max_by_key(|s| s.id)
+                        .cloned()
+                    else {
+                        return self.fail("the uploaded sound is not in the list");
+                    };
+                    log(&format!(
+                        "selection uploaded: {:?} {} ms, {} bytes",
+                        s.name, s.duration_ms, s.size
+                    ));
                     if !(3_100..=3_300).contains(&s.duration_ms) || s.size > 400_000 {
-                        return self.fail(&format!("the hub stored {} ms / {} bytes, expected about 3.2 s", s.duration_ms, s.size));
+                        return self.fail(&format!(
+                            "the hub stored {} ms / {} bytes, expected about 3.2 s",
+                            s.duration_ms, s.size
+                        ));
                     }
                     if app.sb.add.is_some() {
                         return self.fail("the dialog should have closed after the upload");
@@ -685,10 +838,12 @@ impl Auto {
                 }
             }
             6 => {
-                let Some(ed) = app.trim_editor() else { return self.fail("the add dialog is gone") };
+                let Some(ed) = app.trim_editor() else {
+                    return self.fail("the add dialog is gone");
+                };
                 if let Some(e) = ed.error.clone() {
                     log(&format!("11 minute file refused: {e}"));
-                    if !e.contains("10 minutos") {
+                    if !e.contains("10 minutes") {
                         return self.fail(&format!("unexpected refusal: {e}"));
                     }
                     if self.args.show.as_deref() == Some("trim") {

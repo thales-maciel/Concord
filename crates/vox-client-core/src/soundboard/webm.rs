@@ -99,20 +99,22 @@ pub struct WebmOpus {
 impl WebmOpus {
     /// Read up to the first cluster and find the Opus track. The decoder's header is returned too.
     pub fn open(mut source: Box<dyn MediaSource>) -> Result<(Self, OpusHead), ProcessError> {
-        source.rewind().map_err(|_| unsupported("não consegui ler o arquivo"))?;
+        source
+            .rewind()
+            .map_err(|_| unsupported("could not read file"))?;
         let mut rd: Rd = BufReader::with_capacity(64 * 1024, source);
-        let bad = |why: &str| unsupported(format!("WebM/Matroska inválido ({why})"));
+        let bad = |why: &str| unsupported(format!("Invalid WebM/Matroska ({why})"));
         // The EBML header, then the segment: the tracks come before the first cluster.
-        let first = read_header(&mut rd).map_err(|_| bad("sem cabeçalho"))?;
+        let first = read_header(&mut rd).map_err(|_| bad("missing header"))?;
         if first.id != ID_EBML {
-            return Err(bad("sem cabeçalho"));
+            return Err(bad("missing header"));
         }
-        skip(&mut rd, first.size).map_err(|_| bad("cabeçalho EBML"))?;
+        skip(&mut rd, first.size).map_err(|_| bad("EBML header"))?;
         let mut tracks: Vec<TrackInfo> = Vec::new();
         loop {
             let h = match read_header(&mut rd) {
                 Ok(h) => h,
-                Err(Stop::Eof) => return Err(unsupported("WebM/Matroska sem áudio")),
+                Err(Stop::Eof) => return Err(unsupported("WebM/Matroska has no audio")),
                 Err(Stop::Bad(w)) => return Err(bad(w)),
             };
             match h.id {
@@ -133,7 +135,9 @@ impl WebmOpus {
                 ID_CODEC_ID => {
                     let v = read_bytes(&mut rd, h.size, MAX_SMALL).map_err(|_| bad("codec"))?;
                     if let Some(t) = tracks.last_mut() {
-                        t.codec = String::from_utf8_lossy(&v).trim_end_matches('\0').to_string();
+                        t.codec = String::from_utf8_lossy(&v)
+                            .trim_end_matches('\0')
+                            .to_string();
                     }
                 }
                 ID_CODEC_PRIVATE => {
@@ -147,16 +151,30 @@ impl WebmOpus {
                 _ => skip(&mut rd, h.size).map_err(|_| bad("elemento"))?,
             }
         }
-        let opus = tracks.iter().find(|t| t.codec == "A_OPUS" && (t.kind == TRACK_AUDIO || t.kind == 0));
+        let opus = tracks
+            .iter()
+            .find(|t| t.codec == "A_OPUS" && (t.kind == TRACK_AUDIO || t.kind == 0));
         let Some(track) = opus else {
-            let other = tracks.iter().find(|t| t.kind == TRACK_AUDIO).map(|t| t.codec.clone());
+            let other = tracks
+                .iter()
+                .find(|t| t.kind == TRACK_AUDIO)
+                .map(|t| t.codec.clone());
             return Err(match other {
-                Some(c) => unsupported(format!("codec não suportado em WebM/Matroska: {c}; só Opus")),
-                None => unsupported("WebM/Matroska sem áudio"),
+                Some(c) => unsupported(format!(
+                    "unsupported codec in WebM/Matroska: {c}; Opus only"
+                )),
+                None => unsupported("WebM/Matroska has no audio"),
             });
         };
         let head = OpusHead::parse(&track.private)?;
-        let reader = Self { rd, track: track.number, ready: VecDeque::new(), held: None, ended: None, ts: 0 };
+        let reader = Self {
+            rd,
+            track: track.number,
+            ready: VecDeque::new(),
+            held: None,
+            ended: None,
+            ts: 0,
+        };
         Ok((reader, head))
     }
 
@@ -197,7 +215,7 @@ impl WebmOpus {
             // Masters entered by reading on.
             ID_SEGMENT | ID_CLUSTER | ID_BLOCK_GROUP => Ok(()),
             ID_SIMPLE_BLOCK | ID_BLOCK => {
-                let size = h.size.ok_or(Stop::Bad("bloco sem tamanho"))?;
+                let size = h.size.ok_or(Stop::Bad("block without size"))?;
                 if size > MAX_BLOCK {
                     return skip(&mut self.rd, h.size);
                 }
@@ -235,7 +253,8 @@ impl WebmOpus {
         let n = frames.len();
         for (i, f) in frames.into_iter().enumerate() {
             self.ts += 1;
-            let p = Packet::new_from_boxed_slice(self.track as u32, self.ts, 0, f.into_boxed_slice());
+            let p =
+                Packet::new_from_boxed_slice(self.track as u32, self.ts, 0, f.into_boxed_slice());
             if i + 1 == n {
                 self.held = Some(p);
             } else {
@@ -254,7 +273,7 @@ fn io_stop(e: std::io::Error) -> Stop {
     if e.kind() == std::io::ErrorKind::UnexpectedEof {
         Stop::Eof
     } else {
-        Stop::Bad("erro de leitura")
+        Stop::Bad("read error")
     }
 }
 
@@ -269,7 +288,7 @@ fn read_header(rd: &mut Rd) -> Result<Header, Stop> {
     let b0 = read_u8(rd)?;
     let id_len = b0.leading_zeros() as usize + 1;
     if b0 == 0 || id_len > 4 {
-        return Err(Stop::Bad("id inválido"));
+        return Err(Stop::Bad("invalid id"));
     }
     let mut id = b0 as u32;
     for _ in 1..id_len {
@@ -278,7 +297,7 @@ fn read_header(rd: &mut Rd) -> Result<Header, Stop> {
     // The size: 1 to 8 bytes, marker removed; all ones = unknown.
     let s0 = read_u8(rd)?;
     if s0 == 0 {
-        return Err(Stop::Bad("tamanho inválido"));
+        return Err(Stop::Bad("invalid size"));
     }
     let len = s0.leading_zeros() as usize + 1;
     let mut size = (s0 as u64) & (0xFF >> len);
@@ -288,7 +307,10 @@ fn read_header(rd: &mut Rd) -> Result<Header, Stop> {
         all_ones &= b == 0xFF;
         size = size << 8 | b as u64;
     }
-    Ok(Header { id, size: if all_ones { None } else { Some(size) } })
+    Ok(Header {
+        id,
+        size: if all_ones { None } else { Some(size) },
+    })
 }
 
 /// A variable-length integer at the start of `b`: (value with the marker removed, bytes used).
@@ -308,16 +330,16 @@ fn read_vint(b: &[u8]) -> Option<(u64, usize)> {
 
 /// Skip an element's data (an unknown size is only valid for masters, which are never skipped).
 fn skip(rd: &mut Rd, size: Option<u64>) -> Result<(), Stop> {
-    let n = size.ok_or(Stop::Bad("elemento sem tamanho"))?;
+    let n = size.ok_or(Stop::Bad("element without size"))?;
     if n > i64::MAX as u64 / 2 {
-        return Err(Stop::Bad("tamanho absurdo"));
+        return Err(Stop::Bad("unreasonable size"));
     }
     rd.seek_relative(n as i64).map_err(io_stop)
 }
 
 /// Read `size` bytes (at most `cap`). A file that ends first is a clean end.
 fn read_bytes(rd: &mut Rd, size: Option<u64>, cap: u64) -> Result<Vec<u8>, Stop> {
-    let n = size.ok_or(Stop::Bad("elemento sem tamanho"))?;
+    let n = size.ok_or(Stop::Bad("element without size"))?;
     if n > cap {
         return Err(Stop::Bad("elemento grande demais"));
     }
@@ -336,18 +358,20 @@ fn read_uint(rd: &mut Rd, size: Option<u64>) -> Result<u64, Stop> {
 
 fn read_int(rd: &mut Rd, size: Option<u64>) -> Result<i64, Stop> {
     let b = read_bytes(rd, size, 8)?;
-    let Some(&first) = b.first() else { return Ok(0) };
+    let Some(&first) = b.first() else {
+        return Ok(0);
+    };
     let init = if first & 0x80 != 0 { -1i64 } else { 0 };
     Ok(b.iter().fold(init, |a, &x| a << 8 | x as i64))
 }
 
 /// The packets of a block body, by lacing type (0 none, 1 Xiph, 2 fixed-size, 3 EBML).
 fn split_laces(lacing: u8, body: &[u8]) -> Result<Vec<Vec<u8>>, Stop> {
-    let bad = Stop::Bad("lacing inválido");
+    let bad = Stop::Bad("invalid lacing");
     if lacing == 0 {
         return Ok(vec![body.to_vec()]);
     }
-    let count = *body.first().ok_or(Stop::Bad("lacing inválido"))? as usize + 1;
+    let count = *body.first().ok_or(Stop::Bad("invalid lacing"))? as usize + 1;
     if count > MAX_LACES {
         return Err(bad);
     }
@@ -358,7 +382,7 @@ fn split_laces(lacing: u8, body: &[u8]) -> Result<Vec<Vec<u8>>, Stop> {
             for _ in 0..count - 1 {
                 let mut n = 0usize;
                 loop {
-                    let b = *body.get(pos).ok_or(Stop::Bad("lacing inválido"))?;
+                    let b = *body.get(pos).ok_or(Stop::Bad("invalid lacing"))?;
                     pos += 1;
                     n += b as usize;
                     if b != 255 {
@@ -373,9 +397,14 @@ fn split_laces(lacing: u8, body: &[u8]) -> Result<Vec<Vec<u8>>, Stop> {
             // last is what remains (so one packet has no size field at all).
             let mut prev = 0i64;
             for i in 0..count - 1 {
-                let (raw, used) = read_vint(body.get(pos..).ok_or(Stop::Bad("lacing inválido"))?).ok_or(Stop::Bad("lacing inválido"))?;
+                let (raw, used) = read_vint(body.get(pos..).ok_or(Stop::Bad("invalid lacing"))?)
+                    .ok_or(Stop::Bad("invalid lacing"))?;
                 pos += used;
-                prev = if i == 0 { raw as i64 } else { prev + raw as i64 - ((1i64 << (7 * used - 1)) - 1) };
+                prev = if i == 0 {
+                    raw as i64
+                } else {
+                    prev + raw as i64 - ((1i64 << (7 * used - 1)) - 1)
+                };
                 if prev < 0 {
                     return Err(bad);
                 }
@@ -390,14 +419,21 @@ fn split_laces(lacing: u8, body: &[u8]) -> Result<Vec<Vec<u8>>, Stop> {
             sizes.extend(std::iter::repeat_n(rest / count, count - 1));
         }
     }
-    let data = body.get(pos..).ok_or(Stop::Bad("lacing inválido"))?;
+    let data = body.get(pos..).ok_or(Stop::Bad("invalid lacing"))?;
     let used: usize = sizes.iter().sum();
-    let last = data.len().checked_sub(used).ok_or(Stop::Bad("lacing inválido"))?;
+    let last = data
+        .len()
+        .checked_sub(used)
+        .ok_or(Stop::Bad("invalid lacing"))?;
     sizes.push(last);
     let mut out = Vec::with_capacity(count);
     let mut at = 0usize;
     for n in sizes {
-        out.push(data.get(at..at + n).ok_or(Stop::Bad("lacing inválido"))?.to_vec());
+        out.push(
+            data.get(at..at + n)
+                .ok_or(Stop::Bad("invalid lacing"))?
+                .to_vec(),
+        );
         at += n;
     }
     Ok(out)
@@ -499,19 +535,40 @@ mod tests {
         let want = |sizes: &[usize]| {
             let all = b"aaabbcccc";
             let mut at = 0;
-            sizes.iter().map(|&n| { at += n; (all[at - n..at].to_vec(), 0u32) }).collect::<Vec<_>>()
+            sizes
+                .iter()
+                .map(|&n| {
+                    at += n;
+                    (all[at - n..at].to_vec(), 0u32)
+                })
+                .collect::<Vec<_>>()
         };
-        let one = |blk: Vec<u8>| packets(&file(&opus_track(1), &el(ID_CLUSTER, &el(ID_SIMPLE_BLOCK, &blk)))).0;
+        let one = |blk: Vec<u8>| {
+            packets(&file(
+                &opus_track(1),
+                &el(ID_CLUSTER, &el(ID_SIMPLE_BLOCK, &blk)),
+            ))
+            .0
+        };
         assert_eq!(one(xiph), want(&[3, 2, 4]));
         assert_eq!(one(ebml), want(&[3, 2, 4]));
-        assert_eq!(one(fixed), vec![(b"aa".to_vec(), 0), (b"bb".to_vec(), 0), (b"cc".to_vec(), 0)]);
+        assert_eq!(
+            one(fixed),
+            vec![
+                (b"aa".to_vec(), 0),
+                (b"bb".to_vec(), 0),
+                (b"cc".to_vec(), 0)
+            ]
+        );
     }
 
     #[test]
     fn unknown_sizes_and_other_codecs() {
         // A live stream: the segment and the cluster have unknown size (all ones).
         let mut f = el(ID_EBML, &[]);
-        f.extend([0x18, 0x53, 0x80, 0x67, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+        f.extend([
+            0x18, 0x53, 0x80, 0x67, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        ]);
         f.extend(el(ID_TRACKS, &opus_track(1)));
         f.extend([0x1F, 0x43, 0xB6, 0x75, 0xFF]);
         f.extend(el(ID_SIMPLE_BLOCK, &block(1, 0x80, b"live")));

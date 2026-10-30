@@ -220,12 +220,12 @@ pub enum EncoderBackend {
 /// (WebRTC congestion control lowering the bitrate through `EncoderControl::set_bitrate`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DegradationPreference {
-    /// "Priorizar nitidez": below a bits-per-pixel threshold, lower the frame rate first
+    /// "Prioritize sharpness": below a bits-per-pixel threshold, lower the frame rate first
     /// (60 -> 30 -> 20 -> 15) so every frame keeps its detail; restored with hysteresis when the
     /// bandwidth comes back.
     #[default]
     Sharpness,
-    /// "Priorizar fluidez": keep the frame rate, accept softer frames.
+    /// "Prioritize smoothness": keep the frame rate, accept softer frames.
     Smoothness,
 }
 
@@ -419,7 +419,8 @@ pub fn available_encoders() -> Vec<EncoderBackend> {
 
 pub mod gpu;
 pub use gpu::{
-    CandidateStatus, EncoderCandidate, EncoderKind, GpuInfo, GpuVendor, RankedCandidate, SelfTestResult, TestOutcome,
+    CandidateStatus, EncoderCandidate, EncoderKind, GpuInfo, GpuVendor, RankedCandidate,
+    SelfTestResult, TestOutcome,
 };
 
 /// Hardware display adapters (DXGI order; software adapters skipped). Cheap (a few ms).
@@ -436,7 +437,10 @@ pub fn encoder_candidates(gpus: &[GpuInfo]) -> Vec<EncoderCandidate> {
 /// Self-test every candidate (in the given order, which must be static order, see
 /// [`gpu::should_test`]), on the calling thread: about half a second per hardware candidate.
 /// `on_result` gets each result as soon as it is known.
-pub fn self_test_encoders(cands: &[EncoderCandidate], on_result: &mut dyn FnMut(&SelfTestResult)) -> Vec<SelfTestResult> {
+pub fn self_test_encoders(
+    cands: &[EncoderCandidate],
+    on_result: &mut dyn FnMut(&SelfTestResult),
+) -> Vec<SelfTestResult> {
     imp::self_test_encoders(cands, on_result)
 }
 
@@ -458,7 +462,8 @@ pub fn start_video_encoded_with_preview(
     preview: Option<(&ScreenPreview, FrameCallback)>,
 ) -> Result<EncodedVideoCapture> {
     let attach = preview.map(|(p, cb)| imp::PreviewAttach::new(&p.inner, cb));
-    imp::start_video_encoded(target, cfg, on_frame, attach).map(|inner| EncodedVideoCapture { inner })
+    imp::start_video_encoded(target, cfg, on_frame, attach)
+        .map(|inner| EncodedVideoCapture { inner })
 }
 
 // ---------- Screen preview tap (v0.3, item 8a) ----------
@@ -485,7 +490,12 @@ pub struct PreviewConfig {
 
 impl Default for PreviewConfig {
     fn default() -> Self {
-        Self { on: false, fps: 5, max_width: 640, max_height: 360 }
+        Self {
+            on: false,
+            fps: 5,
+            max_width: 640,
+            max_height: 360,
+        }
     }
 }
 
@@ -734,7 +744,13 @@ impl CameraMode {
 
     /// "1280×720 · 30 fps (MJPEG)".
     pub fn label(&self) -> String {
-        format!("{}×{} · {} fps ({})", self.width, self.height, fps_text(self.fps()), self.subtype.label())
+        format!(
+            "{}×{} · {} fps ({})",
+            self.width,
+            self.height,
+            fps_text(self.fps()),
+            self.subtype.label()
+        )
     }
 }
 
@@ -813,21 +829,21 @@ impl CameraControlId {
         Self::ALL.into_iter().find(|c| c.key() == k)
     }
 
-    /// Portuguese name for the settings.
+    /// English name for the settings.
     pub fn label_pt(self) -> &'static str {
         match self {
-            CameraControlId::Brightness => "Brilho",
-            CameraControlId::Contrast => "Contraste",
-            CameraControlId::Saturation => "Saturação",
-            CameraControlId::Sharpness => "Nitidez",
-            CameraControlId::Gamma => "Gama",
-            CameraControlId::WhiteBalance => "Balanço de branco",
-            CameraControlId::Backlight => "Compensação de luz de fundo",
-            CameraControlId::Exposure => "Exposição",
-            CameraControlId::Gain => "Ganho",
-            CameraControlId::Focus => "Foco",
-            CameraControlId::Zoom => "Zoom óptico",
-            CameraControlId::ExposurePriority => "Exposição pode reduzir os quadros",
+            CameraControlId::Brightness => "Brightness",
+            CameraControlId::Contrast => "Contrast",
+            CameraControlId::Saturation => "Saturation",
+            CameraControlId::Sharpness => "Sharpness",
+            CameraControlId::Gamma => "Gamma",
+            CameraControlId::WhiteBalance => "White balance",
+            CameraControlId::Backlight => "Backlight compensation",
+            CameraControlId::Exposure => "Exposure",
+            CameraControlId::Gain => "Gain",
+            CameraControlId::Focus => "Focus",
+            CameraControlId::Zoom => "Optical zoom",
+            CameraControlId::ExposurePriority => "Exposure may lower the frame rate",
         }
     }
 }
@@ -870,7 +886,9 @@ impl CameraControl {
         match self.id {
             CameraControlId::Exposure => exposure_text(v),
             CameraControlId::WhiteBalance => format!("{v} K"),
-            _ if self.is_toggle() => (if v > self.min { "ligada" } else { "desligada" }).to_string(),
+            _ if self.is_toggle() => {
+                (if v > self.min { "ligada" } else { "desligada" }).to_string()
+            }
             _ => v.to_string(),
         }
     }
@@ -898,7 +916,11 @@ pub fn exposure_text(log2_seconds: i32) -> String {
 /// `fps` frames per second. DirectShow exposure is log2 seconds (C920: -11..-2), but some drivers
 /// report the UVC absolute time in 100 µs units instead (positive ranges like 3..2047).
 pub fn exposure_for_fps(c: &CameraControl, fps: f32) -> i32 {
-    let fps = if fps.is_finite() && fps >= 1.0 { fps } else { 30.0 };
+    let fps = if fps.is_finite() && fps >= 1.0 {
+        fps
+    } else {
+        30.0
+    };
     let want = if c.min < 0 || c.max <= 10 {
         // log2(1 / fps), rounded down: 30 fps -> -5 (1/32 s), 60 -> -6, 15 -> -4.
         (1.0 / fps).log2().floor() as i32
@@ -907,7 +929,11 @@ pub fn exposure_for_fps(c: &CameraControl, fps: f32) -> i32 {
     };
     // On the driver's grid without going over (`snap` rounds to the nearest step).
     let v = c.snap(want);
-    if v > want && v - c.step.max(1) >= c.min { v - c.step.max(1) } else { v }
+    if v > want && v - c.step.max(1) >= c.min {
+        v - c.step.max(1)
+    } else {
+        v
+    }
 }
 
 /// The modes worth offering in a menu: one per size and format, at its highest frame rate
@@ -916,7 +942,10 @@ pub fn exposure_for_fps(c: &CameraControl, fps: f32) -> i32 {
 pub fn camera_mode_menu(modes: &[CameraMode]) -> Vec<CameraMode> {
     let mut best: Vec<CameraMode> = Vec::new();
     for m in modes {
-        match best.iter_mut().find(|b| b.width == m.width && b.height == m.height && b.subtype == m.subtype) {
+        match best
+            .iter_mut()
+            .find(|b| b.width == m.width && b.height == m.height && b.subtype == m.subtype)
+        {
             Some(b) if m.fps_milli > b.fps_milli => *b = *m,
             Some(_) => {}
             None => best.push(*m),
@@ -933,7 +962,14 @@ pub fn sort_camera_modes(v: &mut Vec<CameraMode>) {
         CameraSubtype::Yuy2 => 1,
         CameraSubtype::Mjpg => 2,
     };
-    v.sort_by_key(|m| (std::cmp::Reverse(m.width as u64 * m.height as u64), std::cmp::Reverse(m.width), std::cmp::Reverse(m.fps_milli), rank(m.subtype)));
+    v.sort_by_key(|m| {
+        (
+            std::cmp::Reverse(m.width as u64 * m.height as u64),
+            std::cmp::Reverse(m.width),
+            std::cmp::Reverse(m.fps_milli),
+            rank(m.subtype),
+        )
+    });
     v.dedup();
 }
 
@@ -994,7 +1030,12 @@ pub struct CameraTransform {
 
 impl Default for CameraTransform {
     fn default() -> Self {
-        Self { mirror_preview: true, mirror_others: false, rotation: CameraRotation::None, zoom_pct: 100 }
+        Self {
+            mirror_preview: true,
+            mirror_others: false,
+            rotation: CameraRotation::None,
+            zoom_pct: 100,
+        }
     }
 }
 
@@ -1030,7 +1071,9 @@ pub fn crop_rect(src_w: u32, src_h: u32, zoom_pct: u32) -> (u32, u32, u32, u32) 
 
 /// Fit (w, h) inside (max_w, max_h) keeping the aspect, never enlarging, even sizes.
 pub fn fit_inside(w: u32, h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
-    let s = (max_w as f64 / w.max(1) as f64).min(max_h as f64 / h.max(1) as f64).min(1.0);
+    let s = (max_w as f64 / w.max(1) as f64)
+        .min(max_h as f64 / h.max(1) as f64)
+        .min(1.0);
     let ow = ((w as f64 * s) as u32) & !1;
     let oh = ((h as f64 * s) as u32) & !1;
     (ow.max(2), oh.max(2))
@@ -1040,7 +1083,13 @@ pub fn fit_inside(w: u32, h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
 /// box (`max_w` x `max_h`) takes the orientation of the turned picture, so a 720p camera rotated
 /// 90 degrees comes out 720 x 1280 (same pixel budget) and a portrait camera turned upright
 /// comes out 1280 x 720.
-pub fn camera_geometry(src_w: u32, src_h: u32, t: &CameraTransform, max_w: u32, max_h: u32) -> CameraGeometry {
+pub fn camera_geometry(
+    src_w: u32,
+    src_h: u32,
+    t: &CameraTransform,
+    max_w: u32,
+    max_h: u32,
+) -> CameraGeometry {
     let swap = t.rotation.swaps_axes();
     let (fw, fh) = if swap { (src_h, src_w) } else { (src_w, src_h) };
     let (long, short) = (max_w.max(max_h), max_w.min(max_h));
@@ -1049,7 +1098,10 @@ pub fn camera_geometry(src_w: u32, src_h: u32, t: &CameraTransform, max_w: u32, 
         (true, true) => (long, short),
         (true, false) => (short, long),
     };
-    CameraGeometry { src: crop_rect(src_w, src_h, t.zoom_pct), out: fit_inside(fw, fh, bw, bh) }
+    CameraGeometry {
+        src: crop_rect(src_w, src_h, t.zoom_pct),
+        out: fit_inside(fw, fh, bw, bh),
+    }
 }
 
 /// Decides when the camera has slowed down because the room is dark: cameras with automatic
@@ -1081,7 +1133,10 @@ impl LowLightDetector {
     pub fn update(&mut self, dt: f32, fps: f32, requested: f32, auto_exposure: bool) -> bool {
         self.age += dt;
         if !auto_exposure || requested <= 0.0 {
-            *self = Self { age: self.age, ..Self::default() };
+            *self = Self {
+                age: self.age,
+                ..Self::default()
+            };
             return false;
         }
         if self.age <= Self::GRACE_SECS {
@@ -1212,7 +1267,10 @@ impl CameraCapture {
 /// `device` is a [`CameraInfo::id`] or friendly name. Runs on its own STA thread and blocks until
 /// the dialog is closed; changes made there go straight to the device (a running capture sees
 /// them after [`CameraCapture::refresh_controls`]).
-pub fn show_camera_settings_dialog(device: &str, title: &str) -> std::result::Result<(), CameraError> {
+pub fn show_camera_settings_dialog(
+    device: &str,
+    title: &str,
+) -> std::result::Result<(), CameraError> {
     imp::camera_property_pages(device, Some(title)).map(|_| ())
 }
 
@@ -1245,8 +1303,13 @@ pub fn start_camera_encoded(
     on_frame: EncodedCallback,
     on_preview: Option<FrameCallback>,
 ) -> std::result::Result<CameraCapture, CameraError> {
-    imp::start_camera(device, cfg, imp::CameraOutput::Encoded(on_frame), on_preview)
-        .map(|inner| CameraCapture { inner })
+    imp::start_camera(
+        device,
+        cfg,
+        imp::CameraOutput::Encoded(on_frame),
+        on_preview,
+    )
+    .map(|inner| CameraCapture { inner })
 }
 
 /// Webcam -> NV12 frames on the CPU (software-encoder fallback), plus the optional preview.
@@ -1305,13 +1368,22 @@ impl ThumbnailGrabber {
 
     /// One frame of `target`, scaled to fit inside `max_width` x `max_height` (aspect kept, never
     /// enlarged). A minimized window gives `CaptureError::Stopped`.
-    pub fn grab(&mut self, target: VideoTarget, max_width: u32, max_height: u32) -> Result<RgbaImage> {
+    pub fn grab(
+        &mut self,
+        target: VideoTarget,
+        max_width: u32,
+        max_height: u32,
+    ) -> Result<RgbaImage> {
         self.inner.grab(target, max_width, max_height)
     }
 }
 
 /// [`ThumbnailGrabber::grab`] with a one-off device. Prefer a [`ThumbnailGrabber`] for many.
-pub fn capture_thumbnail(target: VideoTarget, max_width: u32, max_height: u32) -> Result<RgbaImage> {
+pub fn capture_thumbnail(
+    target: VideoTarget,
+    max_width: u32,
+    max_height: u32,
+) -> Result<RgbaImage> {
     ThumbnailGrabber::new()?.grab(target, max_width, max_height)
 }
 
@@ -1506,6 +1578,8 @@ mod imp {
     pub struct EncodedInner;
     pub struct CameraInner;
 
+    // Unsupported-platform stub: callbacks are kept for API compatibility but never invoked.
+    #[allow(dead_code)]
     pub enum CameraOutput {
         Encoded(EncodedCallback),
         Raw(FrameCallback),
@@ -1566,12 +1640,21 @@ mod imp {
         })
     }
 
-    pub fn camera_property_pages(_: &str, _: Option<&str>) -> std::result::Result<u32, CameraError> {
-        Err(CameraError { fault: CameraFault::Unsupported, detail: "vox-capture only supports Windows".into() })
+    pub fn camera_property_pages(
+        _: &str,
+        _: Option<&str>,
+    ) -> std::result::Result<u32, CameraError> {
+        Err(CameraError {
+            fault: CameraFault::Unsupported,
+            detail: "vox-capture only supports Windows".into(),
+        })
     }
 
     pub fn camera_diagnostics(_: &str) -> std::result::Result<String, CameraError> {
-        Err(CameraError { fault: CameraFault::Unsupported, detail: "vox-capture only supports Windows".into() })
+        Err(CameraError {
+            fault: CameraFault::Unsupported,
+            detail: "vox-capture only supports Windows".into(),
+        })
     }
 
     pub fn list_cameras() -> Result<Vec<CameraInfo>> {
@@ -1635,7 +1718,12 @@ mod imp {
     pub fn list_windows() -> Result<Vec<WindowInfo>> {
         unsupported()
     }
-    pub fn start_video(_: VideoTarget, _: VideoConfig, _: FrameCallback, _: Option<PreviewAttach>) -> Result<VideoInner> {
+    pub fn start_video(
+        _: VideoTarget,
+        _: VideoConfig,
+        _: FrameCallback,
+        _: Option<PreviewAttach>,
+    ) -> Result<VideoInner> {
         unsupported()
     }
     pub fn start_audio(_: AudioTarget, _: AudioCallback) -> Result<AudioInner> {
@@ -1650,7 +1738,10 @@ mod imp {
     pub fn encoder_candidates(_: &[GpuInfo]) -> Vec<EncoderCandidate> {
         vec![EncoderCandidate::software()]
     }
-    pub fn self_test_encoders(_: &[EncoderCandidate], _: &mut dyn FnMut(&SelfTestResult)) -> Vec<SelfTestResult> {
+    pub fn self_test_encoders(
+        _: &[EncoderCandidate],
+        _: &mut dyn FnMut(&SelfTestResult),
+    ) -> Vec<SelfTestResult> {
         Vec::new()
     }
     pub fn start_video_encoded(
@@ -1673,7 +1764,10 @@ mod idr_gate_tests {
         assert!(g.pass(true) && g.pass(false) && g.pass(false));
         // A frame was lost: the P-frames still in the encoder's pipeline are held...
         assert!(g.arm());
-        assert!(!g.arm(), "a second loss while waiting asks for no second IDR");
+        assert!(
+            !g.arm(),
+            "a second loss while waiting asks for no second IDR"
+        );
         assert!(!g.pass(false) && !g.pass(false) && !g.pass(false));
         assert!(g.awaiting());
         // ...until the IDR, which goes out and reopens the gate.
@@ -1689,7 +1783,17 @@ mod camera_config_tests {
     use super::*;
 
     fn ctl(min: i32, max: i32, step: i32, default: i32, can_auto: bool) -> CameraControl {
-        CameraControl { id: CameraControlId::Brightness, min, max, step, default, value: default, auto: false, can_auto, can_manual: true }
+        CameraControl {
+            id: CameraControlId::Brightness,
+            min,
+            max,
+            step,
+            default,
+            value: default,
+            auto: false,
+            can_auto,
+            can_manual: true,
+        }
     }
 
     #[test]
@@ -1736,13 +1840,26 @@ mod camera_config_tests {
 
     #[test]
     fn mode_labels() {
-        let m = CameraMode { width: 1280, height: 720, fps_milli: 30_000, subtype: CameraSubtype::Mjpg };
+        let m = CameraMode {
+            width: 1280,
+            height: 720,
+            fps_milli: 30_000,
+            subtype: CameraSubtype::Mjpg,
+        };
         assert_eq!(m.label(), "1280×720 · 30 fps (MJPEG)");
-        let m = CameraMode { width: 640, height: 480, fps_milli: 7_500, subtype: CameraSubtype::Yuy2 };
+        let m = CameraMode {
+            width: 640,
+            height: 480,
+            fps_milli: 7_500,
+            subtype: CameraSubtype::Yuy2,
+        };
         assert_eq!(m.label(), "640×480 · 7.5 fps (YUY2)");
         assert_eq!(fps_text(29.97), "30");
         assert_eq!(CameraSubtype::from_name("mjpeg"), Some(CameraSubtype::Mjpg));
-        assert_eq!(CameraSubtype::from_name(CameraSubtype::Nv12.name()), Some(CameraSubtype::Nv12));
+        assert_eq!(
+            CameraSubtype::from_name(CameraSubtype::Nv12.name()),
+            Some(CameraSubtype::Nv12)
+        );
     }
 
     #[test]
@@ -1756,19 +1873,43 @@ mod camera_config_tests {
         assert_eq!(exposure_for_fps(&e, 15.0), -4);
         assert_eq!(exposure_for_fps(&e, 0.0), -5, "unknown rate: 30 fps");
         // Clamped into the camera's range.
-        let short = CameraControl { min: -13, max: -7, ..e };
+        let short = CameraControl {
+            min: -13,
+            max: -7,
+            ..e
+        };
         assert_eq!(exposure_for_fps(&short, 30.0), -7);
         // Drivers that report 100 µs units: 1/30 s = 333, never rounded up past it.
-        let units = CameraControl { min: 3, max: 2047, step: 1, default: 166, ..e };
+        let units = CameraControl {
+            min: 3,
+            max: 2047,
+            step: 1,
+            default: 166,
+            ..e
+        };
         assert_eq!(exposure_for_fps(&units, 30.0), 333);
-        let coarse = CameraControl { min: 0, max: 2000, step: 50, ..units };
-        assert_eq!(exposure_for_fps(&coarse, 30.0), 300, "333 is between steps: the shorter one");
+        let coarse = CameraControl {
+            min: 0,
+            max: 2000,
+            step: 50,
+            ..units
+        };
+        assert_eq!(
+            exposure_for_fps(&coarse, 30.0),
+            300,
+            "333 is between steps: the shorter one"
+        );
         assert_eq!(exposure_for_fps(&coarse, 60.0), 150);
     }
 
     #[test]
     fn mode_menu_keeps_the_fastest_per_size_and_format() {
-        let m = |width, height, fps_milli, subtype| CameraMode { width, height, fps_milli, subtype };
+        let m = |width, height, fps_milli, subtype| CameraMode {
+            width,
+            height,
+            fps_milli,
+            subtype,
+        };
         use CameraSubtype::*;
         // What a C920 lists (a part of it), in the driver's order.
         let raw = vec![
@@ -1833,32 +1974,61 @@ mod camera_config_tests {
 
     #[test]
     fn rotation_swaps_the_box_and_the_zoom_never_resizes() {
-        let t = |rotation, zoom_pct| CameraTransform { rotation, zoom_pct, ..Default::default() };
+        let t = |rotation, zoom_pct| CameraTransform {
+            rotation,
+            zoom_pct,
+            ..Default::default()
+        };
         let g = camera_geometry(1280, 720, &t(CameraRotation::None, 100), 1280, 720);
         assert_eq!((g.out, g.src), ((1280, 720), (0, 0, 1280, 720)));
         // A quarter turn: portrait, same pixel budget.
         for rot in [CameraRotation::Cw90, CameraRotation::Cw270] {
-            assert_eq!(camera_geometry(1280, 720, &t(rot, 100), 1280, 720).out, (720, 1280));
+            assert_eq!(
+                camera_geometry(1280, 720, &t(rot, 100), 1280, 720).out,
+                (720, 1280)
+            );
         }
-        assert_eq!(camera_geometry(1280, 720, &t(CameraRotation::Cw180, 100), 1280, 720).out, (1280, 720));
+        assert_eq!(
+            camera_geometry(1280, 720, &t(CameraRotation::Cw180, 100), 1280, 720).out,
+            (1280, 720)
+        );
         // Smaller send size: 360p rotated is 360x640.
-        assert_eq!(camera_geometry(1280, 720, &t(CameraRotation::Cw90, 100), 640, 360).out, (360, 640));
+        assert_eq!(
+            camera_geometry(1280, 720, &t(CameraRotation::Cw90, 100), 640, 360).out,
+            (360, 640)
+        );
         // Never enlarged: a 640x360 camera stays 640x360 inside a 1280x720 box.
-        assert_eq!(camera_geometry(640, 360, &t(CameraRotation::None, 100), 1280, 720).out, (640, 360));
+        assert_eq!(
+            camera_geometry(640, 360, &t(CameraRotation::None, 100), 1280, 720).out,
+            (640, 360)
+        );
         // The zoom only moves the source rectangle.
         let z = camera_geometry(1280, 720, &t(CameraRotation::Cw90, 200), 1280, 720);
         assert_eq!(z.out, (720, 1280));
         assert_eq!(z.src, (320, 180, 960, 540));
         // A portrait camera (phone as webcam) rotated 90 comes out landscape.
-        assert_eq!(camera_geometry(720, 1280, &t(CameraRotation::Cw90, 100), 1280, 720).out, (1280, 720));
+        assert_eq!(
+            camera_geometry(720, 1280, &t(CameraRotation::Cw90, 100), 1280, 720).out,
+            (1280, 720)
+        );
         assert_eq!(CameraRotation::from_degrees(450), CameraRotation::Cw90);
         assert_eq!(CameraRotation::from_degrees(45), CameraRotation::None);
-        assert!(CameraTransform::default().mirror_preview && !CameraTransform::default().mirror_others);
+        assert!(
+            CameraTransform::default().mirror_preview && !CameraTransform::default().mirror_others
+        );
     }
 
     /// Feed one sample per second.
-    fn feed(d: &mut LowLightDetector, secs: u32, fps: f32, requested: f32, auto: bool) -> Vec<bool> {
-        (0..secs).map(|_| d.update(1.0, fps, requested, auto)).collect()
+    fn feed(
+        d: &mut LowLightDetector,
+        secs: u32,
+        fps: f32,
+        requested: f32,
+        auto: bool,
+    ) -> Vec<bool> {
+        (0..secs)
+            .map(|_| d.update(1.0, fps, requested, auto))
+            .collect()
     }
 
     #[test]
@@ -1947,8 +2117,18 @@ mod camera_config_tests {
 
         let main = Arc::new(Mutex::new(Probe::default()));
         let prev = Arc::new(Mutex::new(Probe::default()));
-        let cfg = CameraConfig { width: 640, height: 360, fps: 30, ..Default::default() };
-        let cap = match start_camera_raw(SYNTHETIC_CAMERA_ID, cfg, probe_cb(main.clone()), Some(probe_cb(prev.clone()))) {
+        let cfg = CameraConfig {
+            width: 640,
+            height: 360,
+            fps: 30,
+            ..Default::default()
+        };
+        let cap = match start_camera_raw(
+            SYNTHETIC_CAMERA_ID,
+            cfg,
+            probe_cb(main.clone()),
+            Some(probe_cb(prev.clone())),
+        ) {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("no GPU video processor here ({e}); skipping");
@@ -1981,7 +2161,12 @@ mod camera_config_tests {
         const TR: usize = 1;
         const BL: usize = 2;
         const BR: usize = 3;
-        let t = |mp, mo, deg, zoom| CameraTransform { mirror_preview: mp, mirror_others: mo, rotation: CameraRotation::from_degrees(deg), zoom_pct: zoom };
+        let t = |mp, mo, deg, zoom| CameraTransform {
+            mirror_preview: mp,
+            mirror_others: mo,
+            rotation: CameraRotation::from_degrees(deg),
+            zoom_pct: zoom,
+        };
         if !cap.transform_supported() {
             eprintln!("this GPU's video processor cannot mirror / rotate; skipping the orientation checks");
             return;
@@ -2004,8 +2189,16 @@ mod camera_config_tests {
             let portrait = deg == 90 || deg == 270;
             assert_eq!(ms.0 < ms.1, portrait, "size {ms:?} for {deg} deg");
             assert_eq!(ps.0 < ps.1, portrait, "preview size {ps:?} for {deg} deg");
-            assert_eq!(dark_corner(md), Some(want_main), "others: mirror={mo} rot={deg}: {md:?}");
-            assert_eq!(dark_corner(pd), Some(want_prev), "preview: mirror={mp} rot={deg}: {pd:?}");
+            assert_eq!(
+                dark_corner(md),
+                Some(want_main),
+                "others: mirror={mo} rot={deg}: {md:?}"
+            );
+            assert_eq!(
+                dark_corner(pd),
+                Some(want_prev),
+                "preview: mirror={mp} rot={deg}: {pd:?}"
+            );
         }
         // Zoom 2x crops the corner box away without changing the size.
         let (ms0, _, _, _) = look(&cap, t(false, false, 0, 100));
@@ -2022,7 +2215,12 @@ mod camera_config_tests {
     #[test]
     #[cfg(windows)]
     fn synthetic_camera_controls_apply_and_reset() {
-        let cfg = CameraConfig { width: 640, height: 360, fps: 30, ..Default::default() };
+        let cfg = CameraConfig {
+            width: 640,
+            height: 360,
+            fps: 30,
+            ..Default::default()
+        };
         let cap = match start_camera_preview(SYNTHETIC_CAMERA_ID, cfg, Box::new(|_| {})) {
             Ok(c) => c,
             Err(e) => {
@@ -2030,7 +2228,12 @@ mod camera_config_tests {
                 return;
             }
         };
-        let get = |id| cap.controls().into_iter().find(|c| c.id == id).expect("control listed");
+        let get = |id| {
+            cap.controls()
+                .into_iter()
+                .find(|c| c.id == id)
+                .expect("control listed")
+        };
         let wait = |ok: &dyn Fn() -> bool| {
             let t0 = std::time::Instant::now();
             while !ok() && t0.elapsed() < std::time::Duration::from_secs(3) {
@@ -2043,9 +2246,13 @@ mod camera_config_tests {
         assert!(ex.auto && ex.can_auto);
         cap.set_control(CameraControlId::Exposure, -3, false);
         cap.set_control(CameraControlId::Brightness, 300, false);
-        wait(&|| !get(CameraControlId::Exposure).auto && get(CameraControlId::Brightness).value == 255);
+        wait(&|| {
+            !get(CameraControlId::Exposure).auto && get(CameraControlId::Brightness).value == 255
+        });
         assert_eq!(get(CameraControlId::Exposure).value, -3);
         cap.reset_controls();
-        wait(&|| get(CameraControlId::Exposure).auto && get(CameraControlId::Brightness).value == 128);
+        wait(&|| {
+            get(CameraControlId::Exposure).auto && get(CameraControlId::Brightness).value == 128
+        });
     }
 }

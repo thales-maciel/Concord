@@ -49,7 +49,14 @@ fn main() {
     impl App {
         fn report(&mut self, stage: &str) {
             let s = self.meter.sample();
-            println!("{stage:<28} cpu={:.2}% ({:.1}% core) ws={:.1}MB private={:.1}MB handles={}", s.cpu_pct, s.cpu_pct_core, mb(s.working_set_bytes), mb(s.private_bytes), s.handles);
+            println!(
+                "{stage:<28} cpu={:.2}% ({:.1}% core) ws={:.1}MB private={:.1}MB handles={}",
+                s.cpu_pct,
+                s.cpu_pct_core,
+                mb(s.working_set_bytes),
+                mb(s.private_bytes),
+                s.handles
+            );
         }
     }
 
@@ -59,7 +66,9 @@ fn main() {
                 return;
             }
             self.report("start");
-            let attrs = Window::default_attributes().with_title("vox d3d probe").with_inner_size(PhysicalSize::new(1600, 900));
+            let attrs = Window::default_attributes()
+                .with_title("vox d3d probe")
+                .with_inner_size(PhysicalSize::new(1600, 900));
             let window = Rc::new(el.create_window(attrs).expect("window"));
             self.report("window");
             let hwnd = match window.window_handle().unwrap().as_raw() {

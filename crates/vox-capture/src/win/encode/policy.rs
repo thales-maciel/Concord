@@ -86,7 +86,7 @@ pub(crate) fn bitrate_change_significant(current: u32, new: u32) -> bool {
 // fps-first degradation
 // ---------------------------------------------------------------------------------------------
 
-/// Bits per pixel per frame below which "Priorizar nitidez" drops the frame rate a step.
+/// Bits per pixel per frame below which "Prioritize sharpness" drops the frame rate a step.
 /// Chosen from `docs/quality-bench.md`: on the hard synthetic scenes, worst-frame SSIM falls off
 /// a cliff below ~0.05 bpp at 1080p (H.264, low-latency CBR), while halving the frame rate
 /// doubles the per-frame budget.
@@ -126,7 +126,8 @@ impl FpsPolicy {
 
     /// Candidate rates, highest first: the configured rate, then the ladder below it.
     fn candidates(&self) -> impl Iterator<Item = u32> + '_ {
-        std::iter::once(self.nominal).chain(LADDER.iter().copied().filter(move |&f| f < self.nominal))
+        std::iter::once(self.nominal)
+            .chain(LADDER.iter().copied().filter(move |&f| f < self.nominal))
     }
 
     fn bpp(target_bps: u32, w: u32, h: u32, fps: u32) -> f64 {
@@ -257,12 +258,16 @@ mod tests {
             ts += 1_000_000; // 1 fps (static window)
         }
         assert_eq!(r.encoder_bitrate(1_000_000), 3_000_000); // capped at 3x
-        // Motion resumes at 30 fps: within a handful of frames the budget is back near nominal.
+                                                             // Motion resumes at 30 fps: within a handful of frames the budget is back near nominal.
         for _ in 0..8 {
             r.on_frame(ts);
             ts += 33_333;
         }
-        assert!(r.encoder_bitrate(1_000_000) < 1_300_000, "{}", r.encoder_bitrate(1_000_000));
+        assert!(
+            r.encoder_bitrate(1_000_000) < 1_300_000,
+            "{}",
+            r.encoder_bitrate(1_000_000)
+        );
         // Never below the target (input faster than nominal is the pacer's problem).
         for _ in 0..30 {
             r.on_frame(ts);
@@ -315,7 +320,11 @@ mod tests {
             now += 1_000_000;
         }
         assert_eq!(*seen.last().unwrap(), 60);
-        let steps: Vec<u32> = seen.windows(2).filter(|w| w[0] != w[1]).map(|w| w[1]).collect();
+        let steps: Vec<u32> = seen
+            .windows(2)
+            .filter(|w| w[0] != w[1])
+            .map(|w| w[1])
+            .collect();
         assert_eq!(steps, vec![30, 60]);
     }
 
@@ -325,7 +334,10 @@ mod tests {
         assert_eq!(p.update(1_000_000, W, H, 0), 15);
         let good = bps_for(RESTORE_BPP * 1.2, 20);
         assert_eq!(p.update(good, W, H, 1_000_000), 15);
-        assert_eq!(p.update(bps_for(DEGRADE_BPP * 1.2, 20), W, H, 2_500_000), 15); // dip
+        assert_eq!(
+            p.update(bps_for(DEGRADE_BPP * 1.2, 20), W, H, 2_500_000),
+            15
+        ); // dip
         assert_eq!(p.update(good, W, H, 4_200_000), 15); // hold restarted at 4.2 s
         assert_eq!(p.update(good, W, H, 7_100_000), 15);
         assert_eq!(p.update(good, W, H, 7_200_000), 20);

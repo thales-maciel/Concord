@@ -50,7 +50,11 @@ pub fn root_dir() -> PathBuf {
     // macOS: ~/Library/Application Support/concord/host (the temp dir would lose the server).
     #[cfg(target_os = "macos")]
     if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home).join("Library").join("Application Support").join("concord").join("host");
+        return PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join("concord")
+            .join("host");
     }
     std::env::temp_dir().join("concord").join("host")
 }
@@ -102,8 +106,8 @@ fn toml_str(s: &str) -> String {
 
 fn write_config(dir: &Path, c: &HostedConfig) -> Result<()> {
     let text = format!(
-        "# Servidor hospedado pelo app concord (\"Criar / abrir servidor\"). O app reescreve este\n\
-         # arquivo toda vez que abre o servidor (portas e endereço público).\n\
+        "# Server hosted by the concord app (\"Create or open server\"). The app rewrites this\n\
+         # file each time it opens the server (ports and public address).\n\
          server_name = {name}\n\
          server_password = {password}\n\
          bind = \"{bind_ip}:{hub}\"\n\
@@ -139,13 +143,22 @@ fn read_config(dir: &Path) -> Result<HostedConfig> {
         bail!("{} has no config.toml", dir.display());
     }
     let cfg = crate::config::load_or_create(dir)?;
-    let (bind_ip, hub) = cfg.bind.rsplit_once(':').and_then(|(ip, p)| Some((ip.parse().ok()?, p.parse().ok()?))).unwrap_or((Ipv4Addr::UNSPECIFIED, 7890));
+    let (bind_ip, hub) = cfg
+        .bind
+        .rsplit_once(':')
+        .and_then(|(ip, p)| Some((ip.parse().ok()?, p.parse().ok()?)))
+        .unwrap_or((Ipv4Addr::UNSPECIFIED, 7890));
     Ok(HostedConfig {
         name: cfg.server_name,
         password: cfg.server_password,
         bind_ip,
         public_host: cfg.public_host,
-        ports: PortBlock { hub, signal: cfg.livekit.signal_port, rtc_tcp: cfg.livekit.rtc_tcp_port, rtc_udp: cfg.livekit.rtc_udp_port },
+        ports: PortBlock {
+            hub,
+            signal: cfg.livekit.signal_port,
+            rtc_tcp: cfg.livekit.rtc_tcp_port,
+            rtc_udp: cfg.livekit.rtc_udp_port,
+        },
         api_key: cfg.livekit.api_key,
         api_secret: cfg.livekit.api_secret,
         use_external_ip: cfg.livekit.use_external_ip,
@@ -155,19 +168,33 @@ fn read_config(dir: &Path) -> Result<HostedConfig> {
 /// The hosted server in `dir`.
 pub fn load(dir: &Path) -> Result<Hosted> {
     let c = read_config(dir)?;
-    let id = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    Ok(Hosted { id, dir: dir.to_path_buf(), name: c.name, ports: c.ports, password: c.password })
+    let id = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    Ok(Hosted {
+        id,
+        dir: dir.to_path_buf(),
+        name: c.name,
+        ports: c.ports,
+        password: c.password,
+    })
 }
 
 /// Every hosted server under `root`, oldest first.
 pub fn list(root: &Path) -> Vec<Hosted> {
-    let Ok(rd) = std::fs::read_dir(root) else { return Vec::new() };
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
     let mut out: Vec<(std::time::SystemTime, Hosted)> = rd
         .flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()) && e.file_name() != "bin")
         .filter_map(|e| {
             let h = load(&e.path()).ok()?;
-            let made = e.metadata().and_then(|m| m.created()).unwrap_or(std::time::UNIX_EPOCH);
+            let made = e
+                .metadata()
+                .and_then(|m| m.created())
+                .unwrap_or(std::time::UNIX_EPOCH);
             Some((made, h))
         })
         .collect();
@@ -175,13 +202,13 @@ pub fn list(root: &Path) -> Vec<Hosted> {
     out.into_iter().map(|(_, h)| h).collect()
 }
 
-/// "Criar servidor": a new folder with a fresh config (random password and LiveKit keys; the
+/// "Create server": a new folder with a fresh config (random password and LiveKit keys; the
 /// ports are chosen when it opens).
 pub fn create(root: &Path, name: &str) -> Result<Hosted> {
     let name = name.trim();
     let n = name.chars().count();
     if n == 0 || n > NAME_MAX || name.chars().any(char::is_control) {
-        bail!("O nome do servidor precisa ter de 1 a {NAME_MAX} caracteres.");
+        bail!("Server names must contain 1 to {NAME_MAX} characters.");
     }
     let id = random_hex::<4>();
     let dir = root.join(&id);
@@ -238,8 +265,12 @@ impl RunOptions {
         RunOptions {
             net: if offline { NetMode::Off } else { NetMode::Real },
             mapper: None,
-            bind_ip: env("VOX_HOST_BIND").and_then(|v| v.parse().ok()).unwrap_or(Ipv4Addr::UNSPECIFIED),
-            first_block: env("VOX_HOST_FIRST_BLOCK").and_then(|v| v.parse().ok()).unwrap_or(0),
+            bind_ip: env("VOX_HOST_BIND")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(Ipv4Addr::UNSPECIFIED),
+            first_block: env("VOX_HOST_FIRST_BLOCK")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
             livekit_bin,
             lan_override,
         }
@@ -357,13 +388,21 @@ impl HostRunner {
             .map_err(|e| tracing::error!("host: cannot start a thread: {e}"))
             .ok();
         if thread.is_none() {
-            status.lock().unwrap_or_else(|e| e.into_inner()).phase = Phase::Failed("Não foi possível iniciar o servidor.".into());
+            status.lock().unwrap_or_else(|e| e.into_inner()).phase =
+                Phase::Failed("Could not start the server.".into());
         }
-        HostRunner { status, stop_tx, thread }
+        HostRunner {
+            status,
+            stop_tx,
+            thread,
+        }
     }
 
     pub fn status(&self) -> HostStatus {
-        self.status.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Still starting or serving (not stopped, not failed).
@@ -403,11 +442,19 @@ fn set(status: &Mutex<HostStatus>, wake: &Wake, f: impl FnOnce(&mut HostStatus))
     wake();
 }
 
-fn run(h: Hosted, opts: RunOptions, status: Arc<Mutex<HostStatus>>, stop_rx: watch::Receiver<bool>, wake: Wake) {
+fn run(
+    h: Hosted,
+    opts: RunOptions,
+    status: Arc<Mutex<HostStatus>>,
+    stop_rx: watch::Receiver<bool>,
+    wake: Wake,
+) {
     let rt = match crate::runtime() {
         Ok(rt) => rt,
         Err(e) => {
-            set(&status, &wake, |s| s.phase = Phase::Failed(format!("Não foi possível iniciar o servidor: {e}")));
+            set(&status, &wake, |s| {
+                s.phase = Phase::Failed(format!("Could not start the server: {e}"))
+            });
             return;
         }
     };
@@ -416,7 +463,9 @@ fn run(h: Hosted, opts: RunOptions, status: Arc<Mutex<HostStatus>>, stop_rx: wat
         Ok(()) => set(&status, &wake, |s| s.phase = Phase::Stopped),
         Err(e) => {
             tracing::error!(id = h.id, "host: server failed: {e:#}");
-            set(&status, &wake, |s| s.phase = Phase::Failed(format!("{e:#}")));
+            set(&status, &wake, |s| {
+                s.phase = Phase::Failed(format!("{e:#}"))
+            });
         }
     }
     // Leftover tasks (LiveKit's log forwarders...) end with the runtime.
@@ -431,11 +480,21 @@ struct NetFound {
     mapped: Option<Mapped>,
 }
 
-async fn serve(h: &Hosted, opts: RunOptions, status: Arc<Mutex<HostStatus>>, stop_rx: watch::Receiver<bool>, wake: Wake) -> Result<()> {
+async fn serve(
+    h: &Hosted,
+    opts: RunOptions,
+    status: Arc<Mutex<HostStatus>>,
+    stop_rx: watch::Receiver<bool>,
+    wake: Wake,
+) -> Result<()> {
     let mut cfg = read_config(&h.dir)?;
     let bind_ip = opts.bind_ip;
-    let block = ports::choose(Some(cfg.ports), opts.first_block, |b| ports::block_is_free(b, bind_ip))
-        .context("Nenhum conjunto de portas livre neste computador (7890 a 8790). Feche outros programas e tente de novo.")?;
+    let block = ports::choose(Some(cfg.ports), opts.first_block, |b| {
+        ports::block_is_free(b, bind_ip)
+    })
+    .context(
+        "No free port block on this computer (7890 to 8790). Close other programs and try again.",
+    )?;
     if block != cfg.ports {
         tracing::info!(saved = ?cfg.ports, chosen = ?block, "host: using another port block (the saved one is busy or below the first block allowed)");
     }
@@ -444,7 +503,11 @@ async fn serve(h: &Hosted, opts: RunOptions, status: Arc<Mutex<HostStatus>>, sto
         s.ports = Some(block);
         s.lan = lan;
         s.phase = Phase::Network;
-        s.upnp = if opts.net == NetMode::Off && opts.mapper.is_none() { UpnpState::Off } else { UpnpState::Searching };
+        s.upnp = if opts.net == NetMode::Off && opts.mapper.is_none() {
+            UpnpState::Off
+        } else {
+            UpnpState::Searching
+        };
     });
 
     let found = network(&opts, block, lan, &status, &wake).await;
@@ -456,7 +519,11 @@ async fn serve(h: &Hosted, opts: RunOptions, status: Arc<Mutex<HostStatus>>, sto
     let st = status.lock().unwrap_or_else(|e| e.into_inner()).clone();
     cfg.ports = block;
     cfg.bind_ip = bind_ip;
-    cfg.public_host = st.public_ipv4().map(|ip| ip.to_string()).or_else(|| lan.map(|(ip, _)| ip.to_string())).unwrap_or_else(|| "127.0.0.1".into());
+    cfg.public_host = st
+        .public_ipv4()
+        .map(|ip| ip.to_string())
+        .or_else(|| lan.map(|(ip, _)| ip.to_string()))
+        .unwrap_or_else(|| "127.0.0.1".into());
     // LiveKit finds its public address by STUN itself (and keeps offering the LAN one): only
     // worth it, and only safe to ask, when the internet answered.
     cfg.use_external_ip = opts.net == NetMode::Real && st.public_ipv4().is_some();
@@ -469,7 +536,11 @@ async fn serve(h: &Hosted, opts: RunOptions, status: Arc<Mutex<HostStatus>>, sto
         bind_override: None,
     };
     let (st2, wake2) = (status.clone(), wake.clone());
-    let NetFound { mapper, local, mapped } = found;
+    let NetFound {
+        mapper,
+        local,
+        mapped,
+    } = found;
     let (undo_mapper, undo_mapped) = (mapper.clone(), mapped.clone());
     let served = crate::serve_until(hub_opts, move |server| {
         let addr = server.addr;
@@ -489,8 +560,18 @@ async fn serve(h: &Hosted, opts: RunOptions, status: Arc<Mutex<HostStatus>>, sto
 }
 
 /// Router and STUN, side by side, each bounded by [`NET_TIMEOUT`].
-async fn network(opts: &RunOptions, block: PortBlock, lan: Option<(Ipv4Addr, u8)>, status: &Arc<Mutex<HostStatus>>, wake: &Wake) -> NetFound {
-    let mut found = NetFound { mapper: None, local: lan.map(|(ip, _)| ip), mapped: None };
+async fn network(
+    opts: &RunOptions,
+    block: PortBlock,
+    lan: Option<(Ipv4Addr, u8)>,
+    status: &Arc<Mutex<HostStatus>>,
+    wake: &Wake,
+) -> NetFound {
+    let mut found = NetFound {
+        mapper: None,
+        local: lan.map(|(ip, _)| ip),
+        mapped: None,
+    };
     let real = opts.net == NetMode::Real;
     let given = opts.mapper.clone();
     let router = async move {
@@ -500,9 +581,11 @@ async fn network(opts: &RunOptions, block: PortBlock, lan: Option<(Ipv4Addr, u8)
         if !real {
             return Err("off".to_string());
         }
-        tokio::task::spawn_blocking(|| upnp::discover(NET_TIMEOUT).map(|m| Arc::new(m) as Arc<dyn PortMapper>))
-            .await
-            .unwrap_or_else(|e| Err(e.to_string()))
+        tokio::task::spawn_blocking(|| {
+            upnp::discover(NET_TIMEOUT).map(|m| Arc::new(m) as Arc<dyn PortMapper>)
+        })
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()))
     };
     let stun = async move {
         if real {
@@ -533,8 +616,8 @@ async fn network(opts: &RunOptions, block: PortBlock, lan: Option<(Ipv4Addr, u8)
                 s.reach = Some(reach);
                 s.upnp = match &mapped {
                     Some(m) if !m.ports.is_empty() => UpnpState::Mapped(m.clone()),
-                    Some(_) => UpnpState::Unavailable("o roteador recusou abrir as portas".into()),
-                    None => UpnpState::Unavailable("endereço deste PC na rede não encontrado".into()),
+                    Some(_) => UpnpState::Unavailable("the router refused to open ports".into()),
+                    None => UpnpState::Unavailable("could not find this PC's LAN address".into()),
                 };
             });
             found.local = local;
@@ -542,7 +625,15 @@ async fn network(opts: &RunOptions, block: PortBlock, lan: Option<(Ipv4Addr, u8)
             found.mapper = Some(m);
         }
         Err(why) => {
-            let reach = if real { Some(nat::classify(None, seen.map(IpAddr::V4), seen_is_mine(seen))) } else { None };
+            let reach = if real {
+                Some(nat::classify(
+                    None,
+                    seen.map(IpAddr::V4),
+                    seen_is_mine(seen),
+                ))
+            } else {
+                None
+            };
             if real {
                 tracing::info!(why, ?seen, ?reach, "host: no UPnP router");
             }
@@ -550,7 +641,11 @@ async fn network(opts: &RunOptions, block: PortBlock, lan: Option<(Ipv4Addr, u8)
                 s.stun_ip = seen;
                 s.public_v6 = v6;
                 s.reach = reach;
-                s.upnp = if real { UpnpState::Unavailable(why) } else { UpnpState::Off };
+                s.upnp = if real {
+                    UpnpState::Unavailable(why)
+                } else {
+                    UpnpState::Off
+                };
             });
         }
     }
@@ -559,7 +654,11 @@ async fn network(opts: &RunOptions, block: PortBlock, lan: Option<(Ipv4Addr, u8)
 
 /// Is `ip` on one of this PC's interfaces (a PC with its own public address)?
 fn seen_is_mine(ip: Option<Ipv4Addr>) -> bool {
-    ip.is_some_and(|ip| crate::linkpreview::ssrf::interface_addresses().iter().any(|(a, _)| *a == IpAddr::V4(ip)))
+    ip.is_some_and(|ip| {
+        crate::linkpreview::ssrf::interface_addresses()
+            .iter()
+            .any(|(a, _)| *a == IpAddr::V4(ip))
+    })
 }
 
 /// While the server runs: renew the mappings; when it is asked to stop, remove them.
@@ -595,9 +694,14 @@ async fn keep_mapped(
 }
 
 async fn cleanup(mapper: Option<Arc<dyn PortMapper>>, mapped: Option<Mapped>) {
-    let (Some(m), Some(mapped)) = (mapper, mapped) else { return };
+    let (Some(m), Some(mapped)) = (mapper, mapped) else {
+        return;
+    };
     let undo = tokio::task::spawn_blocking(move || upnp::unmap(m.as_ref(), &mapped));
-    if tokio::time::timeout(Duration::from_secs(5), undo).await.is_err() {
+    if tokio::time::timeout(Duration::from_secs(5), undo)
+        .await
+        .is_err()
+    {
         tracing::warn!("host: removing the port mappings took too long");
     }
 }
@@ -650,7 +754,10 @@ mod tests {
         use upnp::fake::FakeIgd;
         let root = tempfile::tempdir().unwrap();
         let h = create(root.path(), "Teste").unwrap();
-        let router = Arc::new(FakeIgd { wan: Some("203.0.113.7".parse().unwrap()), ..Default::default() });
+        let router = Arc::new(FakeIgd {
+            wan: Some("203.0.113.7".parse().unwrap()),
+            ..Default::default()
+        });
         let opts = RunOptions {
             net: NetMode::Off,
             mapper: Some(router.clone()),
@@ -663,38 +770,81 @@ mod tests {
         let s = wait_for(&r, "running", |s| s.phase == Phase::Running);
         let block = PortBlock::nth(6);
         assert_eq!(s.ports, Some(block));
-        assert_eq!(s.hub_addr, Some(SocketAddr::from((Ipv4Addr::LOCALHOST, block.hub))));
+        assert_eq!(
+            s.hub_addr,
+            Some(SocketAddr::from((Ipv4Addr::LOCALHOST, block.hub)))
+        );
         assert_eq!(s.reach, Some(Reach::Open));
         assert_eq!(s.public_ipv4(), Some(Ipv4Addr::new(203, 0, 113, 7)));
-        assert!(matches!(&s.upnp, UpnpState::Mapped(m) if m.complete()), "{:?}", s.upnp);
+        assert!(
+            matches!(&s.upnp, UpnpState::Mapped(m) if m.complete()),
+            "{:?}",
+            s.upnp
+        );
         assert_eq!(router.table.lock().unwrap().len(), 4);
         assert!(std::net::TcpStream::connect(s.hub_addr.unwrap()).is_ok());
         let cfg = crate::config::load_or_create(&h.dir).unwrap();
         assert_eq!(cfg.bind, format!("127.0.0.1:{}", block.hub));
-        assert_eq!((cfg.public_host.as_str(), cfg.livekit.signal_port, cfg.livekit.use_external_ip), ("203.0.113.7", block.signal, false));
+        assert_eq!(
+            (
+                cfg.public_host.as_str(),
+                cfg.livekit.signal_port,
+                cfg.livekit.use_external_ip
+            ),
+            ("203.0.113.7", block.signal, false)
+        );
         assert!(r.is_live());
         r.stop_and_wait(Duration::from_secs(10));
         assert_eq!(r.status().phase, Phase::Stopped);
-        assert!(router.table.lock().unwrap().is_empty(), "mappings removed on stop");
-        assert!(std::net::TcpStream::connect(s.hub_addr.unwrap()).is_err(), "nothing listens any more");
-        assert_eq!(load(&h.dir).unwrap().ports, block, "the ports are kept for next time");
+        assert!(
+            router.table.lock().unwrap().is_empty(),
+            "mappings removed on stop"
+        );
+        assert!(
+            std::net::TcpStream::connect(s.hub_addr.unwrap()).is_err(),
+            "nothing listens any more"
+        );
+        assert_eq!(
+            load(&h.dir).unwrap().ports,
+            block,
+            "the ports are kept for next time"
+        );
     }
 
     #[test]
     fn invites_carry_the_reachable_addresses() {
-        let h = Hosted { id: "x".into(), dir: PathBuf::new(), name: "s".into(), ports: PortBlock::DEFAULT, password: String::new() };
+        let h = Hosted {
+            id: "x".into(),
+            dir: PathBuf::new(),
+            name: "s".into(),
+            ports: PortBlock::DEFAULT,
+            password: String::new(),
+        };
         let mut s = HostStatus::new(&h);
         s.lan = Some((Ipv4Addr::new(192, 168, 0, 20), 24));
         s.router_wan = Some("203.0.113.7".parse().unwrap());
         s.stun_ip = Some(Ipv4Addr::new(203, 0, 113, 7));
         s.public_v6 = Some("2001:db8::7".parse().unwrap());
         s.reach = Some(Reach::Open);
-        assert_eq!(s.invite_addrs(), [InviteAddr::Lan(Ipv4Addr::new(192, 168, 0, 20), 24), InviteAddr::Public("203.0.113.7".parse().unwrap())]);
+        assert_eq!(
+            s.invite_addrs(),
+            [
+                InviteAddr::Lan(Ipv4Addr::new(192, 168, 0, 20), 24),
+                InviteAddr::Public("203.0.113.7".parse().unwrap())
+            ]
+        );
         // Behind CGNAT the router's address is useless; IPv6 is the way in.
         s.router_wan = Some("100.70.1.2".parse().unwrap());
-        s.reach = Some(nat::classify(s.router_wan, Some("203.0.113.7".parse().unwrap()), false));
+        s.reach = Some(nat::classify(
+            s.router_wan,
+            Some("203.0.113.7".parse().unwrap()),
+            false,
+        ));
         assert_eq!(s.public_ipv4(), Some(Ipv4Addr::new(203, 0, 113, 7)));
-        assert_eq!(s.invite_addrs().last(), Some(&InviteAddr::Public("2001:db8::7".parse().unwrap())));
+        assert_eq!(
+            s.invite_addrs().last(),
+            Some(&InviteAddr::Public("2001:db8::7".parse().unwrap()))
+        );
         // Offline: only the LAN.
         let mut s = HostStatus::new(&h);
         s.lan = Some((Ipv4Addr::LOCALHOST, 8));

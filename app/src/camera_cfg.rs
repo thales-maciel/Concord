@@ -1,26 +1,16 @@
-//! Webcam configuration (v0.6): the native format, the driver's image controls (brightness,
-//! exposure, focus...) and our own picture processing (mirror, rotation, digital zoom), saved
-//! **per camera** in `settings.json` and applied live to the running camera and the preview.
-//!
-//! - [`CameraProfile`]: one camera's saved choices, keyed by the device's symbolic link (or its
-//!   name when the link is unknown). A camera plugged into another USB port gets a new link; it
-//!   is found again by name and the entry moves to the new key.
-//! - Only what differs from the defaults is stored (controls left alone are not written, so the
-//!   camera keeps its own automatic behavior).
-//! - "Configurar câmera" (v0.8.1): a window with a big live preview (the call camera, or a
-//!   preview opened only while the window is open), the driver's controls grouped as Imagem /
-//!   Luz / Lente with Auto where the camera has it, "Priorizar fluidez" (keep 30 fps in a dim
-//!   room), format and quality, mirror / rotation / zoom, and the driver's own dialog
-//!   ("Configurações avançadas do fabricante…"). Opened from the voice bar's ⚙, my camera tile's
-//!   menu and Settings → Câmera (which keeps only a summary).
-//! - `impl App`: that window, the Settings section, and the commands that push the profile to
-//!   the backend whenever it changes.
+//! Per-camera format, driver controls, mirror, rotation and zoom settings.
+//! [`CameraProfile`] stores only deviations from defaults. Device identity uses the
+//! symbolic link, falling back to the name when a USB-port change alters that link.
+//! Changes apply live; standalone preview capture lasts only while its dialog is open.
 
 use std::collections::BTreeMap;
 
 use eframe::egui::{self, RichText};
 use serde::{Deserialize, Serialize};
-use vox_capture::{CameraAdjust, CameraControl, CameraControlId, CameraMode, CameraRotation, CameraSubtype, CameraTransform};
+use vox_capture::{
+    CameraAdjust, CameraControl, CameraControlId, CameraMode, CameraRotation, CameraSubtype,
+    CameraTransform,
+};
 use vox_client_core::golive::camera::CameraSetup;
 
 use crate::app::{App, CameraPreviewUi, ICON_CAMERA, RED};
@@ -43,11 +33,21 @@ pub struct SavedMode {
 
 impl SavedMode {
     pub fn of(m: &CameraMode) -> Self {
-        Self { width: m.width, height: m.height, fps_milli: m.fps_milli, format: m.subtype.name().to_string() }
+        Self {
+            width: m.width,
+            height: m.height,
+            fps_milli: m.fps_milli,
+            format: m.subtype.name().to_string(),
+        }
     }
 
     pub fn mode(&self) -> Option<CameraMode> {
-        Some(CameraMode { width: self.width, height: self.height, fps_milli: self.fps_milli, subtype: CameraSubtype::from_name(&self.format)? })
+        Some(CameraMode {
+            width: self.width,
+            height: self.height,
+            fps_milli: self.fps_milli,
+            subtype: CameraSubtype::from_name(&self.format)?,
+        })
     }
 }
 
@@ -64,34 +64,46 @@ pub struct SavedControl {
 pub struct CameraProfile {
     /// Friendly name (finds the camera again when its link changed).
     pub name: String,
-    /// `None` = "Automático": the closest native mode to the quality preset.
+    /// `None` = "Automatic": the closest native mode to the quality preset.
     pub mode: Option<SavedMode>,
     /// By [`CameraControlId::key`]; absent = left as the camera has it.
     pub controls: BTreeMap<String, SavedControl>,
-    /// "Espelhar minha prévia" (on by default).
+    /// "Mirror my preview" (on by default).
     pub mirror_preview: bool,
-    /// "Espelhar para os outros".
+    /// "Mirror for others".
     pub mirror_others: bool,
     /// Degrees clockwise: 0, 90, 180 or 270.
     pub rotation: u32,
     /// Digital zoom in percent, 100..=200.
     pub zoom_pct: u32,
-    /// "Priorizar fluidez" was turned on (v0.8.1). On a camera with an auto-exposure priority
+    /// "Prioritize smoothness" was turned on (v0.8.1). On a camera with an auto-exposure priority
     /// the setting itself is that control (in `controls`); without one this marks the manual
-    /// exposure as the one "Priorizar fluidez" chose.
+    /// exposure as the one "Prioritize smoothness" chose.
     pub smooth: bool,
 }
 
 impl Default for CameraProfile {
     fn default() -> Self {
-        Self { name: String::new(), mode: None, controls: BTreeMap::new(), mirror_preview: true, mirror_others: false, rotation: 0, zoom_pct: 100, smooth: false }
+        Self {
+            name: String::new(),
+            mode: None,
+            controls: BTreeMap::new(),
+            mirror_preview: true,
+            mirror_others: false,
+            rotation: 0,
+            zoom_pct: 100,
+            smooth: false,
+        }
     }
 }
 
 impl CameraProfile {
     /// Nothing differs from the defaults (then it is not stored at all).
     pub fn is_default(&self) -> bool {
-        Self { name: self.name.clone(), ..Self::default() } == *self
+        Self {
+            name: self.name.clone(),
+            ..Self::default()
+        } == *self
     }
 
     pub fn transform(&self) -> CameraTransform {
@@ -107,17 +119,28 @@ impl CameraProfile {
     pub fn adjustments(&self) -> Vec<CameraAdjust> {
         self.controls
             .iter()
-            .filter_map(|(k, c)| Some(CameraAdjust { id: CameraControlId::from_key(k)?, value: c.value, auto: c.auto }))
+            .filter_map(|(k, c)| {
+                Some(CameraAdjust {
+                    id: CameraControlId::from_key(k)?,
+                    value: c.value,
+                    auto: c.auto,
+                })
+            })
             .collect()
     }
 
     /// What the backend needs to open (or update) this camera.
     pub fn to_setup(&self) -> CameraSetup {
-        CameraSetup { mode: self.mode.as_ref().and_then(SavedMode::mode), transform: self.transform(), controls: self.adjustments() }
+        CameraSetup {
+            mode: self.mode.as_ref().and_then(SavedMode::mode),
+            transform: self.transform(),
+            controls: self.adjustments(),
+        }
     }
 
     pub fn set_control(&mut self, id: CameraControlId, value: i32, auto: bool) {
-        self.controls.insert(id.key().to_string(), SavedControl { value, auto });
+        self.controls
+            .insert(id.key().to_string(), SavedControl { value, auto });
     }
 }
 
@@ -128,20 +151,29 @@ pub struct CameraProfiles(pub BTreeMap<String, CameraProfile>);
 
 /// The key a camera is stored under: its symbolic link, else its name.
 pub fn profile_key(id: &str, name: &str) -> String {
-    if id.is_empty() { name.to_string() } else { id.to_string() }
+    if id.is_empty() {
+        name.to_string()
+    } else {
+        id.to_string()
+    }
 }
 
 impl CameraProfiles {
     /// The camera's profile: by link, else by name (the same camera on another USB port).
     pub fn get(&self, id: &str, name: &str) -> Option<&CameraProfile> {
-        self.0.get(&profile_key(id, name)).or_else(|| self.find_by_name(name).map(|k| &self.0[&k]))
+        self.0
+            .get(&profile_key(id, name))
+            .or_else(|| self.find_by_name(name).map(|k| &self.0[&k]))
     }
 
     fn find_by_name(&self, name: &str) -> Option<String> {
         if name.is_empty() {
             return None;
         }
-        self.0.iter().find(|(_, p)| p.name.eq_ignore_ascii_case(name)).map(|(k, _)| k.clone())
+        self.0
+            .iter()
+            .find(|(_, p)| p.name.eq_ignore_ascii_case(name))
+            .map(|(k, _)| k.clone())
     }
 
     /// The profile to change; created when the camera has none. A profile found by name under
@@ -168,8 +200,7 @@ impl CameraProfiles {
     }
 }
 
-
-/// The sections of "Configurar câmera", in order.
+/// The sections of "Configure camera", in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlGroup {
     Image,
@@ -178,17 +209,18 @@ pub enum ControlGroup {
 }
 
 impl ControlGroup {
-    pub const ALL: [ControlGroup; 3] = [ControlGroup::Image, ControlGroup::Light, ControlGroup::Lens];
+    pub const ALL: [ControlGroup; 3] =
+        [ControlGroup::Image, ControlGroup::Light, ControlGroup::Lens];
 
     pub fn title(self) -> &'static str {
         match self {
-            ControlGroup::Image => "Imagem",
-            ControlGroup::Light => "Luz",
-            ControlGroup::Lens => "Lente",
+            ControlGroup::Image => "Image",
+            ControlGroup::Light => "Light",
+            ControlGroup::Lens => "Lens",
         }
     }
 
-    /// The group's icon in "Configurar câmera".
+    /// The group's icon in "Configure camera".
     pub fn icon(self) -> &'static str {
         match self {
             ControlGroup::Image => ph::IMAGE,
@@ -209,12 +241,16 @@ impl ControlGroup {
 }
 
 /// The camera's controls by section; sections the camera has nothing for are left out. (The
-/// auto-exposure priority is the "Priorizar fluidez" switch, not a slider.)
+/// auto-exposure priority is the "Prioritize smoothness" switch, not a slider.)
 pub fn group_controls(controls: &[CameraControl]) -> Vec<(ControlGroup, Vec<CameraControl>)> {
     ControlGroup::ALL
         .into_iter()
         .filter_map(|g| {
-            let list: Vec<CameraControl> = g.members().iter().filter_map(|id| controls.iter().find(|c| c.id == *id).copied()).collect();
+            let list: Vec<CameraControl> = g
+                .members()
+                .iter()
+                .filter_map(|id| controls.iter().find(|c| c.id == *id).copied())
+                .collect();
             (!list.is_empty()).then_some((g, list))
         })
         .collect()
@@ -235,7 +271,7 @@ pub fn shown_setting(c: &CameraControl, saved: Option<SavedControl>) -> (i32, bo
     (c.snap(value), auto)
 }
 
-/// How "Priorizar fluidez" is done on this camera.
+/// How "Prioritize smoothness" is done on this camera.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SmoothMethod {
     /// The camera's auto-exposure priority: set to "keep the frame rate", exposure stays automatic.
@@ -258,24 +294,40 @@ pub fn smooth_method(controls: &[CameraControl]) -> SmoothMethod {
     }
 }
 
-/// The control changes that turn "Priorizar fluidez" on or off for a camera running at `fps`.
+/// The control changes that turn "Prioritize smoothness" on or off for a camera running at `fps`.
 pub fn smooth_plan(controls: &[CameraControl], fps: f32, on: bool) -> Vec<CameraAdjust> {
     let find = |id| controls.iter().find(|c| c.id == id).copied();
     match smooth_method(controls) {
         SmoothMethod::Priority => {
             let p = find(CameraControlId::ExposurePriority).expect("method checked");
-            vec![CameraAdjust { id: p.id, value: if on { p.min } else { p.max }, auto: false }]
+            vec![CameraAdjust {
+                id: p.id,
+                value: if on { p.min } else { p.max },
+                auto: false,
+            }]
         }
         SmoothMethod::ManualExposure => {
             let e = find(CameraControlId::Exposure).expect("method checked");
             if on {
-                let mut v = vec![CameraAdjust { id: e.id, value: vox_capture::exposure_for_fps(&e, fps), auto: false }];
+                let mut v = vec![CameraAdjust {
+                    id: e.id,
+                    value: vox_capture::exposure_for_fps(&e, fps),
+                    auto: false,
+                }];
                 if let Some(g) = find(CameraControlId::Gain).filter(|g| g.can_auto) {
-                    v.push(CameraAdjust { id: g.id, value: g.value, auto: true });
+                    v.push(CameraAdjust {
+                        id: g.id,
+                        value: g.value,
+                        auto: true,
+                    });
                 }
                 v
             } else if e.can_auto {
-                vec![CameraAdjust { id: e.id, value: e.value, auto: true }]
+                vec![CameraAdjust {
+                    id: e.id,
+                    value: e.value,
+                    auto: true,
+                }]
             } else {
                 Vec::new()
             }
@@ -284,16 +336,22 @@ pub fn smooth_plan(controls: &[CameraControl], fps: f32, on: bool) -> Vec<Camera
     }
 }
 
-/// Is "Priorizar fluidez" on, as the profile and the camera tell?
+/// Is "Prioritize smoothness" on, as the profile and the camera tell?
 pub fn smooth_active(controls: &[CameraControl], profile: &CameraProfile) -> bool {
     let saved = |id: CameraControlId| profile.controls.get(id.key()).copied();
     match smooth_method(controls) {
         SmoothMethod::Priority => {
-            let p = controls.iter().find(|c| c.id == CameraControlId::ExposurePriority).expect("method checked");
+            let p = controls
+                .iter()
+                .find(|c| c.id == CameraControlId::ExposurePriority)
+                .expect("method checked");
             shown_setting(p, saved(p.id)).0 == p.min
         }
         SmoothMethod::ManualExposure => {
-            let e = controls.iter().find(|c| c.id == CameraControlId::Exposure).expect("method checked");
+            let e = controls
+                .iter()
+                .find(|c| c.id == CameraControlId::Exposure)
+                .expect("method checked");
             profile.smooth && !shown_setting(e, saved(e.id)).1
         }
         SmoothMethod::Unsupported => false,
@@ -306,15 +364,26 @@ pub fn native_changes(before: &[CameraControl], after: &[CameraControl]) -> Vec<
     after
         .iter()
         .filter(|a| {
-            before.iter().find(|b| b.id == a.id).is_some_and(|b| a.auto != b.auto || (!a.auto && a.value != b.value))
+            before
+                .iter()
+                .find(|b| b.id == a.id)
+                .is_some_and(|b| a.auto != b.auto || (!a.auto && a.value != b.value))
         })
-        .map(|a| CameraAdjust { id: a.id, value: a.value, auto: a.auto })
+        .map(|a| CameraAdjust {
+            id: a.id,
+            value: a.value,
+            auto: a.auto,
+        })
         .collect()
 }
 
-/// The rate "Priorizar fluidez" aims at: what the opened mode promises, else 30.
+/// The rate "Prioritize smoothness" aims at: what the opened mode promises, else 30.
 fn target_fps(l: &CameraLiveInfo) -> f32 {
-    if l.requested >= 1.0 { l.requested } else { 30.0 }
+    if l.requested >= 1.0 {
+        l.requested
+    } else {
+        30.0
+    }
 }
 
 /// What the camera UI knows about the running camera / preview.
@@ -329,7 +398,7 @@ pub struct CamUi {
     pub dirty: bool,
     /// The low-light hint was already shown as a notice for this run of the camera.
     pub low_light_noticed: bool,
-    /// "Configurar câmera" is open.
+    /// "Configure camera" is open.
     pub window: bool,
     /// The window's picture follows the call camera (on) or a local preview (off): a change
     /// restarts the preview.
@@ -342,28 +411,42 @@ pub struct CamUi {
     pub native_error: Option<String>,
 }
 
-pub const LOW_LIGHT_TIP: &str = "Pouca luz: a câmera reduziu os quadros por segundo para clarear a imagem. Acenda uma luz ou ligue \"Priorizar fluidez\" em Configurar câmera (a engrenagem ao lado de Câmera).";
+pub const LOW_LIGHT_TIP: &str = "Low light: the camera lowered its frame rate to brighten the image. Turn on a light or enable \"Prioritize smoothness\" in Configure camera (the gear next to Camera).";
 
-const ROTATIONS: [(u32, &str); 4] = [(0, "Sem rotação"), (90, "90° (horário)"), (180, "180°"), (270, "270° (anti-horário)")];
+const ROTATIONS: [(u32, &str); 4] = [
+    (0, "No rotation"),
+    (90, "90° (clockwise)"),
+    (180, "180°"),
+    (270, "270° (counterclockwise)"),
+];
 
 /// The window's preview at most this big (16:9).
 const PREVIEW_W: f32 = 640.0;
 const PREVIEW_H: f32 = 360.0;
 
 impl App {
-    /// The camera the settings refer to: the chosen one, else the first listed (what "Padrão"
+    /// The camera the settings refer to: the chosen one, else the first listed (what "Default"
     /// opens). Empty strings when nothing is known yet.
     pub fn camera_ident(&self) -> (String, String) {
         match (&self.settings.camera_device, &self.settings.camera_name) {
             (Some(id), name) => (id.clone(), name.clone().unwrap_or_default()),
             (None, Some(name)) => (String::new(), name.clone()),
-            (None, None) => self.settings_ui.cameras.first().map(|c| (c.id.clone(), c.name.clone())).unwrap_or_default(),
+            (None, None) => self
+                .settings_ui
+                .cameras
+                .first()
+                .map(|c| (c.id.clone(), c.name.clone()))
+                .unwrap_or_default(),
         }
     }
 
     pub fn camera_profile(&self) -> CameraProfile {
         let (id, name) = self.camera_ident();
-        self.settings.camera_profiles.get(&id, &name).cloned().unwrap_or_default()
+        self.settings
+            .camera_profiles
+            .get(&id, &name)
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub fn camera_setup(&self) -> CameraSetup {
@@ -409,7 +492,12 @@ impl App {
             cam.low_light_noticed = true;
             self.notice = Some(format!("{ICON_CAMERA} {LOW_LIGHT_TIP}"));
         }
-        if self.settings_ui.cam.native_adopt_until.is_some_and(|t| std::time::Instant::now() < t) {
+        if self
+            .settings_ui
+            .cam
+            .native_adopt_until
+            .is_some_and(|t| std::time::Instant::now() < t)
+        {
             if let Some(before) = self.settings_ui.cam.native_before.clone() {
                 self.adopt_native_changes(&before, &l.controls);
             }
@@ -423,7 +511,13 @@ impl App {
         let profile = self.camera_profile();
         let todo: Vec<CameraAdjust> = native_changes(before, after)
             .into_iter()
-            .filter(|a| profile.controls.get(a.id.key()) != Some(&SavedControl { value: a.value, auto: a.auto }))
+            .filter(|a| {
+                profile.controls.get(a.id.key())
+                    != Some(&SavedControl {
+                        value: a.value,
+                        auto: a.auto,
+                    })
+            })
             .collect();
         if todo.is_empty() {
             return;
@@ -450,9 +544,9 @@ impl App {
         });
     }
 
-    // ------------------------------------------------------------ "Configurar câmera"
+    // ------------------------------------------------------------ "Configure camera"
 
-    /// Open "Configurar câmera" (the voice bar's ⚙, my camera tile's menu, Settings → Câmera).
+    /// Open "Configure camera" (the voice bar's ⚙, my camera tile's menu, Settings → Camera).
     /// The picture is the call camera when it is on, else a preview opened only while the window
     /// is open. The Settings window, when open, waits behind it.
     pub fn open_camera_window(&mut self) {
@@ -465,7 +559,7 @@ impl App {
         cam.native_error = None;
         tracing::info!(call_camera = self.camera_on(), "camera window opened");
         self.backend.send(Cmd::CameraWatch(true));
-        // Names for the picker (and which camera "Padrão" is); the formats come after the
+        // Names for the picker (and which camera "Default" is); the formats come after the
         // preview started (`camera_window_keep_preview`).
         self.backend.send(Cmd::ListCameras);
     }
@@ -502,11 +596,13 @@ impl App {
         }
     }
 
-    /// "Priorizar fluidez" on or off for the running camera (saved in its profile).
+    /// "Prioritize smoothness" on or off for the running camera (saved in its profile).
     pub fn set_camera_smooth(&mut self, on: bool) {
-        let Some(l) = self.settings_ui.cam.live.clone() else { return };
+        let Some(l) = self.settings_ui.cam.live.clone() else {
+            return;
+        };
         let plan = smooth_plan(&l.controls, target_fps(&l), on);
-        tracing::info!(on, method = ?smooth_method(&l.controls), plan = ?plan, "camera: priorizar fluidez");
+        tracing::info!(on, method = ?smooth_method(&l.controls), plan = ?plan, "camera: prioritize smoothness");
         self.edit_camera_profile(|p| {
             for a in &plan {
                 p.set_control(a.id, a.value, a.auto);
@@ -515,8 +611,8 @@ impl App {
         });
     }
 
-    /// "Restaurar padrão": every image control back to the camera's default (automatic where it
-    /// has one) and "Priorizar fluidez" off. Mirror, rotation and digital zoom stay.
+    /// "Restore defaults": every image control back to the camera's default (automatic where it
+    /// has one) and "Prioritize smoothness" off. Mirror, rotation and digital zoom stay.
     pub fn reset_camera_controls(&mut self) {
         self.edit_camera_profile(|p| {
             p.controls.clear();
@@ -528,7 +624,7 @@ impl App {
         });
     }
 
-    /// "Configurações avançadas do fabricante…".
+    /// "Advanced manufacturer settings…".
     fn open_camera_native_dialog(&mut self) {
         let cam = &mut self.settings_ui.cam;
         cam.native_open = true;
@@ -536,7 +632,10 @@ impl App {
         cam.native_before = cam.live.as_ref().map(|l| l.controls.clone());
         cam.native_adopt_until = None;
         let (id, name) = self.camera_ident();
-        self.backend.send(Cmd::CameraNativeDialog { id: (!id.is_empty()).then_some(id), name: (!name.is_empty()).then_some(name) });
+        self.backend.send(Cmd::CameraNativeDialog {
+            id: (!id.is_empty()).then_some(id),
+            name: (!name.is_empty()).then_some(name),
+        });
     }
 
     /// The driver's dialog was closed: read the controls back and take what changed.
@@ -545,11 +644,15 @@ impl App {
         cam.native_open = false;
         match res {
             Ok(()) => {
-                cam.native_adopt_until = Some(std::time::Instant::now() + std::time::Duration::from_secs(4));
+                cam.native_adopt_until =
+                    Some(std::time::Instant::now() + std::time::Duration::from_secs(4));
                 self.backend.send(Cmd::CameraRefreshControls);
                 // The window reads the controls back every second, so what the dialog changed
                 // may already be here (and the backend only reports changes).
-                if let (Some(before), Some(l)) = (self.settings_ui.cam.native_before.clone(), self.settings_ui.cam.live.clone()) {
+                if let (Some(before), Some(l)) = (
+                    self.settings_ui.cam.native_before.clone(),
+                    self.settings_ui.cam.live.clone(),
+                ) {
                     self.adopt_native_changes(&before, &l.controls);
                 }
             }
@@ -563,22 +666,37 @@ impl App {
         let current = match (&self.settings.camera_device, &self.settings.camera_name) {
             (Some(_), Some(n)) => n.clone(),
             (Some(id), None) => id.clone(),
-            _ => "Padrão (a primeira câmera)".to_string(),
+            _ => "Default (first camera)".to_string(),
         };
-        egui::ComboBox::from_id_salt(salt).width(300.0).selected_text(current).show_ui(ui, |ui| {
-            if ui.selectable_label(self.settings.camera_device.is_none(), "Padrão (a primeira câmera)").clicked() {
-                self.settings.camera_device = None;
-                self.settings.camera_name = None;
-                picked = true;
-            }
-            for c in self.settings_ui.cameras.clone() {
-                if ui.selectable_label(self.settings.camera_device.as_deref() == Some(c.id.as_str()), &c.name).clicked() {
-                    self.settings.camera_device = Some(c.id.clone());
-                    self.settings.camera_name = Some(c.name.clone());
+        egui::ComboBox::from_id_salt(salt)
+            .width(300.0)
+            .selected_text(current)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(
+                        self.settings.camera_device.is_none(),
+                        "Default (first camera)",
+                    )
+                    .clicked()
+                {
+                    self.settings.camera_device = None;
+                    self.settings.camera_name = None;
                     picked = true;
                 }
-            }
-        });
+                for c in self.settings_ui.cameras.clone() {
+                    if ui
+                        .selectable_label(
+                            self.settings.camera_device.as_deref() == Some(c.id.as_str()),
+                            &c.name,
+                        )
+                        .clicked()
+                    {
+                        self.settings.camera_device = Some(c.id.clone());
+                        self.settings.camera_name = Some(c.name.clone());
+                        picked = true;
+                    }
+                }
+            });
         if picked {
             // Another camera: its own formats, controls and processing.
             self.settings_ui.cam.live = None;
@@ -589,12 +707,12 @@ impl App {
         picked
     }
 
-    /// "Câmera" in Configurações → Vídeo: the camera, a summary and the button to "Configurar
-    /// câmera". Returns whether a setting changed.
+    /// Camera in Settings → Video: selection, summary and a Configure camera button.
+    /// Returns whether a setting changed.
     pub fn camera_section(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        forms::group(ui, "Câmera");
-        forms::row(ui, "Câmera", |ui| {
+        forms::group(ui, "Camera");
+        forms::row(ui, "Camera", |ui| {
             if self.camera_device_combo(ui, "camera_device") {
                 changed = true;
                 self.request_camera_formats();
@@ -603,25 +721,35 @@ impl App {
         if let Some(e) = &self.settings_ui.cameras_error {
             forms::note_colored(ui, format!("{} {e}", ph::WARNING), true, theme::AVISO);
         } else if self.settings_ui.cameras.is_empty() {
-            forms::note(ui, "Nenhuma câmera encontrada.", true);
+            forms::note(ui, "No cameras found.", true);
         }
         let p = self.camera_profile();
         let mut summary = vec![
-            format!("Formato: {}", p.mode.as_ref().and_then(SavedMode::mode).map_or("Automático".to_string(), |m| m.label())),
-            format!("Qualidade enviada: {}", self.settings.camera_preset.label()),
+            format!(
+                "Formato: {}",
+                p.mode
+                    .as_ref()
+                    .and_then(SavedMode::mode)
+                    .map_or("Automatic".to_string(), |m| m.label())
+            ),
+            format!("Streaming quality: {}", self.settings.camera_preset.label()),
         ];
-        let adjusted = p.controls.keys().filter(|k| *k != CameraControlId::ExposurePriority.key()).count();
+        let adjusted = p
+            .controls
+            .keys()
+            .filter(|k| *k != CameraControlId::ExposurePriority.key())
+            .count();
         if adjusted > 0 {
-            summary.push(format!("{adjusted} ajuste(s) de imagem"));
+            summary.push(format!("{adjusted} image adjustment(s)"));
         }
         if p.smooth {
-            summary.push("fluidez priorizada".into());
+            summary.push("smoothness prioritized".into());
         }
         forms::note(ui, summary.join(" · "), true);
         ui.add_space(space::XS);
         forms::indented(ui, |ui| {
-            if ui_kit::button(ui, Kind::Secondary, Some(ph::SLIDERS_HORIZONTAL), "Configurar câmera…")
-                .on_hover_text("Prévia grande, brilho, exposição, foco, balanço de branco, formato, girar e espelhar")
+            if ui_kit::button(ui, Kind::Secondary, Some(ph::SLIDERS_HORIZONTAL), "Configure camera…")
+                .on_hover_text("Large preview, brightness, exposure, focus, white balance, format, rotation and mirroring")
                 .clicked()
             {
                 self.open_camera_window();
@@ -630,7 +758,7 @@ impl App {
         changed
     }
 
-    /// The "Configurar câmera" window: the preview on top, then the camera's choices and its
+    /// The "Configure camera" window: the preview on top, then the camera's choices and its
     /// controls by group (Imagem / Luz / Lente) in a scroll, the buttons at the bottom.
     pub fn camera_window(&mut self, ctx: &egui::Context) {
         if !self.settings_ui.cam.window {
@@ -640,7 +768,7 @@ impl App {
         let mut close = false;
         let screen = ctx.content_rect();
         let size = egui::vec2(PREVIEW_W + 36.0, (screen.height() - 24.0).min(860.0));
-        let open = forms::Dialog::new("camera_window", "Configurar câmera").icon(ph::VIDEO_CAMERA).size(size).show(ctx, |ui| {
+        let open = forms::Dialog::new("camera_window", "Configure camera").icon(ph::VIDEO_CAMERA).size(size).show(ctx, |ui| {
             ui.spacing_mut().slider_width = forms::SLIDER_W;
             self.camera_window_preview_ui(ui);
             self.camera_rate_ui(ui);
@@ -660,26 +788,26 @@ impl App {
                 forms::note_colored(ui, format!("{} {e}", ph::WARNING), false, theme::AVISO);
             }
             forms::footer(ui, |ui| {
-                if ui_kit::button(ui, Kind::Secondary, None, "Fechar").clicked() {
+                if ui_kit::button(ui, Kind::Secondary, None, "Close").clicked() {
                     close = true;
                 }
                 let (id, _) = self.camera_ident();
                 let synthetic = id == vox_capture::SYNTHETIC_CAMERA_ID;
                 let native_open = self.settings_ui.cam.native_open;
-                let label = if native_open { "Configurações do fabricante abertas…" } else { "Configurações avançadas do fabricante…" };
+                let label = if native_open { "Manufacturer settings open…" } else { "Advanced manufacturer settings…" };
                 let enabled = !native_open && !synthetic && !self.settings_ui.cameras.is_empty();
                 let r = ui.add_enabled_ui(enabled, |ui| ui_kit::button(ui, Kind::Secondary, Some(ph::WRENCH), label)).inner;
                 let r = if synthetic {
-                    r.on_disabled_hover_text("A câmera de teste não tem configurações do fabricante.")
+                    r.on_disabled_hover_text("The test camera has no manufacturer settings.")
                 } else {
-                    r.on_hover_text("Abre a janela de ajustes do próprio driver da câmera (a mesma do OBS). O que você mudar lá aparece aqui quando ela fechar.")
+                    r.on_hover_text("Opens the camera driver's settings window (the same one used by OBS). Changes appear here when it closes.")
                 };
                 if r.clicked() {
                     self.open_camera_native_dialog();
                 }
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    if ui_kit::button(ui, Kind::Ghost, Some(ph::ARROW_COUNTER_CLOCKWISE), "Restaurar padrão")
-                        .on_hover_text("Brilho, exposição, foco e os outros ajustes voltam ao padrão da câmera (automático onde existir). Girar, espelhar e zoom digital não mudam.")
+                    if ui_kit::button(ui, Kind::Ghost, Some(ph::ARROW_COUNTER_CLOCKWISE), "Restore defaults")
+                        .on_hover_text("Brightness, exposure, focus and other controls return to camera defaults (automatic where available). Rotation, mirroring and digital zoom are unchanged.")
                         .clicked()
                     {
                         self.reset_camera_controls();
@@ -699,17 +827,37 @@ impl App {
         let portrait = matches!(self.camera_profile().rotation, 90 | 270);
         // Up to 640x360, and at most ~36% of a short app window's height (the controls need room).
         let max_h = ui.ctx().content_rect().height() * 0.36;
-        let w = ui.available_width().min(max_h * PREVIEW_W / PREVIEW_H).clamp(200.0, PREVIEW_W);
+        let w = ui
+            .available_width()
+            .min(max_h * PREVIEW_W / PREVIEW_H)
+            .clamp(200.0, PREVIEW_W);
         let h = w * PREVIEW_H / PREVIEW_W;
-        let (slot, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), h), egui::Sense::hover());
+        let (slot, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), h), egui::Sense::hover());
         let frame = egui::Rect::from_center_size(slot.center(), egui::vec2(w, h));
-        let size = if portrait { egui::vec2(h * h / w, h) } else { egui::vec2(w, h) };
+        let size = if portrait {
+            egui::vec2(h * h / w, h)
+        } else {
+            egui::vec2(w, h)
+        };
         let rect = egui::Rect::from_center_size(frame.center(), size);
         ui.painter().rect_filled(frame, radius::CARD, theme::FUNDO);
         let note = |ui: &egui::Ui, icon: &str, text: &str, color: egui::Color32| {
             let p = ui.painter();
-            p.text(frame.center() - egui::vec2(0.0, 14.0), egui::Align2::CENTER_CENTER, icon, theme::body(26.0), color);
-            p.text(frame.center() + egui::vec2(0.0, 16.0), egui::Align2::CENTER_CENTER, text, theme::body(size::BODY), color);
+            p.text(
+                frame.center() - egui::vec2(0.0, 14.0),
+                egui::Align2::CENTER_CENTER,
+                icon,
+                theme::body(26.0),
+                color,
+            );
+            p.text(
+                frame.center() + egui::vec2(0.0, 16.0),
+                egui::Align2::CENTER_CENTER,
+                text,
+                theme::body(size::BODY),
+                color,
+            );
         };
         match self.settings_ui.camera_preview.clone() {
             CameraPreviewUi::Failed(e) => note(ui, ph::VIDEO_CAMERA_SLASH, &e, RED),
@@ -723,23 +871,39 @@ impl App {
                 self.video.put(key.clone(), rect.shrink(1.0), ui.painter());
                 self.video.want_layer.insert(key, ui.layer_id());
             }
-            CameraPreviewUi::On => note(ui, ph::VIDEO_CAMERA, "A prévia aparece depois de entrar no servidor.", theme::NEVOA),
-            _ => note(ui, ph::VIDEO_CAMERA, "Abrindo a câmera...", theme::NEVOA),
+            CameraPreviewUi::On => note(
+                ui,
+                ph::VIDEO_CAMERA,
+                "The preview appears after connecting to the server.",
+                theme::NEVOA,
+            ),
+            _ => note(ui, ph::VIDEO_CAMERA, "Opening camera...", theme::NEVOA),
         }
         if matches!(self.settings_ui.camera_preview, CameraPreviewUi::Failed(_)) {
             ui.add_space(space::S);
-            let retry = ui.vertical_centered(|ui| ui_kit::button_sized(ui, Kind::Secondary, Size::Small, Some(ph::ARROWS_CLOCKWISE), "Tentar de novo").clicked()).inner;
+            let retry = ui
+                .vertical_centered(|ui| {
+                    ui_kit::button_sized(
+                        ui,
+                        Kind::Secondary,
+                        Size::Small,
+                        Some(ph::ARROWS_CLOCKWISE),
+                        "Try again",
+                    )
+                    .clicked()
+                })
+                .inner;
             if retry {
                 self.set_camera_preview(true);
             }
         }
     }
 
-    /// "Câmera entregando 15 fps (pouca luz)", the one-click fix, and "Priorizar fluidez".
+    /// "Camera entregando 15 fps (pouca luz)", the one-click fix, and "Prioritize smoothness".
     fn camera_rate_ui(&mut self, ui: &mut egui::Ui) {
         ui.add_space(space::M);
         let Some(l) = self.settings_ui.cam.live.clone() else {
-            forms::note(ui, "Esperando a câmera...", false);
+            forms::note(ui, "Waiting for camera...", false);
             return;
         };
         let profile = self.camera_profile();
@@ -748,37 +912,67 @@ impl App {
         let method = smooth_method(&l.controls);
         let hover = match method {
             SmoothMethod::Priority => format!(
-                "Pede à câmera para manter {} quadros por segundo mesmo com pouca luz: a imagem pode ficar mais escura ou granulada, mas não fica lenta. A exposição continua automática.",
+                "Asks the camera to maintain {} frames per second even in low light: the image may be darker or noisier, but stays smooth. Exposure remains automatic.",
                 vox_capture::fps_text(target)
             ),
             SmoothMethod::ManualExposure => {
                 let e = l.controls.iter().find(|c| c.id == CameraControlId::Exposure).copied().expect("method checked");
                 format!(
-                    "Esta câmera não tem esse ajuste: a exposição fica fixa em {} (o máximo para {} fps) e o ganho no automático, se houver.",
+                    "This camera does not support that control: exposure is fixed at {} (the maximum for {} fps), with automatic gain if available.",
                     e.format_value(vox_capture::exposure_for_fps(&e, target)),
                     vox_capture::fps_text(target)
                 )
             }
-            SmoothMethod::Unsupported => "Esta câmera não deixa ajustar a exposição.".to_string(),
+            SmoothMethod::Unsupported => "This camera does not allow exposure adjustments.".to_string(),
         };
         ui.horizontal(|ui| {
-            let whose = if l.from_call { "Câmera (na chamada)" } else { "Câmera" };
-            let (dot, text) = if l.fps <= 0.0 {
-                (theme::NEVOA, format!("{whose}: medindo quadros por segundo..."))
-            } else if l.low_light {
-                (theme::AVISO, format!("{whose} entregando {:.0} fps (pouca luz)", l.fps))
-            } else if l.fps < target * 0.85 {
-                (theme::AVISO, format!("{whose} entregando {:.0} de {} fps", l.fps, vox_capture::fps_text(target)))
+            let whose = if l.from_call {
+                "Camera (in call)"
             } else {
-                (theme::ONLINE, format!("{whose} entregando {:.0} fps", l.fps))
+                "Camera"
+            };
+            let (dot, text) = if l.fps <= 0.0 {
+                (theme::NEVOA, format!("{whose}: measuring frame rate..."))
+            } else if l.low_light {
+                (
+                    theme::AVISO,
+                    format!("{whose} entregando {:.0} fps (pouca luz)", l.fps),
+                )
+            } else if l.fps < target * 0.85 {
+                (
+                    theme::AVISO,
+                    format!(
+                        "{whose} delivering {:.0} of {} fps",
+                        l.fps,
+                        vox_capture::fps_text(target)
+                    ),
+                )
+            } else {
+                (
+                    theme::ONLINE,
+                    format!("{whose} entregando {:.0} fps", l.fps),
+                )
             };
             let (r, _) = ui.allocate_exact_size(egui::vec2(8.0, 18.0), egui::Sense::hover());
             ui.painter().circle_filled(r.center(), 3.5, dot);
             ui.label(RichText::new(text).color(theme::TEXTO));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let mut on = smooth;
-                let r = ui.add_enabled(method != SmoothMethod::Unsupported, egui::Checkbox::new(&mut on, format!("Priorizar fluidez ({} fps)", vox_capture::fps_text(target))));
-                let r = if method == SmoothMethod::Unsupported { r.on_disabled_hover_text(hover) } else { r.on_hover_text(hover) };
+                let r = ui.add_enabled(
+                    method != SmoothMethod::Unsupported,
+                    egui::Checkbox::new(
+                        &mut on,
+                        format!(
+                            "Prioritize smoothness ({} fps)",
+                            vox_capture::fps_text(target)
+                        ),
+                    ),
+                );
+                let r = if method == SmoothMethod::Unsupported {
+                    r.on_disabled_hover_text(hover)
+                } else {
+                    r.on_hover_text(hover)
+                };
                 if r.changed() {
                     self.set_camera_smooth(on);
                 }
@@ -786,8 +980,8 @@ impl App {
         });
         if l.low_light && !smooth && method != SmoothMethod::Unsupported {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Pouca luz: a câmera alonga a exposição e perde quadros. Acenda uma luz ou:").color(theme::AVISO).size(size::SMALL + 0.5));
-                if ui_kit::button_sized(ui, Kind::Secondary, Size::Small, None, "Priorizar fluidez").on_hover_text("Mantém os quadros por segundo; com pouca luz a imagem fica mais escura").clicked() {
+                ui.label(RichText::new("Low light: the camera lengthens exposure and drops frames. Turn on a light or:").color(theme::AVISO).size(size::SMALL + 0.5));
+                if ui_kit::button_sized(ui, Kind::Secondary, Size::Small, None, "Prioritize smoothness").on_hover_text("Maintains frame rate; the image gets darker in low light").clicked() {
                     self.set_camera_smooth(true);
                 }
             });
@@ -799,33 +993,36 @@ impl App {
     /// Camera, format, quality, the driver's controls by group, and our picture processing.
     fn camera_window_body(&mut self, ui: &mut egui::Ui) {
         let mut restart = false;
-        forms::group_icon(ui, ph::VIDEO_CAMERA, "Câmera");
-        forms::row(ui, "Câmera", |ui| {
+        forms::group_icon(ui, ph::VIDEO_CAMERA, "Camera");
+        forms::row(ui, "Camera", |ui| {
             restart |= self.camera_device_combo(ui, "camera_window_device");
         });
-        forms::row(ui, "Formato", |ui| {
+        forms::row(ui, "Format", |ui| {
             restart |= self.camera_format_combo(ui);
         });
-        forms::row(ui, "Qualidade enviada", |ui| {
+        forms::row(ui, "Streaming quality", |ui| {
             let before = self.settings.camera_preset;
-            egui::ComboBox::from_id_salt("camera_window_preset").width(forms::COMBO_W).selected_text(self.settings.camera_preset.label()).show_ui(ui, |ui| {
-                for p in CameraPreset::ALL {
-                    ui.selectable_value(&mut self.settings.camera_preset, p, p.label());
-                }
-            });
+            egui::ComboBox::from_id_salt("camera_window_preset")
+                .width(forms::COMBO_W)
+                .selected_text(self.settings.camera_preset.label())
+                .show_ui(ui, |ui| {
+                    for p in CameraPreset::ALL {
+                        ui.selectable_value(&mut self.settings.camera_preset, p, p.label());
+                    }
+                });
             if self.settings.camera_preset != before {
                 self.save_settings();
                 restart = true;
             }
         });
         if self.camera_on() {
-            forms::note(ui, "A câmera está ligada na chamada: câmera, formato e qualidade valem na próxima vez que você ligar.", true);
+            forms::note(ui, "The camera is on in the call: camera, format and quality changes apply the next time you turn it on.", true);
         }
         let real_camera = self.camera_ident().0 != vox_capture::SYNTHETIC_CAMERA_ID;
         if self.settings_ui.cam.formats.len() == 1 && real_camera {
             forms::note_colored(
                 ui,
-                "O Windows só oferece 1 formato desta câmera, já convertido por ele. Isso acontece quando outro programa está usando a câmera ou quando o Windows a compartilha entre aplicativos (veja Configurações do Windows > Bluetooth e dispositivos > Câmeras).",
+                "Windows offers only one pre-converted format for this camera. This can happen when another program uses the camera or Windows shares it between apps (see Windows Settings > Bluetooth & devices > Cameras).",
                 true,
                 theme::AVISO,
             );
@@ -840,44 +1037,72 @@ impl App {
 
         // The driver's controls: only the ones this camera has, with their real ranges.
         match self.settings_ui.cam.live.clone() {
-            Some(l) if l.controls.iter().any(|c| c.id != CameraControlId::ExposurePriority) => self.camera_controls_ui(ui, &l.controls),
+            Some(l)
+                if l.controls
+                    .iter()
+                    .any(|c| c.id != CameraControlId::ExposurePriority) =>
+            {
+                self.camera_controls_ui(ui, &l.controls)
+            }
             Some(_) => {
                 forms::divider(ui);
-                forms::note(ui, "Esta câmera não tem ajustes de imagem.", false);
+                forms::note(ui, "This camera has no image controls.", false);
             }
             None => {
                 forms::divider(ui);
-                forms::note(ui, "Os ajustes aparecem quando a câmera abrir.", false);
+                forms::note(ui, "Controls appear when the camera opens.", false);
             }
         }
 
         // Our own picture processing (GPU, free).
         forms::divider(ui);
-        forms::group_icon(ui, ph::ARROWS_CLOCKWISE, "Girar e espelhar");
+        forms::group_icon(ui, ph::ARROWS_CLOCKWISE, "Rotate and mirror");
         let mut p = self.camera_profile();
         let mut edited = false;
-        forms::row(ui, "Espelhar", |ui| {
+        forms::row(ui, "Mirror", |ui| {
             ui.vertical(|ui| {
                 ui.spacing_mut().interact_size.y = forms::ROW_H;
                 ui.spacing_mut().item_spacing.y = 0.0;
-                edited |= ui.checkbox(&mut p.mirror_preview, "Espelhar minha prévia").on_hover_text("Você se vê como num espelho. Só aparece para você: os outros veem a imagem normal.").changed();
-                edited |= ui.checkbox(&mut p.mirror_others, "Espelhar para os outros").on_hover_text("Os outros também veem a imagem espelhada (útil para mostrar texto escrito à mão).").changed();
+                edited |= ui.checkbox(&mut p.mirror_preview, "Mirror my preview").on_hover_text("See yourself as in a mirror. Only affects your preview: others see the normal image.").changed();
+                edited |= ui.checkbox(&mut p.mirror_others, "Mirror for others").on_hover_text("Others also see the mirrored image (useful for showing handwritten text).").changed();
             });
         });
-        forms::row(ui, "Girar", |ui| {
+        forms::row(ui, "Rotate", |ui| {
             edited |= forms::segmented(ui, &mut p.rotation, &ROTATIONS);
         });
-        forms::row(ui, "Zoom digital", |ui| {
+        forms::row(ui, "Digital zoom", |ui| {
             let mut zoom = p.zoom_pct as f32 / 100.0;
-            let r = ui.add(egui::Slider::new(&mut zoom, 1.0..=2.0).step_by(0.05).custom_formatter(|v, _| format!("{v:.2}x").replace('.', ",")).custom_parser(|s| s.trim_end_matches('x').replace(',', ".").trim().parse::<f64>().ok()));
+            let r = ui.add(
+                egui::Slider::new(&mut zoom, 1.0..=2.0)
+                    .step_by(0.05)
+                    .custom_formatter(|v, _| format!("{v:.2}x").replace('.', ","))
+                    .custom_parser(|s| {
+                        s.trim_end_matches('x')
+                            .replace(',', ".")
+                            .trim()
+                            .parse::<f64>()
+                            .ok()
+                    }),
+            );
             if r.changed() {
                 p.zoom_pct = (zoom * 100.0).round() as u32;
                 edited = true;
             }
-            r.on_hover_text("Recorte no centro da imagem (1,0x a 2,0x), feito pela placa de vídeo");
+            r.on_hover_text("Crop the image center (1.0x to 2.0x), processed by the graphics card");
         });
-        if self.settings_ui.cam.live.as_ref().is_some_and(|l| !l.transform_ok) {
-            forms::note_colored(ui, "Esta placa de vídeo não consegue espelhar nem girar: só o zoom funciona.", true, theme::AVISO);
+        if self
+            .settings_ui
+            .cam
+            .live
+            .as_ref()
+            .is_some_and(|l| !l.transform_ok)
+        {
+            forms::note_colored(
+                ui,
+                "This graphics card cannot mirror or rotate: only zoom is available.",
+                true,
+                theme::AVISO,
+            );
         }
         if edited {
             self.edit_camera_profile(|cur| {
@@ -889,29 +1114,41 @@ impl App {
         }
     }
 
-    /// "Formato": Automático, or one of the camera's own modes. Returns whether it changed.
+    /// "Format": Automatic, or one of the camera's own modes. Returns whether it changed.
     fn camera_format_combo(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        let chosen = self.camera_profile().mode.as_ref().and_then(SavedMode::mode);
+        let chosen = self
+            .camera_profile()
+            .mode
+            .as_ref()
+            .and_then(SavedMode::mode);
         let mut menu = vox_capture::camera_mode_menu(&self.settings_ui.cam.formats);
         if let Some(c) = chosen.filter(|c| !menu.iter().any(|m| m.matches(c))) {
             // A saved mode this menu leaves out (a slower rate of a listed size) stays pickable.
             menu.insert(0, c);
         }
-        let text = chosen.map_or("Automático".to_string(), |m| m.label());
-        egui::ComboBox::from_id_salt("camera_window_format").width(forms::COMBO_W).selected_text(text).show_ui(ui, |ui| {
-            if ui.selectable_label(chosen.is_none(), "Automático").on_hover_text("O formato da câmera mais próximo da qualidade enviada").clicked() && chosen.is_some() {
-                self.edit_camera_profile(|p| p.mode = None);
-                changed = true;
-            }
-            for m in menu {
-                let selected = chosen.is_some_and(|c| c.matches(&m));
-                if ui.selectable_label(selected, m.label()).clicked() && !selected {
-                    self.edit_camera_profile(|p| p.mode = Some(SavedMode::of(&m)));
+        let text = chosen.map_or("Automatic".to_string(), |m| m.label());
+        egui::ComboBox::from_id_salt("camera_window_format")
+            .width(forms::COMBO_W)
+            .selected_text(text)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(chosen.is_none(), "Automatic")
+                    .on_hover_text("The camera format closest to the streaming quality")
+                    .clicked()
+                    && chosen.is_some()
+                {
+                    self.edit_camera_profile(|p| p.mode = None);
                     changed = true;
                 }
-            }
-        });
+                for m in menu {
+                    let selected = chosen.is_some_and(|c| c.matches(&m));
+                    if ui.selectable_label(selected, m.label()).clicked() && !selected {
+                        self.edit_camera_profile(|p| p.mode = Some(SavedMode::of(&m)));
+                        changed = true;
+                    }
+                }
+            });
         changed
     }
 
@@ -924,13 +1161,24 @@ impl App {
             forms::divider(ui);
             forms::group_icon(ui, group.icon(), group.title());
             for c in &list {
-                let (mut value, mut auto) = shown_setting(c, profile.controls.get(c.id.key()).copied());
+                let (mut value, mut auto) =
+                    shown_setting(c, profile.controls.get(c.id.key()).copied());
                 let mut edited = false;
-                let range = format!("Faixa da câmera: {} a {}, passo {}, padrão {}", c.format_value(c.min), c.format_value(c.max), c.step, c.format_value(c.default));
+                let range = format!(
+                    "Camera range: {} to {}, step {}, default {}",
+                    c.format_value(c.min),
+                    c.format_value(c.max),
+                    c.step,
+                    c.format_value(c.default)
+                );
                 forms::row(ui, c.id.label_pt(), |ui| {
                     if c.is_toggle() {
                         let mut on = value > c.min;
-                        if ui.checkbox(&mut on, c.format_value(value)).on_hover_text(&range).changed() {
+                        if ui
+                            .checkbox(&mut on, c.format_value(value))
+                            .on_hover_text(&range)
+                            .changed()
+                        {
                             value = if on { c.max } else { c.min };
                             edited = true;
                         }
@@ -938,13 +1186,17 @@ impl App {
                         let cc = *c;
                         let r = ui.add_enabled(
                             c.can_manual && !auto,
-                            egui::Slider::new(&mut value, c.min..=c.max).step_by(c.step.max(1) as f64).custom_formatter(move |v, _| cc.format_value(v.round() as i32)),
+                            egui::Slider::new(&mut value, c.min..=c.max)
+                                .step_by(c.step.max(1) as f64)
+                                .custom_formatter(move |v, _| cc.format_value(v.round() as i32)),
                         );
                         if r.changed() {
                             edited = true;
                         }
                         if auto {
-                            r.on_disabled_hover_text("Automático: a câmera decide (o valor mostrado é o atual)");
+                            r.on_disabled_hover_text(
+                                "Automatic: the camera decides (the value shown is current)",
+                            );
                         } else {
                             r.on_hover_text(&range);
                         }
@@ -954,14 +1206,18 @@ impl App {
                     }
                 });
                 if edited {
-                    edits.push(CameraAdjust { id: c.id, value: c.snap(value), auto });
+                    edits.push(CameraAdjust {
+                        id: c.id,
+                        value: c.snap(value),
+                        auto,
+                    });
                 }
             }
         }
         for a in edits {
             self.edit_camera_profile(|p| {
                 p.set_control(a.id, a.value, a.auto);
-                // Exposure back to automatic undoes a manual "Priorizar fluidez".
+                // Exposure back to automatic undoes a manual "Prioritize smoothness".
                 if a.id == CameraControlId::Exposure && a.auto {
                     p.smooth = false;
                 }
@@ -981,13 +1237,20 @@ mod tests {
     #[test]
     fn profiles_are_kept_per_camera() {
         let mut ps = CameraProfiles::default();
-        ps.edit(LINK_A, "HD Pro Webcam C920").set_control(CameraControlId::Brightness, 140, false);
+        ps.edit(LINK_A, "HD Pro Webcam C920")
+            .set_control(CameraControlId::Brightness, 140, false);
         let b = ps.edit(LINK_B, "Integrated Webcam");
         b.set_control(CameraControlId::Brightness, 90, false);
         b.rotation = 180;
         assert_eq!(ps.0.len(), 2);
-        assert_eq!(ps.get(LINK_A, "HD Pro Webcam C920").unwrap().controls["brightness"].value, 140);
-        assert_eq!(ps.get(LINK_B, "Integrated Webcam").unwrap().controls["brightness"].value, 90);
+        assert_eq!(
+            ps.get(LINK_A, "HD Pro Webcam C920").unwrap().controls["brightness"].value,
+            140
+        );
+        assert_eq!(
+            ps.get(LINK_B, "Integrated Webcam").unwrap().controls["brightness"].value,
+            90
+        );
         assert_eq!(ps.get(LINK_A, "HD Pro Webcam C920").unwrap().rotation, 0);
         // A camera with no profile: nothing.
         assert!(ps.get(r"\\?\usb#other", "Other cam").is_none());
@@ -1015,15 +1278,24 @@ mod tests {
     #[test]
     fn default_profiles_are_not_stored() {
         let mut ps = CameraProfiles::default();
-        ps.edit(LINK_A, "C920").set_control(CameraControlId::Gain, 10, false);
+        ps.edit(LINK_A, "C920")
+            .set_control(CameraControlId::Gain, 10, false);
         ps.tidy(LINK_A, "C920");
         assert_eq!(ps.0.len(), 1);
         ps.edit(LINK_A, "C920").controls.clear();
         ps.tidy(LINK_A, "C920");
         assert!(ps.0.is_empty(), "back to the defaults leaves no entry");
         assert!(CameraProfile::default().is_default());
-        assert!(CameraProfile { name: "x".into(), ..Default::default() }.is_default());
-        assert!(!CameraProfile { mirror_preview: false, ..Default::default() }.is_default());
+        assert!(CameraProfile {
+            name: "x".into(),
+            ..Default::default()
+        }
+        .is_default());
+        assert!(!CameraProfile {
+            mirror_preview: false,
+            ..Default::default()
+        }
+        .is_default());
     }
 
     #[test]
@@ -1031,44 +1303,90 @@ mod tests {
         let mut p = CameraProfile::default();
         let s = p.to_setup();
         assert!(s.mode.is_none() && s.controls.is_empty());
-        assert!(s.transform.mirror_preview && !s.transform.mirror_others, "preview mirrored, others not");
-        p.mode = Some(SavedMode { width: 1280, height: 720, fps_milli: 30_000, format: "MJPG".into() });
+        assert!(
+            s.transform.mirror_preview && !s.transform.mirror_others,
+            "preview mirrored, others not"
+        );
+        p.mode = Some(SavedMode {
+            width: 1280,
+            height: 720,
+            fps_milli: 30_000,
+            format: "MJPG".into(),
+        });
         p.set_control(CameraControlId::Exposure, -5, false);
         p.set_control(CameraControlId::Focus, 0, true);
         p.rotation = 90;
         p.zoom_pct = 500;
-        p.controls.insert("nonsense".into(), SavedControl { value: 1, auto: false });
+        p.controls.insert(
+            "nonsense".into(),
+            SavedControl {
+                value: 1,
+                auto: false,
+            },
+        );
         let s = p.to_setup();
         assert_eq!(s.mode.unwrap().label(), "1280×720 · 30 fps (MJPEG)");
         assert_eq!(s.transform.rotation, CameraRotation::Cw90);
         assert_eq!(s.transform.zoom_pct, 200, "clamped");
         assert_eq!(s.controls.len(), 2, "unknown keys are ignored");
-        assert!(s.controls.contains(&CameraAdjust { id: CameraControlId::Focus, value: 0, auto: true }));
+        assert!(s.controls.contains(&CameraAdjust {
+            id: CameraControlId::Focus,
+            value: 0,
+            auto: true
+        }));
         // A format this version does not know is ignored, not fatal.
-        p.mode = Some(SavedMode { format: "H264".into(), ..p.mode.clone().unwrap() });
+        p.mode = Some(SavedMode {
+            format: "H264".into(),
+            ..p.mode.clone().unwrap()
+        });
         assert!(p.to_setup().mode.is_none());
     }
 
     #[test]
     fn profiles_persist_in_settings_json_per_device() {
         let mut s = crate::settings::Settings::default();
-        s.camera_profiles.edit(LINK_A, "HD Pro Webcam C920").set_control(CameraControlId::WhiteBalance, 4500, false);
-        s.camera_profiles.edit(LINK_B, "Integrated Webcam").mirror_preview = false;
+        s.camera_profiles
+            .edit(LINK_A, "HD Pro Webcam C920")
+            .set_control(CameraControlId::WhiteBalance, 4500, false);
+        s.camera_profiles
+            .edit(LINK_B, "Integrated Webcam")
+            .mirror_preview = false;
         let json = serde_json::to_string_pretty(&s).unwrap();
         let back: crate::settings::Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(back.camera_profiles, s.camera_profiles);
-        assert_eq!(back.camera_profiles.get(LINK_A, "").unwrap().controls["white_balance"], SavedControl { value: 4500, auto: false });
+        assert_eq!(
+            back.camera_profiles.get(LINK_A, "").unwrap().controls["white_balance"],
+            SavedControl {
+                value: 4500,
+                auto: false
+            }
+        );
         assert!(!back.camera_profiles.get(LINK_B, "").unwrap().mirror_preview);
         // Older settings.json files (no profiles) and unknown future fields still load.
-        let old: crate::settings::Settings = serde_json::from_str(r#"{"camera_preset":"P540"}"#).unwrap();
+        let old: crate::settings::Settings =
+            serde_json::from_str(r#"{"camera_preset":"P540"}"#).unwrap();
         assert!(old.camera_profiles.0.is_empty());
-        let newer: CameraProfile = serde_json::from_str(r#"{"rotation":90,"future_field":1}"#).unwrap();
-        assert_eq!((newer.rotation, newer.mirror_preview, newer.zoom_pct), (90, true, 100));
+        let newer: CameraProfile =
+            serde_json::from_str(r#"{"rotation":90,"future_field":1}"#).unwrap();
+        assert_eq!(
+            (newer.rotation, newer.mirror_preview, newer.zoom_pct),
+            (90, true, 100)
+        );
     }
 
     /// What a C920 reports (its log: brightness 0..255, white balance 2000..6500 auto...).
     fn c920() -> Vec<CameraControl> {
-        let mk = |id, min, max, step, default, value, auto: bool, can_auto: bool| CameraControl { id, min, max, step, default, value, auto, can_auto, can_manual: true };
+        let mk = |id, min, max, step, default, value, auto: bool, can_auto: bool| CameraControl {
+            id,
+            min,
+            max,
+            step,
+            default,
+            value,
+            auto,
+            can_auto,
+            can_manual: true,
+        };
         use CameraControlId::*;
         vec![
             mk(Brightness, 0, 255, 1, 128, 128, false, false),
@@ -1088,23 +1406,47 @@ mod tests {
     #[test]
     fn controls_are_grouped_as_imagem_luz_lente() {
         let g = group_controls(&c920());
-        let names: Vec<(&str, Vec<&str>)> = g.iter().map(|(g, v)| (g.title(), v.iter().map(|c| c.id.key()).collect())).collect();
+        let names: Vec<(&str, Vec<&str>)> = g
+            .iter()
+            .map(|(g, v)| (g.title(), v.iter().map(|c| c.id.key()).collect()))
+            .collect();
         assert_eq!(
             names,
             vec![
-                ("Imagem", vec!["brightness", "contrast", "saturation", "sharpness"]),
-                ("Luz", vec!["exposure", "gain", "backlight", "white_balance"]),
-                ("Lente", vec!["focus", "zoom"]),
+                (
+                    "Image",
+                    vec!["brightness", "contrast", "saturation", "sharpness"]
+                ),
+                (
+                    "Light",
+                    vec!["exposure", "gain", "backlight", "white_balance"]
+                ),
+                ("Lens", vec!["focus", "zoom"]),
             ]
         );
-        // The priority is the "Priorizar fluidez" switch, never a slider.
-        assert!(g.iter().all(|(_, v)| v.iter().all(|c| c.id != CameraControlId::ExposurePriority)));
+        // The priority is the "Prioritize smoothness" switch, never a slider.
+        assert!(g
+            .iter()
+            .all(|(_, v)| v.iter().all(|c| c.id != CameraControlId::ExposurePriority)));
         // Every slider control belongs to exactly one section.
-        for id in CameraControlId::ALL.into_iter().filter(|i| *i != CameraControlId::ExposurePriority) {
-            assert_eq!(ControlGroup::ALL.iter().filter(|g| g.members().contains(&id)).count(), 1, "{id:?}");
+        for id in CameraControlId::ALL
+            .into_iter()
+            .filter(|i| *i != CameraControlId::ExposurePriority)
+        {
+            assert_eq!(
+                ControlGroup::ALL
+                    .iter()
+                    .filter(|g| g.members().contains(&id))
+                    .count(),
+                1,
+                "{id:?}"
+            );
         }
-        // A camera with only image controls: just "Imagem"; none at all: nothing.
-        let only: Vec<CameraControl> = c920().into_iter().filter(|c| c.id == CameraControlId::Brightness).collect();
+        // A camera with only image controls: just "Image"; none at all: nothing.
+        let only: Vec<CameraControl> = c920()
+            .into_iter()
+            .filter(|c| c.id == CameraControlId::Brightness)
+            .collect();
         assert_eq!(group_controls(&only).len(), 1);
         assert!(group_controls(&[]).is_empty());
     }
@@ -1117,15 +1459,62 @@ mod tests {
         // Nothing saved: what the camera says (auto, its current 3066 K).
         assert_eq!(shown_setting(&wb, None), (3066, true));
         // Saved manual 4500 K: shown as saved even before the camera reports it.
-        assert_eq!(shown_setting(&wb, Some(SavedControl { value: 4500, auto: false })), (4500, false));
+        assert_eq!(
+            shown_setting(
+                &wb,
+                Some(SavedControl {
+                    value: 4500,
+                    auto: false
+                })
+            ),
+            (4500, false)
+        );
         // Saved auto: the camera's own value moves with the light.
-        assert_eq!(shown_setting(&wb, Some(SavedControl { value: 4500, auto: true })), (3066, true));
+        assert_eq!(
+            shown_setting(
+                &wb,
+                Some(SavedControl {
+                    value: 4500,
+                    auto: true
+                })
+            ),
+            (3066, true)
+        );
         // No automatic mode: "Auto" is never ticked, even if a file says so.
         let b = get(CameraControlId::Brightness);
-        assert_eq!(shown_setting(&b, Some(SavedControl { value: 90, auto: true })), (90, false));
-        assert_eq!(shown_setting(&b, Some(SavedControl { value: 300, auto: false })), (255, false), "snapped into the range");
+        assert_eq!(
+            shown_setting(
+                &b,
+                Some(SavedControl {
+                    value: 90,
+                    auto: true
+                })
+            ),
+            (90, false)
+        );
+        assert_eq!(
+            shown_setting(
+                &b,
+                Some(SavedControl {
+                    value: 300,
+                    auto: false
+                })
+            ),
+            (255, false),
+            "snapped into the range"
+        );
         let f = get(CameraControlId::Focus);
-        assert_eq!(shown_setting(&f, Some(SavedControl { value: 123, auto: false })), (125, false), "on the 5-step grid");
+        assert_eq!(
+            shown_setting(
+                &f,
+                Some(SavedControl {
+                    value: 123,
+                    auto: false
+                })
+            ),
+            (125, false),
+            "on the 5-step grid"
+        );
     }
 
     #[test]
@@ -1133,12 +1522,29 @@ mod tests {
         let cs = c920();
         assert_eq!(smooth_method(&cs), SmoothMethod::Priority);
         let on = smooth_plan(&cs, 30.0, true);
-        assert_eq!(on, vec![CameraAdjust { id: CameraControlId::ExposurePriority, value: 0, auto: false }]);
+        assert_eq!(
+            on,
+            vec![CameraAdjust {
+                id: CameraControlId::ExposurePriority,
+                value: 0,
+                auto: false
+            }]
+        );
         let off = smooth_plan(&cs, 30.0, false);
-        assert_eq!(off, vec![CameraAdjust { id: CameraControlId::ExposurePriority, value: 1, auto: false }]);
+        assert_eq!(
+            off,
+            vec![CameraAdjust {
+                id: CameraControlId::ExposurePriority,
+                value: 1,
+                auto: false
+            }]
+        );
         // The switch follows the profile (and the camera when nothing is saved).
         let mut p = CameraProfile::default();
-        assert!(!smooth_active(&cs, &p), "the C920 lets exposure lower the rate by default");
+        assert!(
+            !smooth_active(&cs, &p),
+            "the C920 lets exposure lower the rate by default"
+        );
         for a in &on {
             p.set_control(a.id, a.value, a.auto);
         }
@@ -1150,18 +1556,38 @@ mod tests {
 
     #[test]
     fn priorizar_fluidez_without_the_priority_control_fixes_the_exposure() {
-        let mut cs: Vec<CameraControl> = c920().into_iter().filter(|c| c.id != CameraControlId::ExposurePriority).collect();
+        let mut cs: Vec<CameraControl> = c920()
+            .into_iter()
+            .filter(|c| c.id != CameraControlId::ExposurePriority)
+            .collect();
         assert_eq!(smooth_method(&cs), SmoothMethod::ManualExposure);
         // 30 fps: 1/32 s at most; the C920's gain has no auto, so it is left alone.
-        assert_eq!(smooth_plan(&cs, 30.0, true), vec![CameraAdjust { id: CameraControlId::Exposure, value: -5, auto: false }]);
+        assert_eq!(
+            smooth_plan(&cs, 30.0, true),
+            vec![CameraAdjust {
+                id: CameraControlId::Exposure,
+                value: -5,
+                auto: false
+            }]
+        );
         assert_eq!(smooth_plan(&cs, 60.0, true)[0].value, -6);
         // A camera whose gain has auto gets it.
-        cs.iter_mut().find(|c| c.id == CameraControlId::Gain).unwrap().can_auto = true;
+        cs.iter_mut()
+            .find(|c| c.id == CameraControlId::Gain)
+            .unwrap()
+            .can_auto = true;
         let on = smooth_plan(&cs, 30.0, true);
         assert_eq!(on.len(), 2);
         assert_eq!((on[1].id, on[1].auto), (CameraControlId::Gain, true));
         // Off: exposure back to automatic.
-        assert_eq!(smooth_plan(&cs, 30.0, false), vec![CameraAdjust { id: CameraControlId::Exposure, value: -4, auto: true }]);
+        assert_eq!(
+            smooth_plan(&cs, 30.0, false),
+            vec![CameraAdjust {
+                id: CameraControlId::Exposure,
+                value: -4,
+                auto: true
+            }]
+        );
         // On = the flag and a manual exposure; exposure set back to auto by hand turns it off.
         let mut p = CameraProfile::default();
         for a in &on {
@@ -1172,10 +1598,19 @@ mod tests {
         p.set_control(CameraControlId::Exposure, -4, true);
         assert!(!smooth_active(&cs, &p));
         // Nothing to adjust: unsupported, no plan, never on.
-        let none: Vec<CameraControl> = cs.into_iter().filter(|c| c.id != CameraControlId::Exposure).collect();
+        let none: Vec<CameraControl> = cs
+            .into_iter()
+            .filter(|c| c.id != CameraControlId::Exposure)
+            .collect();
         assert_eq!(smooth_method(&none), SmoothMethod::Unsupported);
         assert!(smooth_plan(&none, 30.0, true).is_empty());
-        assert!(!smooth_active(&none, &CameraProfile { smooth: true, ..Default::default() }));
+        assert!(!smooth_active(
+            &none,
+            &CameraProfile {
+                smooth: true,
+                ..Default::default()
+            }
+        ));
     }
 
     #[test]
@@ -1197,14 +1632,29 @@ mod tests {
         assert_eq!(
             ch,
             vec![
-                CameraAdjust { id: CameraControlId::Brightness, value: 150, auto: false },
-                CameraAdjust { id: CameraControlId::WhiteBalance, value: 5000, auto: false },
+                CameraAdjust {
+                    id: CameraControlId::Brightness,
+                    value: 150,
+                    auto: false
+                },
+                CameraAdjust {
+                    id: CameraControlId::WhiteBalance,
+                    value: 5000,
+                    auto: false
+                },
             ]
         );
         // Exposure switched to automatic in the dialog.
         let mut manual = before.clone();
         set(&mut manual, CameraControlId::Exposure, -5, false);
-        assert_eq!(native_changes(&manual, &before), vec![CameraAdjust { id: CameraControlId::Exposure, value: -4, auto: true }]);
+        assert_eq!(
+            native_changes(&manual, &before),
+            vec![CameraAdjust {
+                id: CameraControlId::Exposure,
+                value: -4,
+                auto: true
+            }]
+        );
     }
 
     #[test]
@@ -1219,13 +1669,30 @@ mod tests {
         let back: crate::settings::Settings = serde_json::from_str(&json).unwrap();
         let p = back.camera_profiles.get(LINK_A, "").unwrap();
         assert!(p.smooth);
-        assert_eq!(p.controls["exposure_priority"], SavedControl { value: 0, auto: false });
-        assert_eq!(p.to_setup().controls, vec![CameraAdjust { id: CameraControlId::ExposurePriority, value: 0, auto: false }]);
+        assert_eq!(
+            p.controls["exposure_priority"],
+            SavedControl {
+                value: 0,
+                auto: false
+            }
+        );
+        assert_eq!(
+            p.to_setup().controls,
+            vec![CameraAdjust {
+                id: CameraControlId::ExposurePriority,
+                value: 0,
+                auto: false
+            }]
+        );
         // A v0.6-v0.8 profile (no "smooth") loads with it off.
         let old: CameraProfile = serde_json::from_str(r#"{"name":"C920","controls":{"brightness":{"value":140,"auto":false}},"mirror_preview":true,"mirror_others":false,"rotation":0,"zoom_pct":100}"#).unwrap();
         assert!(!old.smooth);
         assert_eq!(old.controls["brightness"].value, 140);
         // "smooth" alone is not the default (it is kept).
-        assert!(!CameraProfile { smooth: true, ..Default::default() }.is_default());
+        assert!(!CameraProfile {
+            smooth: true,
+            ..Default::default()
+        }
+        .is_default());
     }
 }

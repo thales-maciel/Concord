@@ -1,4 +1,4 @@
-//! Noise suppression level ("Supressão de ruído") and the AI denoiser of the mic chain.
+//! Noise suppression level ("Noise suppression") and the AI denoiser of the mic chain.
 //!
 //! Chain (see `audio::device`): mic -> (resample) -> WebRTC APM (AEC3 + AGC + high-pass, plus its
 //! own noise suppressor only at [`NoiseLevel::Standard`]) -> [`Denoiser`] (RNNoise via the
@@ -20,7 +20,7 @@
 //! chain runs RNNoise. On the way in RNNoise is primed with the previous chunk; on the way out
 //! (and when the mic is muted) both models are flushed, so no stale audio is ever heard when they
 //! are turned back on. If the machine cannot run DeepFilterNet in real time the level drops back
-//! to "IA leve" by itself and [`NoiseControl::take_fallback_notice`] tells the UI.
+//! to "Light AI" by itself and [`NoiseControl::take_fallback_notice`] tells the UI.
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Weak};
@@ -36,16 +36,16 @@ use super::voicefx::VoiceFxControl;
 /// RNNoise frame: 10 ms at 48 kHz.
 pub const FRAME: usize = DenoiseState::FRAME_SIZE;
 
-/// "Supressão de ruído".
+/// "Noise suppression".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum NoiseLevel {
-    /// "Padrão": the WebRTC APM noise suppressor (what v0.4.0 and earlier did).
+    /// "Default": the WebRTC APM noise suppressor (what v0.4.0 and earlier did).
     Standard,
-    /// "IA leve": RNNoise, with the APM's own suppressor off.
+    /// "Light AI": RNNoise, with the APM's own suppressor off.
     #[default]
     AiLight,
-    /// "IA máxima": DeepFilterNet3, with the APM's own suppressor off.
+    /// "Maximum AI": DeepFilterNet3, with the APM's own suppressor off.
     AiMax,
 }
 
@@ -68,9 +68,9 @@ impl NoiseLevel {
     /// The name shown in the UI.
     pub fn label(self) -> &'static str {
         match self {
-            NoiseLevel::Standard => "Padrão",
-            NoiseLevel::AiLight => "IA leve",
-            NoiseLevel::AiMax => "IA máxima",
+            NoiseLevel::Standard => "Default",
+            NoiseLevel::AiLight => "Light AI",
+            NoiseLevel::AiMax => "Maximum AI",
         }
     }
 
@@ -129,9 +129,9 @@ pub struct NoiseControl {
     level: Arc<AtomicU8>,
     apms: Mutex<Vec<Weak<VoiceApm>>>,
     dfn: Mutex<Vec<Weak<DfnShared>>>,
-    /// "IA máxima" was too heavy and the level fell back to "IA leve" (for the UI).
+    /// "Maximum AI" was too heavy and the level fell back to "Light AI" (for the UI).
     fell_back: AtomicBool,
-    /// "Modificador de voz" (see `audio::voicefx`).
+    /// "Voice changer" (see `audio::voicefx`).
     fx: VoiceFxControl,
 }
 
@@ -152,7 +152,7 @@ impl NoiseControl {
         }
     }
 
-    /// The voice changer setting ("Modificador de voz"); changes apply on the next 10 ms chunk.
+    /// The voice changer setting ("Voice changer"); changes apply on the next 10 ms chunk.
     pub fn voice_fx(&self) -> &VoiceFxControl {
         &self.fx
     }
@@ -161,7 +161,7 @@ impl NoiseControl {
         NoiseLevel::from_u8(self.level.load(Ordering::Relaxed))
     }
 
-    /// Takes effect on the next 10 ms chunk of every running mic chain. Selecting "IA máxima"
+    /// Takes effect on the next 10 ms chunk of every running mic chain. Selecting "Maximum AI"
     /// starts the DeepFilterNet worker of every chain (it loads the model in the background);
     /// selecting another level makes them exit and free it.
     pub fn set_level(&self, level: NoiseLevel) {
@@ -197,7 +197,7 @@ impl NoiseControl {
         apms.push(Arc::downgrade(apm));
     }
 
-    /// A new mic chain's DeepFilterNet side (started now if "IA máxima" is selected).
+    /// A new mic chain's DeepFilterNet side (started now if "Maximum AI" is selected).
     fn register_dfn(&self) -> Arc<DfnShared> {
         let sh = DfnShared::new(self.level.clone(), LEVEL_AI_MAX);
         let mut dfn = self.dfn.lock();
@@ -209,22 +209,36 @@ impl NoiseControl {
         sh
     }
 
-    /// Whether "IA máxima" fell back to "IA leve" because this machine could not run it in real
-    /// time (once per fallback). The level is already "IA leve" when this returns true.
+    /// Whether "Maximum AI" fell back to "Light AI" because this machine could not run it in real
+    /// time (once per fallback). The level is already "Light AI" when this returns true.
     pub fn take_fallback_notice(&self) -> bool {
         self.fell_back.swap(false, Ordering::Relaxed)
     }
 
-    /// From the audio callback: "IA máxima" is too heavy here. Allocation-free.
+    /// From the audio callback: "Maximum AI" is too heavy here. Allocation-free.
     fn fall_back(&self) {
-        if self.level.compare_exchange(LEVEL_AI_MAX, LEVEL_AI_LIGHT, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+        if self
+            .level
+            .compare_exchange(
+                LEVEL_AI_MAX,
+                LEVEL_AI_LIGHT,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .is_ok()
+        {
             self.fell_back.store(true, Ordering::Relaxed);
         }
     }
 
     /// Mic chains whose DeepFilterNet worker currently holds the model.
     pub fn ai_max_loaded(&self) -> usize {
-        self.dfn.lock().iter().filter_map(|w| w.upgrade()).filter(|s| s.loaded()).count()
+        self.dfn
+            .lock()
+            .iter()
+            .filter_map(|w| w.upgrade())
+            .filter(|s| s.loaded())
+            .count()
     }
 }
 
@@ -465,7 +479,9 @@ impl Denoiser {
     pub fn process(&mut self, chunk: &mut [i16]) {
         if !self.adapting && chunk.len().is_multiple_of(FRAME) {
             for part in chunk.as_chunks_mut::<FRAME>().0 {
-                let bypass = self.ctl.level() == NoiseLevel::Standard && self.inner.mode == Mode::Plain && !self.inner.rnn_on;
+                let bypass = self.ctl.level() == NoiseLevel::Standard
+                    && self.inner.mode == Mode::Plain
+                    && !self.inner.rnn_on;
                 if bypass && !self.inner.dfn.engaged {
                     to_f32(part, &mut self.inner.prev); // bypass: the chunk is not touched
                     continue;
@@ -542,18 +558,35 @@ mod tests {
             let j = serde_json::to_string(&l).unwrap();
             assert_eq!(serde_json::from_str::<NoiseLevel>(&j).unwrap(), l);
         }
-        assert_eq!(serde_json::to_string(&NoiseLevel::Standard).unwrap(), "\"standard\"");
-        assert_eq!(serde_json::to_string(&NoiseLevel::AiMax).unwrap(), "\"ai_max\"");
-        assert_eq!(serde_json::from_str::<NoiseLevel>("\"ai_ultra\"").unwrap(), NoiseLevel::AiLight);
-        assert!(NoiseLevel::Standard.apm_ns() && !NoiseLevel::AiLight.apm_ns() && !NoiseLevel::AiMax.apm_ns());
-        assert_eq!(NoiseLevel::AiMax.label(), "IA máxima");
+        assert_eq!(
+            serde_json::to_string(&NoiseLevel::Standard).unwrap(),
+            "\"standard\""
+        );
+        assert_eq!(
+            serde_json::to_string(&NoiseLevel::AiMax).unwrap(),
+            "\"ai_max\""
+        );
+        assert_eq!(
+            serde_json::from_str::<NoiseLevel>("\"ai_ultra\"").unwrap(),
+            NoiseLevel::AiLight
+        );
+        assert!(
+            NoiseLevel::Standard.apm_ns()
+                && !NoiseLevel::AiLight.apm_ns()
+                && !NoiseLevel::AiMax.apm_ns()
+        );
+        assert_eq!(NoiseLevel::AiMax.label(), "Maximum AI");
     }
 
     #[test]
     fn standard_is_a_bit_exact_bypass() {
         let ctl = Arc::new(NoiseControl::new(NoiseLevel::Standard));
         let mut d = Denoiser::new(ctl);
-        let input: Vec<i16> = voice(FRAME * 20, 0).iter().zip(noise(FRAME * 20, 7, 3000.0)).map(|(a, b)| a.saturating_add(b)).collect();
+        let input: Vec<i16> = voice(FRAME * 20, 0)
+            .iter()
+            .zip(noise(FRAME * 20, 7, 3000.0))
+            .map(|(a, b)| a.saturating_add(b))
+            .collect();
         let mut out = input.clone();
         for c in out.chunks_mut(FRAME) {
             d.process(c);
@@ -598,9 +631,18 @@ mod tests {
         // RNNoise ran from chunk 20 through the fade-out chunk 40.
         assert_eq!(d.frames, 21);
         // No click: sample-to-sample steps stay in the range of the signal's own steps.
-        let max_step = |s: &[i16]| s.windows(2).map(|w| (w[1] as i32 - w[0] as i32).abs()).max().unwrap();
+        let max_step = |s: &[i16]| {
+            s.windows(2)
+                .map(|w| (w[1] as i32 - w[0] as i32).abs())
+                .max()
+                .unwrap()
+        };
         let natural = max_step(&sig);
-        assert!(max_step(&out) <= natural * 2, "step {} vs natural {natural}", max_step(&out));
+        assert!(
+            max_step(&out) <= natural * 2,
+            "step {} vs natural {natural}",
+            max_step(&out)
+        );
         // After switching back, the output is the plain signal again, bit for bit.
         assert_eq!(&out[FRAME * 41..], &sig[FRAME * 41..]);
     }
@@ -624,7 +666,11 @@ mod tests {
 
     #[test]
     fn odd_chunk_sizes_are_adapted_with_one_frame_of_delay() {
-        let sig: Vec<i16> = voice(FRAME * 30, 0).iter().zip(noise(FRAME * 30, 11, 1500.0)).map(|(a, b)| a.saturating_add(b)).collect();
+        let sig: Vec<i16> = voice(FRAME * 30, 0)
+            .iter()
+            .zip(noise(FRAME * 30, 11, 1500.0))
+            .map(|(a, b)| a.saturating_add(b))
+            .collect();
         // Reference: whole frames.
         let mut want = sig.clone();
         let mut d = Denoiser::new(Arc::new(NoiseControl::new(NoiseLevel::AiLight)));
@@ -637,23 +683,33 @@ mod tests {
         for c in got.chunks_mut(441) {
             d.process(c);
         }
-        assert!(got[..FRAME].iter().all(|&s| s == 0), "the first frame is the adapter's delay");
+        assert!(
+            got[..FRAME].iter().all(|&s| s == 0),
+            "the first frame is the adapter's delay"
+        );
         let n = sig.len() - FRAME;
         assert_eq!(&got[FRAME..], &want[..n]);
     }
 
-    // ---------------------------------------------------------------- IA máxima (DeepFilterNet)
+    // ---------------------------------------------------------------- Maximum AI (DeepFilterNet)
 
     fn wait_until(what: &str, mut f: impl FnMut() -> bool) {
         let t = std::time::Instant::now();
         while !f() {
-            assert!(t.elapsed() < std::time::Duration::from_secs(20), "timed out waiting for {what}");
+            assert!(
+                t.elapsed() < std::time::Duration::from_secs(20),
+                "timed out waiting for {what}"
+            );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }
 
     fn noisy_voice(frames: usize) -> Vec<i16> {
-        voice(FRAME * frames, 0).iter().zip(noise(FRAME * frames, 5, 2500.0)).map(|(a, b)| a.saturating_add(b)).collect()
+        voice(FRAME * frames, 0)
+            .iter()
+            .zip(noise(FRAME * frames, 5, 2500.0))
+            .map(|(a, b)| a.saturating_add(b))
+            .collect()
     }
 
     #[test]
@@ -674,10 +730,13 @@ mod tests {
         for c in chunks.by_ref().take(60) {
             d.process(c);
         }
-        assert!(d.dfn().loaded() && d.dfn_active(), "DeepFilterNet is in the signal");
+        assert!(
+            d.dfn().loaded() && d.dfn_active(),
+            "DeepFilterNet is in the signal"
+        );
         assert_eq!(ctl.ai_max_loaded(), 1);
         assert!(d.dfn_frames > 40, "{}", d.dfn_frames);
-        // Away from IA máxima: faded out on the next chunk, the worker exits and frees the model.
+        // Away from Maximum AI: faded out on the next chunk, the worker exits and frees the model.
         ctl.set_level(NoiseLevel::AiLight);
         for c in chunks.by_ref().take(5) {
             d.process(c);
@@ -696,7 +755,9 @@ mod tests {
         // Dropping the chain stops the worker too.
         let sh = Arc::downgrade(&d.inner.dfn.sh);
         drop(d);
-        wait_until("the worker of a dropped chain to exit", || sh.upgrade().is_none_or(|s| !s.worker_running()));
+        wait_until("the worker of a dropped chain to exit", || {
+            sh.upgrade().is_none_or(|s| !s.worker_running())
+        });
     }
 
     #[test]
@@ -718,7 +779,7 @@ mod tests {
             d.process(c);
             modes.push(d.inner.mode);
         }
-        // Padrão -> RNNoise at once (while DeepFilterNet loads and warms up) -> DeepFilterNet.
+        // Default -> RNNoise at once (while DeepFilterNet loads and warms up) -> DeepFilterNet.
         assert_eq!(modes[19], Mode::Plain);
         assert_eq!(modes[20], Mode::Rnn);
         assert_eq!(modes[45], Mode::Dfn);
@@ -726,10 +787,19 @@ mod tests {
         assert_eq!(modes[95], Mode::Dfn);
         assert_eq!(modes[100], Mode::Plain);
         // No click at any switch: steps stay in the range of the signal's own steps.
-        let max_step = |s: &[i16]| s.windows(2).map(|w| (w[1] as i32 - w[0] as i32).abs()).max().unwrap();
+        let max_step = |s: &[i16]| {
+            s.windows(2)
+                .map(|w| (w[1] as i32 - w[0] as i32).abs())
+                .max()
+                .unwrap()
+        };
         let natural = max_step(&sig);
-        assert!(max_step(&out) <= natural * 2, "step {} vs natural {natural}", max_step(&out));
-        // Back at Padrão: the plain signal, bit for bit.
+        assert!(
+            max_step(&out) <= natural * 2,
+            "step {} vs natural {natural}",
+            max_step(&out)
+        );
+        // Back at Default: the plain signal, bit for bit.
         assert_eq!(&out[FRAME * 101..], &sig[FRAME * 101..]);
         assert!(!d.inner.dfn.engaged && !d.inner.rnn_on);
     }
@@ -770,7 +840,10 @@ mod tests {
         };
         let want = run(FRAME);
         let got = run(441);
-        assert!(got[..FRAME].iter().all(|&s| s == 0), "the first frame is the adapter's delay");
+        assert!(
+            got[..FRAME].iter().all(|&s| s == 0),
+            "the first frame is the adapter's delay"
+        );
         let n = sig.len() - FRAME;
         assert_eq!(&got[FRAME..], &want[..n]);
     }
@@ -781,7 +854,9 @@ mod tests {
         let mut d = Denoiser::new(ctl.clone());
         d.set_offline(true);
         // Twice the budget per frame: far from real time.
-        d.dfn().set_slowdown(std::time::Duration::from_nanos(2 * super::super::dfn::BUDGET_NS as u64));
+        d.dfn().set_slowdown(std::time::Duration::from_nanos(
+            2 * super::super::dfn::BUDGET_NS as u64,
+        ));
         let mut sig = noisy_voice(150);
         let mut fell_at = None;
         for (k, c) in sig.chunks_mut(FRAME).enumerate() {
@@ -790,7 +865,7 @@ mod tests {
                 fell_at = Some(k);
             }
         }
-        let k = fell_at.expect("fell back to IA leve");
+        let k = fell_at.expect("fell back to Light AI");
         assert!(k < 100, "fell back after {k} frames");
         assert!(ctl.take_fallback_notice(), "the UI is told once");
         assert!(!ctl.take_fallback_notice());

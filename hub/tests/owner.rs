@@ -18,7 +18,9 @@ use vox_proto::*;
 use voxhub_server::{start, Options, Server};
 
 fn write_config(dir: &std::path::Path, owner: Option<&str>) {
-    let owner_line = owner.map(|o| format!("owner = \"{o}\"\n")).unwrap_or_default();
+    let owner_line = owner
+        .map(|o| format!("owner = \"{o}\"\n"))
+        .unwrap_or_default();
     std::fs::write(
         dir.join("config.toml"),
         format!(
@@ -30,7 +32,14 @@ fn write_config(dir: &std::path::Path, owner: Option<&str>) {
 }
 
 async fn start_in(dir: &std::path::Path, bind: &str) -> Server {
-    start(Options { data_dir: dir.to_path_buf(), no_livekit: true, livekit_bin: "unused".into(), bind_override: Some(bind.into()) }).await.unwrap()
+    start(Options {
+        data_dir: dir.to_path_buf(),
+        no_livekit: true,
+        livekit_bin: "unused".into(),
+        bind_override: Some(bind.into()),
+    })
+    .await
+    .unwrap()
 }
 
 struct Env {
@@ -47,7 +56,12 @@ async fn setup() -> Env {
     write_config(dir.path(), None);
     let server = start_in(dir.path(), "127.0.0.1:0").await;
     let host = format!("127.0.0.1:{}", server.addr.port());
-    Env { server: Some(server), http: reqwest::Client::new(), host, dir }
+    Env {
+        server: Some(server),
+        http: reqwest::Client::new(),
+        host,
+        dir,
+    }
 }
 
 #[derive(Clone)]
@@ -91,7 +105,12 @@ impl Env {
         self.start().await;
     }
 
-    async fn login_with(&self, name: &str, password: Option<&str>, header: Option<(&str, &str)>) -> reqwest::Response {
+    async fn login_with(
+        &self,
+        name: &str,
+        password: Option<&str>,
+        header: Option<(&str, &str)>,
+    ) -> reqwest::Response {
         let req = LoginRequest {
             username: name.into(),
             server_password: String::new(),
@@ -106,7 +125,12 @@ impl Env {
         r.send().await.unwrap()
     }
 
-    async fn login_ok(&self, name: &str, password: Option<&str>, header: Option<(&str, &str)>) -> LoginResponse {
+    async fn login_ok(
+        &self,
+        name: &str,
+        password: Option<&str>,
+        header: Option<(&str, &str)>,
+    ) -> LoginResponse {
         let r = self.login_with(name, password, header).await;
         let (status, text) = (r.status(), r.text().await.unwrap());
         assert_eq!(status, StatusCode::OK, "login {name}: {text}");
@@ -116,30 +140,50 @@ impl Env {
     /// A login from the server PC itself.
     async fn host_login(&self, name: &str) -> Who {
         let l = self.login_ok(name, None, None).await;
-        Who { token: l.token, user: l.user }
+        Who {
+            token: l.token,
+            user: l.user,
+        }
     }
 
     /// A login that does not count as the server PC.
     async fn remote_login(&self, name: &str) -> Who {
         let l = self.login_ok(name, None, Some(PROXIED)).await;
-        Who { token: l.token, user: l.user }
+        Who {
+            token: l.token,
+            user: l.user,
+        }
     }
 
     async fn post(&self, who: &Who, path: &str, body: Value) -> reqwest::Response {
-        self.http.post(self.url(path)).bearer_auth(&who.token).json(&body).send().await.unwrap()
+        self.http
+            .post(self.url(path))
+            .bearer_auth(&who.token)
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
     }
 
     async fn get(&self, who: &Who, path: &str) -> reqwest::Response {
-        self.http.get(self.url(path)).bearer_auth(&who.token).send().await.unwrap()
+        self.http
+            .get(self.url(path))
+            .bearer_auth(&who.token)
+            .send()
+            .await
+            .unwrap()
     }
 
     async fn set_password(&self, who: &Who, pw: &str) {
-        let r = self.post(who, "/api/account/password", json!({"new": pw})).await;
+        let r = self
+            .post(who, "/api/account/password", json!({"new": pw}))
+            .await;
         assert_eq!(r.status(), StatusCode::OK);
     }
 
     async fn claim(&self, who: &Who, code: &str) -> reqwest::Response {
-        self.post(who, "/api/owner/claim", json!({"code": code})).await
+        self.post(who, "/api/owner/claim", json!({"code": code}))
+            .await
     }
 
     /// A connection that does not count as the server PC (through a proxy, like `remote_login`).
@@ -153,9 +197,12 @@ impl Env {
     }
 
     async fn connect(&self, who: &Who, proxied: bool) -> Ws {
-        let mut req = format!("ws://{}/ws?token={}", self.host, who.token).into_client_request().unwrap();
+        let mut req = format!("ws://{}/ws?token={}", self.host, who.token)
+            .into_client_request()
+            .unwrap();
         if proxied {
-            req.headers_mut().insert(PROXIED.0, PROXIED.1.parse().unwrap());
+            req.headers_mut()
+                .insert(PROXIED.0, PROXIED.1.parse().unwrap());
         }
         let (ws, _) = tokio_tungstenite::connect_async(req).await.unwrap();
         Ws(ws)
@@ -178,10 +225,18 @@ impl Env {
 
 async fn error_of(r: reqwest::Response) -> (StatusCode, String) {
     let s = r.status();
-    (s, r.json::<ApiError>().await.map(|e| e.error).unwrap_or_default())
+    (
+        s,
+        r.json::<ApiError>()
+            .await
+            .map(|e| e.error)
+            .unwrap_or_default(),
+    )
 }
 
-struct Ws(tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>);
+struct Ws(
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+);
 
 impl Ws {
     async fn next_within(&mut self, wait: Duration) -> Option<ServerEvent> {
@@ -196,13 +251,21 @@ impl Ws {
 
     async fn ready(&mut self) -> (User, Account) {
         match self.next_within(Duration::from_secs(5)).await {
-            Some(ServerEvent::Ready { user, account, .. }) => (user, account.expect("a hub that knows roles sends the account")),
+            Some(ServerEvent::Ready { user, account, .. }) => (
+                user,
+                account.expect("a hub that knows roles sends the account"),
+            ),
             other => panic!("expected Ready, got {other:?}"),
         }
     }
 
     /// Skip events until one matches (`secs` at most).
-    async fn wait_for(&mut self, what: &str, secs: u64, mut pred: impl FnMut(&ServerEvent) -> bool) -> ServerEvent {
+    async fn wait_for(
+        &mut self,
+        what: &str,
+        secs: u64,
+        mut pred: impl FnMut(&ServerEvent) -> bool,
+    ) -> ServerEvent {
         let t = Instant::now();
         while t.elapsed() < Duration::from_secs(secs) {
             match self.next_within(Duration::from_secs(secs)).await {
@@ -220,7 +283,9 @@ impl Ws {
 #[tokio::test]
 async fn the_first_login_from_the_server_pc_becomes_the_owner() {
     let mut env = setup().await;
-    let code = env.claim_code().expect("a code is printed while there is no owner");
+    let code = env
+        .claim_code()
+        .expect("a code is printed while there is no owner");
 
     // A login that is not the server PC (here: through a proxy) does not claim, and the hub says so.
     let visitor = env.remote_login("Visita").await;
@@ -228,26 +293,50 @@ async fn the_first_login_from_the_server_pc_becomes_the_owner() {
     let (_, account) = env.ready(&visitor).await;
     assert!(account.no_owner && !account.owner_pinned, "{account:?}");
     // A loopback peer that says it is a remote address is no host either.
-    let named = env.login_ok("Nomeada", None, Some(("host", "meu-servidor.example.com"))).await;
+    let named = env
+        .login_ok("Nomeada", None, Some(("host", "meu-servidor.example.com")))
+        .await;
     assert_eq!(named.user.role, Role::Member);
-    assert_eq!(env.claim_code().as_deref(), Some(code.as_str()), "nothing claimed yet");
+    assert_eq!(
+        env.claim_code().as_deref(),
+        Some(code.as_str()),
+        "nothing claimed yet"
+    );
 
     // The app on the server PC: first loopback login.
     let mut visitor_ws = env.ws(&visitor).await;
     visitor_ws.ready().await;
     let anfitriao = env.host_login("anfitriao").await;
-    assert_eq!(anfitriao.user.role, Role::Owner, "the host becomes the owner on the spot");
+    assert_eq!(
+        anfitriao.user.role,
+        Role::Owner,
+        "the host becomes the owner on the spot"
+    );
     let (me, account) = env.ready_host(&anfitriao).await;
     assert_eq!(me.role, Role::Owner);
-    assert_eq!((account.no_owner, account.must_set_password, account.has_password), (false, true, false), "a personal password is asked for right away");
+    assert_eq!(
+        (
+            account.no_owner,
+            account.must_set_password,
+            account.has_password
+        ),
+        (false, true, false),
+        "a personal password is asked for right away"
+    );
     assert_eq!(env.claim_code(), None, "the code dies with the claim");
     // Everybody who is online learns who the owner is.
     visitor_ws.wait_for("UserUpdated for the new owner", 5, |e| matches!(e, ServerEvent::UserUpdated { user } if user.username == "anfitriao" && user.role == Role::Owner)).await;
 
     // Until the password is set, the owner's powers are off; afterwards they work.
-    assert_eq!(env.get(&anfitriao, "/api/admin/users").await.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        env.get(&anfitriao, "/api/admin/users").await.status(),
+        StatusCode::FORBIDDEN
+    );
     env.set_password(&anfitriao, "dono-senha").await;
-    assert_eq!(env.get(&anfitriao, "/api/admin/users").await.status(), StatusCode::OK);
+    assert_eq!(
+        env.get(&anfitriao, "/api/admin/users").await.status(),
+        StatusCode::OK
+    );
 
     // Only one owner: the next loopback login is a member, and so is a returning visitor.
     let bia = env.host_login("Bia").await;
@@ -257,13 +346,22 @@ async fn the_first_login_from_the_server_pc_becomes_the_owner() {
 
     // The claim is audited, and it survives a restart (the same person is the owner).
     let log = env.audit(&anfitriao).await;
-    let entry = log.iter().find(|e| e.action == AUDIT_CLAIM_OWNER).expect("claim audited");
-    assert_eq!((entry.actor.as_ref().map(|a| a.id), entry.detail.as_str()), (Some(anfitriao.user.id), "pc-do-servidor"));
+    let entry = log
+        .iter()
+        .find(|e| e.action == AUDIT_CLAIM_OWNER)
+        .expect("claim audited");
+    assert_eq!(
+        (entry.actor.as_ref().map(|a| a.id), entry.detail.as_str()),
+        (Some(anfitriao.user.id), "pc-do-servidor")
+    );
     env.restart().await;
     assert_eq!(env.claim_code(), None, "an owner exists: no code");
     let l = env.login_ok("ANFITRIAO", Some("dono-senha"), None).await;
     assert_eq!(l.user.role, Role::Owner);
-    assert_eq!(env.login_ok("Bia", None, None).await.user.role, Role::Member);
+    assert_eq!(
+        env.login_ok("Bia", None, None).await.user.role,
+        Role::Member
+    );
     env.stop().await;
 }
 
@@ -299,9 +397,22 @@ async fn a_login_from_a_non_loopback_address_does_not_claim() {
     write_config(dir.path(), None);
     let server = start_in(dir.path(), "0.0.0.0:0").await;
     let host = format!("{lan}:{}", server.addr.port());
-    let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(3)).build().unwrap();
-    let req = LoginRequest { username: "anfitriao".into(), server_password: String::new(), protocol_version: PROTOCOL_VERSION, ..Default::default() };
-    let r = match http.post(format!("http://{host}/api/login")).json(&req).send().await {
+    let http = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(3))
+        .build()
+        .unwrap();
+    let req = LoginRequest {
+        username: "anfitriao".into(),
+        server_password: String::new(),
+        protocol_version: PROTOCOL_VERSION,
+        ..Default::default()
+    };
+    let r = match http
+        .post(format!("http://{host}/api/login"))
+        .json(&req)
+        .send()
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             eprintln!("skipped: could not reach {host} ({e})");
@@ -310,16 +421,36 @@ async fn a_login_from_a_non_loopback_address_does_not_claim() {
         }
     };
     let l: LoginResponse = r.json().await.unwrap();
-    assert_eq!(l.user.role, Role::Member, "logging in with the LAN address of the server PC does not claim");
+    assert_eq!(
+        l.user.role,
+        Role::Member,
+        "logging in with the LAN address of the server PC does not claim"
+    );
     assert!(server.claim_code().is_some());
-    let (ws, _) = tokio_tungstenite::connect_async(format!("ws://{host}/ws?token={}", l.token)).await.unwrap();
+    let (ws, _) = tokio_tungstenite::connect_async(format!("ws://{host}/ws?token={}", l.token))
+        .await
+        .unwrap();
     let mut ws = Ws(ws);
     let (me, account) = ws.ready().await;
     assert_eq!(me.role, Role::Member);
-    assert!(account.no_owner, "a connection over the LAN does not claim either");
+    assert!(
+        account.no_owner,
+        "a connection over the LAN does not claim either"
+    );
     // The same machine through 127.0.0.1 does.
-    let req2 = LoginRequest { username: "anfitriao".into(), ..req };
-    let l2: LoginResponse = http.post(format!("http://127.0.0.1:{}/api/login", server.addr.port())).json(&req2).send().await.unwrap().json().await.unwrap();
+    let req2 = LoginRequest {
+        username: "anfitriao".into(),
+        ..req
+    };
+    let l2: LoginResponse = http
+        .post(format!("http://127.0.0.1:{}/api/login", server.addr.port()))
+        .json(&req2)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(l2.user.role, Role::Owner);
     server.shutdown().await;
 }
@@ -347,14 +478,24 @@ async fn the_claim_code_works_once_and_wrong_codes_are_slowed_down() {
     // Wrong codes: refused; after three in a row the whole server must wait (also for the right code).
     for _ in 0..3 {
         let (status, msg) = error_of(env.claim(&ana, "AAAA-AAAA").await).await;
-        assert_eq!((status, msg.as_str()), (StatusCode::FORBIDDEN, "wrong claim code"));
+        assert_eq!(
+            (status, msg.as_str()),
+            (StatusCode::FORBIDDEN, "wrong claim code")
+        );
     }
     let (status, msg) = error_of(env.claim(&ana, &code).await).await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{msg}");
     assert!(msg.contains(ERR_TOO_MANY_ATTEMPTS));
-    assert_eq!(env.get(&ana, "/api/channels").await.status(), StatusCode::OK, "the brake is only on claiming");
+    assert_eq!(
+        env.get(&ana, "/api/channels").await.status(),
+        StatusCode::OK,
+        "the brake is only on claiming"
+    );
     // Another person's attempts count against the same brake (it is per server, not per address).
-    assert_eq!(env.claim(&bia, &code).await.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        env.claim(&bia, &code).await.status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
     tokio::time::sleep(Duration::from_millis(1200)).await;
 
     // The right code, typed the way people type it.
@@ -363,23 +504,40 @@ async fn the_claim_code_works_once_and_wrong_codes_are_slowed_down() {
     assert_eq!(r.status(), StatusCode::OK);
     let resp: ClaimOwnerResponse = r.json().await.unwrap();
     assert_eq!((resp.user.role, resp.user.id), (Role::Owner, ana.user.id));
-    assert!(resp.account.must_set_password && !resp.account.no_owner, "the owner must now set a personal password: {:?}", resp.account);
+    assert!(
+        resp.account.must_set_password && !resp.account.no_owner,
+        "the owner must now set a personal password: {:?}",
+        resp.account
+    );
     assert_eq!(env.claim_code(), None);
     bia_ws.wait_for("UserUpdated for the new owner", 5, |e| matches!(e, ServerEvent::UserUpdated { user } if user.id == ana.user.id && user.role == Role::Owner)).await;
 
     // Once: the same code again, from anyone, is a conflict (including the owner), not a second owner.
     assert_eq!(env.claim(&bia, &code).await.status(), StatusCode::CONFLICT);
     assert_eq!(env.claim(&ana, &code).await.status(), StatusCode::CONFLICT);
-    assert_eq!(env.host_login("Bia").await.user.role, Role::Member, "even the server PC cannot take over a claimed server");
+    assert_eq!(
+        env.host_login("Bia").await.user.role,
+        Role::Member,
+        "even the server PC cannot take over a claimed server"
+    );
 
     // The owner sets the password, and the claim is in the log, with its actor and how.
     env.set_password(&ana, "ana-senha-1").await;
     let log = env.audit(&ana).await;
     let e = log.iter().find(|e| e.action == AUDIT_CLAIM_OWNER).unwrap();
-    assert_eq!((e.actor.as_ref().map(|a| a.id), e.detail.as_str()), (Some(ana.user.id), "codigo"));
+    assert_eq!(
+        (e.actor.as_ref().map(|a| a.id), e.detail.as_str()),
+        (Some(ana.user.id), "codigo")
+    );
 
     // Not logged in: no claiming (the code is useless without a session).
-    let r = env.http.post(env.url("/api/owner/claim")).json(&json!({"code": code})).send().await.unwrap();
+    let r = env
+        .http
+        .post(env.url("/api/owner/claim"))
+        .json(&json!({"code": code}))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
     env.restart().await;
     assert_eq!(env.claim_code(), None);
@@ -394,7 +552,10 @@ async fn the_claim_code_is_new_on_every_start_while_there_is_no_owner() {
     env.restart().await;
     let second = env.claim_code().unwrap();
     assert_ne!(first, second);
-    let ana = Who { token: env.remote_login("Ana").await.token, ..ana };
+    let ana = Who {
+        token: env.remote_login("Ana").await.token,
+        ..ana
+    };
     let (status, _) = error_of(env.claim(&ana, &first).await).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "the old code is dead");
     assert_eq!(env.claim(&ana, &second).await.status(), StatusCode::OK);
@@ -408,8 +569,17 @@ async fn an_owner_in_the_config_overrides_the_claim() {
     let dir = tempfile::tempdir().unwrap();
     write_config(dir.path(), Some("Dono"));
     let server = start_in(dir.path(), "127.0.0.1:0").await;
-    let mut env = Env { host: format!("127.0.0.1:{}", server.addr.port()), server: Some(server), http: reqwest::Client::new(), dir };
-    assert_eq!(env.claim_code(), None, "no code when the config names the owner");
+    let mut env = Env {
+        host: format!("127.0.0.1:{}", server.addr.port()),
+        server: Some(server),
+        http: reqwest::Client::new(),
+        dir,
+    };
+    assert_eq!(
+        env.claim_code(),
+        None,
+        "no code when the config names the owner"
+    );
 
     // The server PC's first login is just a member: the configured name is the owner.
     let host_pc = env.host_login("anfitriao").await;
@@ -418,14 +588,23 @@ async fn an_owner_in_the_config_overrides_the_claim() {
     assert!(!account.no_owner && account.owner_pinned);
     let dono = env.host_login("dono").await;
     assert_eq!(dono.user.role, Role::Owner);
-    assert_eq!(env.claim(&host_pc, "AAAA-AAAA").await.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        env.claim(&host_pc, "AAAA-AAAA").await.status(),
+        StatusCode::CONFLICT
+    );
     let (_, msg) = error_of(env.claim(&host_pc, "AAAA-AAAA").await).await;
     assert!(msg.contains("config.toml"), "{msg}");
 
     // Handing the server over is off too, and says why.
     env.set_password(&dono, "dono-senha").await;
     env.set_password(&host_pc, "anfitriao-senha").await;
-    let r = env.post(&dono, "/api/admin/transfer-owner", json!({"user_id": host_pc.user.id})).await;
+    let r = env
+        .post(
+            &dono,
+            "/api/admin/transfer-owner",
+            json!({"user_id": host_pc.user.id}),
+        )
+        .await;
     let (status, msg) = error_of(r).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert!(msg.contains("config.toml"), "{msg}");
@@ -433,8 +612,20 @@ async fn an_owner_in_the_config_overrides_the_claim() {
 
     // It stays pinned after a restart; and a config that names an owner wins over a stored one.
     env.restart().await;
-    assert_eq!(env.login_ok("Dono", Some("dono-senha"), None).await.user.role, Role::Owner);
-    assert_eq!(env.login_ok("anfitriao", Some("anfitriao-senha"), None).await.user.role, Role::Member);
+    assert_eq!(
+        env.login_ok("Dono", Some("dono-senha"), None)
+            .await
+            .user
+            .role,
+        Role::Owner
+    );
+    assert_eq!(
+        env.login_ok("anfitriao", Some("anfitriao-senha"), None)
+            .await
+            .user
+            .role,
+        Role::Member
+    );
     env.stop().await;
 }
 
@@ -447,13 +638,19 @@ async fn a_config_owner_beats_a_stored_one() {
     // The host now writes `owner = "Ana"` in config.toml and restarts.
     write_config(env.dir.path(), Some("Ana"));
     env.start().await;
-    assert_eq!(env.login_ok("anfitriao", None, None).await.user.role, Role::Member);
+    assert_eq!(
+        env.login_ok("anfitriao", None, None).await.user.role,
+        Role::Member
+    );
     assert_eq!(env.login_ok("ana", None, None).await.user.role, Role::Owner);
     // And taking the line out again brings the stored owner back.
     env.stop().await;
     write_config(env.dir.path(), None);
     env.start().await;
-    assert_eq!(env.login_ok("anfitriao", None, None).await.user.role, Role::Owner);
+    assert_eq!(
+        env.login_ok("anfitriao", None, None).await.user.role,
+        Role::Owner
+    );
     env.stop().await;
 }
 
@@ -470,7 +667,10 @@ async fn the_owner_can_hand_the_server_over() {
     let transfer = |from: &Who, to: &Who| {
         let (from, id) = (from.clone(), to.user.id);
         let env = &env;
-        async move { env.post(&from, "/api/admin/transfer-owner", json!({"user_id": id})).await }
+        async move {
+            env.post(&from, "/api/admin/transfer-owner", json!({"user_id": id}))
+                .await
+        }
     };
     let mut ana_ws = env.ws(&ana).await;
     ana_ws.ready().await;
@@ -481,37 +681,109 @@ async fn the_owner_can_hand_the_server_over() {
     let (status, msg) = error_of(transfer(&ana, &bia).await).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert!(msg.contains("personal password first"), "{msg}");
-    assert_eq!(transfer(&bia, &caio).await.status(), StatusCode::FORBIDDEN, "members cannot");
+    assert_eq!(
+        transfer(&bia, &caio).await.status(),
+        StatusCode::FORBIDDEN,
+        "members cannot"
+    );
     assert_eq!(transfer(&ana, &ana).await.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(env.post(&ana, "/api/admin/transfer-owner", json!({"user_id": 9999})).await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        env.post(&ana, "/api/admin/transfer-owner", json!({"user_id": 9999}))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
     env.set_password(&bia, "bia-senha-1").await;
     // An Admin is not the owner either.
     env.set_password(&caio, "caio-senha-1").await;
-    assert_eq!(env.post(&ana, &format!("/api/admin/users/{}/role", caio.user.id), json!({"role": "admin"})).await.status(), StatusCode::OK);
-    assert_eq!(transfer(&caio, &bia).await.status(), StatusCode::FORBIDDEN, "admins cannot");
+    assert_eq!(
+        env.post(
+            &ana,
+            &format!("/api/admin/users/{}/role", caio.user.id),
+            json!({"role": "admin"})
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        transfer(&caio, &bia).await.status(),
+        StatusCode::FORBIDDEN,
+        "admins cannot"
+    );
 
     // Ana hands it over to Bia.
     assert_eq!(transfer(&ana, &bia).await.status(), StatusCode::OK);
-    let ev = bia_ws.wait_for("Bia becomes owner", 5, |e| matches!(e, ServerEvent::UserUpdated { user } if user.id == bia.user.id)).await;
+    let ev = bia_ws
+        .wait_for(
+            "Bia becomes owner",
+            5,
+            |e| matches!(e, ServerEvent::UserUpdated { user } if user.id == bia.user.id),
+        )
+        .await;
     assert!(matches!(ev, ServerEvent::UserUpdated { user } if user.role == Role::Owner));
     ana_ws.wait_for("Ana becomes admin", 5, |e| matches!(e, ServerEvent::UserUpdated { user } if user.id == ana.user.id && user.role == Role::Admin)).await;
-    assert_eq!(env.get(&bia, "/api/admin/users").await.status(), StatusCode::OK, "Bia already has a password: her powers work at once");
-    assert_eq!(env.post(&bia, &format!("/api/admin/users/{}/reset-password", caio.user.id), json!({})).await.status(), StatusCode::OK, "owner-only power");
+    assert_eq!(
+        env.get(&bia, "/api/admin/users").await.status(),
+        StatusCode::OK,
+        "Bia already has a password: her powers work at once"
+    );
+    assert_eq!(
+        env.post(
+            &bia,
+            &format!("/api/admin/users/{}/reset-password", caio.user.id),
+            json!({})
+        )
+        .await
+        .status(),
+        StatusCode::OK,
+        "owner-only power"
+    );
     // Ana is an Admin now: she cannot do owner things, and cannot take it back.
     assert_eq!(transfer(&ana, &ana).await.status(), StatusCode::FORBIDDEN);
-    assert_eq!(env.post(&ana, &format!("/api/admin/users/{}/reset-password", bia.user.id), json!({})).await.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        env.post(
+            &ana,
+            &format!("/api/admin/users/{}/reset-password", bia.user.id),
+            json!({})
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
     let (status, _) = error_of(env.claim(&ana, "AAAA-AAAA").await).await;
     assert_eq!(status, StatusCode::CONFLICT);
 
     // Audited: who handed it to whom.
     let log = env.audit(&bia).await;
-    let e = log.iter().find(|e| e.action == AUDIT_TRANSFER_OWNER).unwrap();
-    assert_eq!((e.actor.as_ref().map(|a| a.id), e.target.as_ref().map(|t| t.id)), (Some(ana.user.id), Some(bia.user.id)));
+    let e = log
+        .iter()
+        .find(|e| e.action == AUDIT_TRANSFER_OWNER)
+        .unwrap();
+    assert_eq!(
+        (
+            e.actor.as_ref().map(|a| a.id),
+            e.target.as_ref().map(|t| t.id)
+        ),
+        (Some(ana.user.id), Some(bia.user.id))
+    );
 
     // It lasts: after a restart Bia is the owner and Ana is an Admin.
     env.restart().await;
-    assert_eq!(env.login_ok("Bia", Some("bia-senha-1"), None).await.user.role, Role::Owner);
-    assert_eq!(env.login_ok("Ana", Some("ana-senha-1"), None).await.user.role, Role::Admin);
+    assert_eq!(
+        env.login_ok("Bia", Some("bia-senha-1"), None)
+            .await
+            .user
+            .role,
+        Role::Owner
+    );
+    assert_eq!(
+        env.login_ok("Ana", Some("ana-senha-1"), None)
+            .await
+            .user
+            .role,
+        Role::Admin
+    );
     env.stop().await;
 }
 
@@ -531,8 +803,15 @@ async fn reset_owner_clears_it_and_the_host_claims_again() {
     let msg = voxhub_server::owner::reset_owner_cli(env.dir.path()).unwrap();
     assert!(msg.contains("Ana"), "{msg}");
     bia_ws.wait_for("Ana is no longer the owner", 8, |e| matches!(e, ServerEvent::UserUpdated { user } if user.id == ana.user.id && user.role != Role::Owner)).await;
-    assert!(env.claim_code().is_some(), "a new code is printed once the running hub notices");
-    assert_eq!(env.get(&ana, "/api/admin/users").await.status(), StatusCode::FORBIDDEN, "Ana lost the powers");
+    assert!(
+        env.claim_code().is_some(),
+        "a new code is printed once the running hub notices"
+    );
+    assert_eq!(
+        env.get(&ana, "/api/admin/users").await.status(),
+        StatusCode::FORBIDDEN,
+        "Ana lost the powers"
+    );
     let (_, account) = env.ready(&bia).await;
     assert!(account.no_owner);
 
@@ -541,21 +820,37 @@ async fn reset_owner_clears_it_and_the_host_claims_again() {
     assert_eq!(host.user.role, Role::Owner);
     env.set_password(&host, "anfitriao-senha-1").await;
     let log = env.audit(&host).await;
-    let reset = log.iter().find(|e| e.action == AUDIT_RESET_OWNER).expect("the reset is in the log");
+    let reset = log
+        .iter()
+        .find(|e| e.action == AUDIT_RESET_OWNER)
+        .expect("the reset is in the log");
     assert!(reset.actor.is_none(), "the host from the command line");
     assert_eq!(reset.detail, "Ana");
-    assert_eq!(log.iter().filter(|e| e.action == AUDIT_CLAIM_OWNER).count(), 2);
+    assert_eq!(
+        log.iter().filter(|e| e.action == AUDIT_CLAIM_OWNER).count(),
+        2
+    );
 
     // Stopped server: the same tool works on the files, and again on a server with no owner.
     env.stop().await;
     let msg = voxhub_server::owner::reset_owner_cli(env.dir.path()).unwrap();
     assert!(msg.contains("Anfitriao"), "{msg}");
     let msg = voxhub_server::owner::reset_owner_cli(env.dir.path()).unwrap();
-    assert!(msg.contains("não tinha dono"), "{msg}");
+    assert!(msg.contains("had no saved owner"), "{msg}");
     env.start().await;
     assert!(env.claim_code().is_some());
-    assert_eq!(env.login_ok("Ana", Some("ana-senha-1"), None).await.user.role, Role::Owner, "the server PC logs in as Ana this time");
-    assert!(voxhub_server::owner::reset_owner_cli(&env.dir.path().join("nada")).is_err(), "wrong --data-dir");
+    assert_eq!(
+        env.login_ok("Ana", Some("ana-senha-1"), None)
+            .await
+            .user
+            .role,
+        Role::Owner,
+        "the server PC logs in as Ana this time"
+    );
+    assert!(
+        voxhub_server::owner::reset_owner_cli(&env.dir.path().join("nada")).is_err(),
+        "wrong --data-dir"
+    );
     env.stop().await;
 }
 
@@ -563,7 +858,12 @@ async fn reset_owner_clears_it_and_the_host_claims_again() {
 
 impl Env {
     /// Set a password through a proxy (not the server PC), with the setup code if given.
-    async fn set_password_remote(&self, who: &Who, pw: &str, code: Option<&str>) -> reqwest::Response {
+    async fn set_password_remote(
+        &self,
+        who: &Who,
+        pw: &str,
+        code: Option<&str>,
+    ) -> reqwest::Response {
         self.http
             .post(self.url("/api/account/password"))
             .bearer_auth(&who.token)
@@ -584,23 +884,62 @@ async fn the_owners_first_password_needs_the_host() {
     let dir = tempfile::tempdir().unwrap();
     write_config(dir.path(), Some("Dono"));
     let server = start_in(dir.path(), "127.0.0.1:0").await;
-    let mut env = Env { host: format!("127.0.0.1:{}", server.addr.port()), server: Some(server), http: reqwest::Client::new(), dir };
-    let code = env.server().owner_setup_code().expect("the console shows a setup code while the owner has no password");
+    let mut env = Env {
+        host: format!("127.0.0.1:{}", server.addr.port()),
+        server: Some(server),
+        http: reqwest::Client::new(),
+        dir,
+    };
+    let code = env
+        .server()
+        .owner_setup_code()
+        .expect("the console shows a setup code while the owner has no password");
     let squatter = env.remote_login("dono").await;
     let (status, msg) = error_of(env.set_password_remote(&squatter, "squat-pw", None).await).await;
-    assert_eq!((status, msg.as_str()), (StatusCode::FORBIDDEN, ERR_OWNER_PROOF_REQUIRED));
-    let (status, msg) = error_of(env.set_password_remote(&squatter, "squat-pw", Some("AAAA-AAAA")).await).await;
-    assert_eq!((status, msg.as_str()), (StatusCode::FORBIDDEN, "wrong claim code"));
-    assert_eq!(env.get(&squatter, "/api/admin/users").await.status(), StatusCode::FORBIDDEN, "no owner powers");
+    assert_eq!(
+        (status, msg.as_str()),
+        (StatusCode::FORBIDDEN, ERR_OWNER_PROOF_REQUIRED)
+    );
+    let (status, msg) = error_of(
+        env.set_password_remote(&squatter, "squat-pw", Some("AAAA-AAAA"))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        (status, msg.as_str()),
+        (StatusCode::FORBIDDEN, "wrong claim code")
+    );
+    assert_eq!(
+        env.get(&squatter, "/api/admin/users").await.status(),
+        StatusCode::FORBIDDEN,
+        "no owner powers"
+    );
     // A member's own first password needs nothing special.
     let ana = env.remote_login("Ana").await;
-    assert_eq!(env.set_password_remote(&ana, "ana-senha", None).await.status(), StatusCode::OK);
+    assert_eq!(
+        env.set_password_remote(&ana, "ana-senha", None)
+            .await
+            .status(),
+        StatusCode::OK
+    );
     // The host, from another PC, with the code the console shows.
     tokio::time::sleep(Duration::from_millis(1100)).await; // the wrong code's brake
     let host = env.remote_login("Dono").await;
-    assert_eq!(env.set_password_remote(&host, "dono-senha", Some(&code.to_lowercase())).await.status(), StatusCode::OK);
-    assert_eq!(env.get(&host, "/api/admin/users").await.status(), StatusCode::OK);
-    assert_eq!(env.server().owner_setup_code(), None, "done: no code any more");
+    assert_eq!(
+        env.set_password_remote(&host, "dono-senha", Some(&code.to_lowercase()))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        env.get(&host, "/api/admin/users").await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        env.server().owner_setup_code(),
+        None,
+        "done: no code any more"
+    );
     env.stop().await;
 
     // Claimed: the claiming session may set it from anywhere; another session of the same name
@@ -611,9 +950,24 @@ async fn the_owners_first_password_needs_the_host() {
     let other = env.remote_login("anfitriao").await;
     assert!(env.server().owner_setup_code().is_some());
     let (status, msg) = error_of(env.set_password_remote(&other, "outra-senha", None).await).await;
-    assert_eq!((status, msg.as_str()), (StatusCode::FORBIDDEN, ERR_OWNER_PROOF_REQUIRED));
-    assert_eq!(env.set_password_remote(&claimer, "dono-senha", None).await.status(), StatusCode::OK);
-    assert_eq!(env.get(&claimer, "/api/admin/users").await.status(), StatusCode::OK);
-    assert_eq!(env.get(&other, "/api/channels").await.status(), StatusCode::UNAUTHORIZED, "the other session is gone");
+    assert_eq!(
+        (status, msg.as_str()),
+        (StatusCode::FORBIDDEN, ERR_OWNER_PROOF_REQUIRED)
+    );
+    assert_eq!(
+        env.set_password_remote(&claimer, "dono-senha", None)
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        env.get(&claimer, "/api/admin/users").await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        env.get(&other, "/api/channels").await.status(),
+        StatusCode::UNAUTHORIZED,
+        "the other session is gone"
+    );
     env.stop().await;
 }

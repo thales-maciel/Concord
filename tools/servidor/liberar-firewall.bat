@@ -1,13 +1,5 @@
 @echo off
-rem Libera o servidor do concord no Firewall do Windows, em TODAS as redes (Dominio, Privada e
-rem Publica), para IPv4 e IPv6. Cria 3 regras de entrada, todas chamadas "concord servidor (...)":
-rem   - bin\concord-server.exe: TCP 7890 (o servidor);
-rem   - bin\livekit-server.exe: TCP 7880 e 7881 e UDP 7882 (a voz).
-rem Se data\config.toml usar outras portas, elas sao lidas de la.
-rem Bloqueios que o proprio Windows criou para esses dois programas (um bloqueio vence qualquer
-rem liberacao) sao desligados, nunca apagados.
-rem Rodar de novo substitui as regras (nao duplica). Para desfazer: remover-firewall.bat.
-rem Teste sem mudar nada (nao pede administrador): liberar-firewall.bat /teste
+rem Manage concord firewall rules. Legacy filenames, rule names and markers remain compatible.
 setlocal
 cd /d "%~dp0"
 set "CONCORD_FW_ACAO=liberar"
@@ -18,23 +10,23 @@ if /i "%~1"=="/teste" set "CONCORD_FW_MODO=teste"
 if /i "%~1"=="/teste" goto rodar
 if /i "%~1"=="/elevado" goto rodar
 echo.
-echo  LIBERAR O SERVIDOR DO CONCORD NO FIREWALL DO WINDOWS
+echo  ALLOW CONCORD SERVER THROUGH WINDOWS FIREWALL
 echo  ====================================================
 echo.
-echo  O que este arquivo faz:
-echo  - cria 3 regras de ENTRADA no Firewall do Windows, chamadas "concord servidor (...)";
-echo  - elas deixam entrar conexoes so para os programas desta pasta:
-echo      bin\concord-server.exe  (servidor: TCP 7890)
-echo      bin\livekit-server.exe  (voz: TCP 7880 e 7881, UDP 7882)
-echo  - valem em todas as redes (Dominio, Privada e Publica), em IPv4 e IPv6;
-echo  - se o proprio Windows tiver criado um BLOQUEIO para esses dois programas
-echo    (por exemplo, quando a pergunta dele foi cancelada), ele e desligado, nao apagado;
-echo  - rodar de novo substitui as regras; remover-firewall.bat desfaz tudo.
+echo  What this script does:
+echo  - creates 3 INBOUND Windows Firewall rules, named "concord servidor (...)";
+echo  - allows connections only to programs in this folder:
+echo      bin\concord-server.exe  (server: TCP 7890)
+echo      bin\livekit-server.exe  (voice: TCP 7880 and 7881, UDP 7882)
+echo  - applies to all networks (Domain, Private, Public), IPv4 and IPv6;
+echo  - if Windows created a BLOCK rule for these programs
+echo    (for example, if its prompt was cancelled), it is disabled, not deleted;
+echo  - running again replaces the rules; remove-firewall.bat undoes the changes.
 echo.
-echo  Nada mais muda: nenhuma outra regra, nenhuma porta do roteador.
-echo  Para mudar o Firewall o Windows pede permissao de administrador:
-echo  depois de apertar uma tecla, clique em "Sim" na janela do Windows.
-echo  (Para desistir, feche esta janela.)
+echo  Nothing else changes: no other rules or router ports.
+echo  Windows requires administrator permission to change firewall rules:
+echo  after pressing a key, click "Yes" in the Windows prompt.
+echo  (To cancel, close this window.)
 echo.
 pause
 net session >nul 2>&1
@@ -42,7 +34,7 @@ if not errorlevel 1 goto rodar
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath $env:CONCORD_FW_BAT -ArgumentList '/elevado' -Verb RunAs"
 if errorlevel 1 (
   echo.
-  echo O Windows nao deu permissao de administrador: nada foi mudado.
+  echo Windows did not grant administrator permission: nothing changed.
   pause
 )
 exit /b
@@ -88,42 +80,42 @@ function Bloqueios {
 function Marcadas {
   @(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { ([string]$_.Description).StartsWith($marca) })
 }
-if ($teste) { Write-Host 'MODO TESTE: nada e mudado, so mostra o que seria feito.' }
+if ($teste) { Write-Host 'TEST MODE: no changes, only a preview of what would happen.' }
 try {
   $velhas = @(Get-NetFirewallRule -DisplayName 'concord servidor (*' -ErrorAction SilentlyContinue)
   foreach ($v in $velhas) {
-    if ($remover) { Write-Host "Apagando a regra: $($v.DisplayName)" } else { Write-Host "Substituindo a regra antiga: $($v.DisplayName)" }
+    if ($remover) { Write-Host "Deleting rule: $($v.DisplayName)" } else { Write-Host "Replacing old rule: $($v.DisplayName)" }
     $v | Remove-NetFirewallRule -WhatIf:$teste
   }
   if ($remover) {
     $marcadas = Marcadas
     foreach ($m in $marcadas) {
-      Write-Host "Religando o bloqueio que o Windows tinha criado: $($m.DisplayName) ($($m.Profile))"
+      Write-Host "Re-enabling Windows-created block rule: $($m.DisplayName) ($($m.Profile))"
       $antes = ([string]$m.Description).Substring($marca.Length).TrimStart()
       if (-not $antes) { $antes = [string]$m.DisplayName }
       $m | Set-NetFirewallRule -Enabled True -Description $antes -WhatIf:$teste
     }
-    if ($velhas.Count + $marcadas.Count -eq 0) { Write-Host 'Nenhuma regra do concord encontrada: nada a desfazer.' }
-    elseif ($teste) { Write-Host 'MODO TESTE: nenhuma regra foi apagada ou religada.' }
-    else { Write-Host "Pronto: $($velhas.Count) regra(s) apagada(s), $($marcadas.Count) bloqueio(s) religado(s)." }
+    if ($velhas.Count + $marcadas.Count -eq 0) { Write-Host 'No concord rules found: nothing to undo.' }
+    elseif ($teste) { Write-Host 'TEST MODE: no rules deleted or re-enabled.' }
+    else { Write-Host "Done: $($velhas.Count) rule(s) deleted, $($marcadas.Count) block(s) re-enabled." }
     exit 0
   }
   foreach ($r in $regras) {
-    Write-Host "Criando: $($r.Nome)"
-    Write-Host "  entrada, permitir, $($r.Protocolo) $($r.Portas -join ' e '), todas as redes (Dominio, Privada, Publica), IPv4 e IPv6"
-    Write-Host "  programa: $($r.Programa)"
-    New-NetFirewallRule -DisplayName $r.Nome -Group 'concord servidor' -Description 'Criada pelo liberar-firewall.bat do concord. Para apagar: remover-firewall.bat.' -Direction Inbound -Action Allow -Profile Any -Program $r.Programa -Protocol $r.Protocolo -LocalPort $r.Portas -WhatIf:$teste | Out-Null
+    Write-Host "Creating: $($r.Nome)"
+    Write-Host "  inbound, allow, $($r.Protocolo) $($r.Portas -join ' and '), all networks (Domain, Private, Public), IPv4 and IPv6"
+    Write-Host "  program: $($r.Programa)"
+    New-NetFirewallRule -DisplayName $r.Nome -Group 'concord servidor' -Description 'Created by concord allow-firewall.bat. To remove: remove-firewall.bat.' -Direction Inbound -Action Allow -Profile Any -Program $r.Programa -Protocol $r.Protocolo -LocalPort $r.Portas -WhatIf:$teste | Out-Null
   }
   foreach ($b in @(Bloqueios)) {
-    Write-Host "Desligando um bloqueio que o Windows criou para este programa: $($b.DisplayName) ($($b.Profile))"
+    Write-Host "Disabling a Windows-created block rule for this program: $($b.DisplayName) ($($b.Profile))"
     $b | Set-NetFirewallRule -Enabled False -Description "$marca $($b.Description)" -WhatIf:$teste
   }
   Write-Host ''
-  if ($teste) { Write-Host 'MODO TESTE: nenhuma regra foi criada, apagada ou desligada.'; exit 0 }
-  Write-Host 'Pronto: o servidor e a voz estao liberados no Firewall do Windows em todas as redes (IPv4 e IPv6).'
-  Write-Host 'Os amigos ainda precisam alcancar este PC pela internet: IPv6, portas abertas no roteador ou VPN (veja o LEIA-ME-SERVIDOR.txt).'
+  if ($teste) { Write-Host 'TEST MODE: no rules created, deleted or disabled.'; exit 0 }
+  Write-Host 'Done: server and voice are allowed through Windows Firewall on all networks (IPv4 and IPv6).'
+  Write-Host 'Friends still need to reach this PC: IPv6, router forwarding or VPN (see README-SERVER.txt).'
 } catch {
   Write-Host ''
-  Write-Host "Nao deu certo: $($_.Exception.Message)"
+  Write-Host "Failed: $($_.Exception.Message)"
   exit 1
 }

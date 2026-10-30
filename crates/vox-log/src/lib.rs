@@ -45,7 +45,11 @@ impl tracing::field::Visit for MessageText {
 }
 
 impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for IceStateLayer {
-    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
         let mut text = MessageText::default();
         event.record(&mut text);
         if let Some(state) = text.0.strip_prefix("connection change, ") {
@@ -69,14 +73,20 @@ pub fn default_log_dir(app: &str) -> PathBuf {
     }
     #[cfg(target_os = "macos")]
     if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home).join("Library").join("Logs").join("concord").join(app);
+        return PathBuf::from(home)
+            .join("Library")
+            .join("Logs")
+            .join("concord")
+            .join(app);
     }
     PathBuf::from("logs").join(app)
 }
 
 /// Initialise logging to a rotating file (always) and stderr (when `console` is true).
 pub fn init(app: &str, log_dir: Option<&Path>, console: bool) -> LogGuard {
-    let log_dir = log_dir.map(Path::to_path_buf).unwrap_or_else(|| default_log_dir(app));
+    let log_dir = log_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| default_log_dir(app));
     let _ = std::fs::create_dir_all(&log_dir);
 
     let appender = Builder::new()
@@ -108,7 +118,11 @@ pub fn init(app: &str, log_dir: Option<&Path>, console: bool) -> LogGuard {
 
     let ice_layer = IceStateLayer.with_filter(EnvFilter::new(format!("{ICE_STATE_SOURCE}=debug")));
 
-    tracing_subscriber::registry().with(file_layer).with(console_layer).with(ice_layer).init();
+    tracing_subscriber::registry()
+        .with(file_layer)
+        .with(console_layer)
+        .with(ice_layer)
+        .init();
 
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -117,7 +131,10 @@ pub fn init(app: &str, log_dir: Option<&Path>, console: bool) -> LogGuard {
     }));
 
     tracing::info!(app, version = env!("CARGO_PKG_VERSION"), dir = %log_dir.display(), "logging started");
-    LogGuard { _file: guard, log_dir }
+    LogGuard {
+        _file: guard,
+        log_dir,
+    }
 }
 
 /// Lock-free "at most once per interval" gate for stats logging from hot paths.
@@ -132,7 +149,9 @@ pub struct RateLimiter {
 
 impl RateLimiter {
     pub const fn new() -> Self {
-        Self { last_ms: AtomicU64::new(0) }
+        Self {
+            last_ms: AtomicU64::new(0),
+        }
     }
 
     pub fn ready(&self, every: Duration) -> bool {

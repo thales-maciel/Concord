@@ -22,9 +22,10 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{define_class, msg_send, sel, AllocAnyThread, DefinedClass};
 use objc2_av_foundation::{
-    AVAuthorizationStatus, AVCaptureConnection, AVCaptureDevice, AVCaptureDeviceFormat, AVCaptureDeviceInput,
-    AVCaptureDeviceWasDisconnectedNotification, AVCaptureOutput, AVCaptureSession, AVCaptureVideoDataOutput,
-    AVCaptureVideoDataOutputSampleBufferDelegate, AVMediaTypeVideo,
+    AVAuthorizationStatus, AVCaptureConnection, AVCaptureDevice, AVCaptureDeviceFormat,
+    AVCaptureDeviceInput, AVCaptureDeviceWasDisconnectedNotification, AVCaptureOutput,
+    AVCaptureSession, AVCaptureVideoDataOutput, AVCaptureVideoDataOutputSampleBufferDelegate,
+    AVMediaTypeVideo,
 };
 use objc2_core_media::{CMSampleBuffer, CMTime, CMTimeFlags};
 use objc2_foundation::{NSDictionary, NSNotification, NSNotificationCenter, NSNumber, NSString};
@@ -32,16 +33,20 @@ use objc2_foundation::{NSDictionary, NSNotification, NSNotificationCenter, NSNum
 use super::{deliver_small, ffi, lock, with_nv12, SendBox};
 use crate::pixels::{choose_mode, render_test_card};
 use crate::{
-    camera_geometry, sort_camera_modes, CameraAdjust, CameraControl, CameraControlId, CameraError, CameraFault, CameraFormat,
-    CameraInfo, CameraMode, CameraStats, CameraSubtype, CameraTransform, EncodedCallback, EncodedStats,
-    EncoderBackend, EncoderControl, FrameCallback, LowLightDetector, Permission, Result, SYNTHETIC_CAMERA_ID,
+    camera_geometry, sort_camera_modes, CameraAdjust, CameraControl, CameraControlId, CameraError,
+    CameraFault, CameraFormat, CameraInfo, CameraMode, CameraStats, CameraSubtype, CameraTransform,
+    EncodedCallback, EncodedStats, EncoderBackend, EncoderControl, FrameCallback, LowLightDetector,
+    Permission, Result, SYNTHETIC_CAMERA_ID,
 };
 
 /// How long a start waits for the first frame.
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(6);
 
 fn err(fault: CameraFault, detail: impl Into<String>) -> CameraError {
-    CameraError { fault, detail: detail.into() }
+    CameraError {
+        fault,
+        detail: detail.into(),
+    }
 }
 
 fn fake_camera_env() -> bool {
@@ -88,12 +93,20 @@ pub(super) fn request_permission(timeout: Duration) -> bool {
 // ---------------------------------------------------------------------------------------------
 
 fn synthetic_info() -> CameraInfo {
-    CameraInfo { id: SYNTHETIC_CAMERA_ID.into(), name: "Câmera de teste (sintética)".into() }
+    CameraInfo {
+        id: SYNTHETIC_CAMERA_ID.into(),
+        name: "Test camera (synthetic)".into(),
+    }
 }
 
 /// The modes the synthetic camera pretends to have (the same as on Windows).
 fn synthetic_modes() -> Vec<CameraMode> {
-    let m = |width: u32, height: u32, fps: u32, subtype| CameraMode { width, height, fps_milli: fps * 1000, subtype };
+    let m = |width: u32, height: u32, fps: u32, subtype| CameraMode {
+        width,
+        height,
+        fps_milli: fps * 1000,
+        subtype,
+    };
     let mut v = vec![
         m(1920, 1080, 15, CameraSubtype::Nv12),
         m(1280, 720, 30, CameraSubtype::Nv12),
@@ -140,7 +153,12 @@ fn find_device(device: &str) -> std::result::Result<Retained<AVCaptureDevice>, C
         }
         by_id.or(by_name)
     };
-    found.ok_or_else(|| err(CameraFault::NotFound, format!("no camera matching {device:?}")))
+    found.ok_or_else(|| {
+        err(
+            CameraFault::NotFound,
+            format!("no camera matching {device:?}"),
+        )
+    })
 }
 
 fn subtype_of(fourcc: u32) -> CameraSubtype {
@@ -161,8 +179,14 @@ struct NativeMode {
 impl NativeMode {
     /// The frame duration for `fps`, inside this mode's range (AVFoundation throws on any other).
     fn frame_duration(&self, fps: u32) -> CMTime {
-        let milli = (fps.max(1) * 1000).clamp(self.min_fps_milli.max(1), self.mode.fps_milli.max(1));
-        CMTime { value: 1000, timescale: milli as i32, flags: CMTimeFlags::Valid, epoch: 0 }
+        let milli =
+            (fps.max(1) * 1000).clamp(self.min_fps_milli.max(1), self.mode.fps_milli.max(1));
+        CMTime {
+            value: 1000,
+            timescale: milli as i32,
+            flags: CMTimeFlags::Valid,
+            epoch: 0,
+        }
     }
 }
 
@@ -186,9 +210,18 @@ fn device_modes(d: &AVCaptureDevice) -> Vec<NativeMode> {
                     continue;
                 }
                 let min_fps_milli = ((r.minFrameRate() * 1000.0).round() as u32).min(fps_milli);
-                let mode = CameraMode { width: dims.width as u32, height: dims.height as u32, fps_milli, subtype };
+                let mode = CameraMode {
+                    width: dims.width as u32,
+                    height: dims.height as u32,
+                    fps_milli,
+                    subtype,
+                };
                 if !out.iter().any(|n: &NativeMode| n.mode == mode) {
-                    out.push(NativeMode { mode, format: f.clone(), min_fps_milli });
+                    out.push(NativeMode {
+                        mode,
+                        format: f.clone(),
+                        min_fps_milli,
+                    });
                 }
             }
         }
@@ -225,7 +258,10 @@ pub fn list_camera_formats(device: &str) -> std::result::Result<Vec<CameraMode>,
 
 /// macOS has no driver settings dialog.
 pub fn camera_property_pages(_: &str, _: Option<&str>) -> std::result::Result<u32, CameraError> {
-    Err(err(CameraFault::Unsupported, "macOS cameras have no driver settings dialog"))
+    Err(err(
+        CameraFault::Unsupported,
+        "macOS cameras have no driver settings dialog",
+    ))
 }
 
 pub fn camera_diagnostics(device: &str) -> std::result::Result<String, CameraError> {
@@ -241,9 +277,17 @@ pub fn camera_diagnostics(device: &str) -> std::result::Result<String, CameraErr
         let d = find_device(device)?;
         // SAFETY: getters.
         let name = unsafe { d.localizedName().to_string() };
-        let mut s = format!("camera: {name} (AVFoundation)\nauthorization: {:?}\n", permission());
+        let mut s = format!(
+            "camera: {name} (AVFoundation)\nauthorization: {:?}\n",
+            permission()
+        );
         for n in device_modes(&d) {
-            let _ = writeln!(s, "  {} (from {} fps)", n.mode.label(), crate::fps_text(n.min_fps_milli as f32 / 1000.0));
+            let _ = writeln!(
+                s,
+                "  {} (from {} fps)",
+                n.mode.label(),
+                crate::fps_text(n.min_fps_milli as f32 / 1000.0)
+            );
         }
         s.push_str("image controls: none (macOS does not expose UVC controls to apps)\n");
         Ok(s)
@@ -302,12 +346,19 @@ impl Shared {
 
     fn wait_first(&self, timeout: Duration) -> bool {
         let g = lock(&self.first.0);
-        let (g, _) = self.first.1.wait_timeout_while(g, timeout, |seen| !*seen).unwrap_or_else(|p| p.into_inner());
+        let (g, _) = self
+            .first
+            .1
+            .wait_timeout_while(g, timeout, |seen| !*seen)
+            .unwrap_or_else(|p| p.into_inner());
         *g && self.running.load(Ordering::Relaxed)
     }
 
     fn exposure_auto(&self) -> bool {
-        lock(&self.controls).iter().find(|c| c.id == CameraControlId::Exposure).is_some_and(|c| c.auto)
+        lock(&self.controls)
+            .iter()
+            .find(|c| c.id == CameraControlId::Exposure)
+            .is_some_and(|c| c.auto)
     }
 }
 
@@ -337,7 +388,14 @@ impl Sink {
             if let Some(cb) = self.preview.as_mut() {
                 let want = lock(&sh.transform).mirror_preview;
                 let mirror = want != self.source_mirrored.load(Ordering::Relaxed);
-                deliver_small(f, self.preview_max.0, self.preview_max.1, mirror, &mut self.buf, cb);
+                deliver_small(
+                    f,
+                    self.preview_max.0,
+                    self.preview_max.1,
+                    mirror,
+                    &mut self.buf,
+                    cb,
+                );
                 sh.preview_frames.fetch_add(1, Ordering::Relaxed);
             }
         } else if !self.buf.is_empty() {
@@ -349,7 +407,9 @@ impl Sink {
         if dt >= 1.0 {
             let fps = self.meter.1 as f32 / dt;
             sh.fps_milli.store((fps * 1000.0) as u32, Ordering::Relaxed);
-            let low = self.low.update(dt, fps, self.requested_fps, sh.exposure_auto());
+            let low = self
+                .low
+                .update(dt, fps, self.requested_fps, sh.exposure_auto());
             sh.low_light.store(low, Ordering::Relaxed);
             self.meter = (Instant::now(), 0);
         }
@@ -403,7 +463,10 @@ impl CameraInner {
         CameraStats {
             frames_captured: sh.captured.load(Ordering::Relaxed),
             preview_frames: sh.preview_frames.load(Ordering::Relaxed),
-            encoded: EncodedStats { frames_encoded: sh.delivered.load(Ordering::Relaxed), ..Default::default() },
+            encoded: EncodedStats {
+                frames_encoded: sh.delivered.load(Ordering::Relaxed),
+                ..Default::default()
+            },
             fps: sh.fps_milli.load(Ordering::Relaxed) as f32 / 1000.0,
             low_light: sh.low_light.load(Ordering::Relaxed),
         }
@@ -434,7 +497,10 @@ impl CameraInner {
         }
     }
     pub fn reset_controls(&self, id: Option<CameraControlId>) {
-        for c in lock(&self.shared.controls).iter_mut().filter(|c| id.is_none_or(|i| i == c.id)) {
+        for c in lock(&self.shared.controls)
+            .iter_mut()
+            .filter(|c| id.is_none_or(|i| i == c.id))
+        {
             let (v, auto) = c.default_setting();
             c.value = v;
             c.auto = auto;
@@ -468,9 +534,19 @@ impl Drop for CameraInner {
     }
 }
 
-pub fn start_camera(device: &str, cfg: crate::CameraConfig, output: CameraOutput, on_preview: Option<FrameCallback>) -> std::result::Result<CameraInner, CameraError> {
+pub fn start_camera(
+    device: &str,
+    cfg: crate::CameraConfig,
+    output: CameraOutput,
+    on_preview: Option<FrameCallback>,
+) -> std::result::Result<CameraInner, CameraError> {
     let main = match output {
-        CameraOutput::Encoded(_) => return Err(err(CameraFault::Unsupported, "macOS encodes the camera in libwebrtc (VideoToolbox): use the raw path")),
+        CameraOutput::Encoded(_) => {
+            return Err(err(
+                CameraFault::Unsupported,
+                "macOS encodes the camera in libwebrtc (VideoToolbox): use the raw path",
+            ))
+        }
         CameraOutput::Raw(cb) => Some(cb),
         CameraOutput::None => None,
     };
@@ -500,7 +576,12 @@ define_class!(
 
     unsafe impl AVCaptureVideoDataOutputSampleBufferDelegate for CameraDelegate {
         #[unsafe(method(captureOutput:didOutputSampleBuffer:fromConnection:))]
-        fn did_output(&self, _output: &AVCaptureOutput, sample: &CMSampleBuffer, _connection: &AVCaptureConnection) {
+        fn did_output(
+            &self,
+            _output: &AVCaptureOutput,
+            sample: &CMSampleBuffer,
+            _connection: &AVCaptureConnection,
+        ) {
             let mut g = lock(&self.ivars().sink);
             let Some(sink) = g.as_mut() else { return };
             let sb = sample as *const CMSampleBuffer as ffi::CMSampleBufferRef;
@@ -518,7 +599,9 @@ define_class!(
 
 impl CameraDelegate {
     fn new(sink: Sink) -> Retained<Self> {
-        let this = Self::alloc().set_ivars(DelegateIvars { sink: Mutex::new(Some(sink)) });
+        let this = Self::alloc().set_ivars(DelegateIvars {
+            sink: Mutex::new(Some(sink)),
+        });
         // SAFETY: NSObject's designated initializer.
         unsafe { msg_send![super(this), init] }
     }
@@ -542,7 +625,9 @@ impl DeviceCapture {
     /// Mirror for the others and quarter turns, where the connection can do them. Returns whether
     /// it can (mirroring at least).
     fn apply_transform(&self, t: &CameraTransform) -> bool {
-        let Some(c) = self.connection() else { return false };
+        let Some(c) = self.connection() else {
+            return false;
+        };
         // SAFETY: connection setters, guarded by their "supported" getters.
         unsafe {
             let mirror_ok = c.isVideoMirroringSupported();
@@ -567,7 +652,8 @@ impl Drop for DeviceCapture {
         // SAFETY: stopping a session we own; stopRunning blocks until the device is released.
         unsafe {
             if let Some(o) = self.observer.take() {
-                NSNotificationCenter::defaultCenter().removeObserver(AsRef::<AnyObject>::as_ref(&*o));
+                NSNotificationCenter::defaultCenter()
+                    .removeObserver(AsRef::<AnyObject>::as_ref(&*o));
             }
             self.session.stopRunning();
             self.output.setSampleBufferDelegate_queue(None, None);
@@ -576,11 +662,22 @@ impl Drop for DeviceCapture {
     }
 }
 
-fn start_device(device: &str, cfg: crate::CameraConfig, t: CameraTransform, main: Option<FrameCallback>, on_preview: Option<FrameCallback>) -> std::result::Result<CameraInner, CameraError> {
+fn start_device(
+    device: &str,
+    cfg: crate::CameraConfig,
+    t: CameraTransform,
+    main: Option<FrameCallback>,
+    on_preview: Option<FrameCallback>,
+) -> std::result::Result<CameraInner, CameraError> {
     let d = find_device(device)?;
     match permission() {
         Permission::Granted => {}
-        Permission::Denied => return Err(err(CameraFault::AccessDenied, "camera access denied in System Settings > Privacy & Security > Camera")),
+        Permission::Denied => {
+            return Err(err(
+                CameraFault::AccessDenied,
+                "camera access denied in System Settings > Privacy & Security > Camera",
+            ))
+        }
         Permission::NotDetermined => {
             if !request_permission(Duration::from_secs(60)) {
                 return Err(err(CameraFault::AccessDenied, "camera access not granted"));
@@ -592,26 +689,49 @@ fn start_device(device: &str, cfg: crate::CameraConfig, t: CameraTransform, main
     let modes = device_modes(&d);
     let mut listed: Vec<CameraMode> = modes.iter().map(|n| n.mode).collect();
     sort_camera_modes(&mut listed);
-    let chosen = choose_mode(&listed, cfg.width, cfg.height, cfg.fps, cfg.mode).ok_or_else(|| err(CameraFault::Unsupported, "the camera lists no video format"))?;
+    let chosen = choose_mode(&listed, cfg.width, cfg.height, cfg.fps, cfg.mode)
+        .ok_or_else(|| err(CameraFault::Unsupported, "the camera lists no video format"))?;
     let native = modes.iter().find(|n| n.mode == chosen);
-    let fps = (chosen.fps().round() as u32).clamp(1, cfg.fps.max(1)).max(1);
-    let geo = camera_geometry(chosen.width, chosen.height, &CameraTransform { zoom_pct: 100, ..t }, cfg.width, cfg.height);
+    let fps = (chosen.fps().round() as u32)
+        .clamp(1, cfg.fps.max(1))
+        .max(1);
+    let geo = camera_geometry(
+        chosen.width,
+        chosen.height,
+        &CameraTransform { zoom_pct: 100, ..t },
+        cfg.width,
+        cfg.height,
+    );
     // The output is scaled before the connection turns it.
-    let (ow, oh) = if t.rotation.swaps_axes() { (geo.out.1, geo.out.0) } else { geo.out };
+    let (ow, oh) = if t.rotation.swaps_axes() {
+        (geo.out.1, geo.out.0)
+    } else {
+        geo.out
+    };
 
     // SAFETY: AVFoundation setup on objects we own; errors are returned, not thrown.
     unsafe {
         let input = AVCaptureDeviceInput::deviceInputWithDevice_error(&d).map_err(|e| {
             let code = e.code();
             // AVErrorDeviceAlreadyUsedByAnotherSession / AVErrorDeviceInUseByAnotherApplication.
-            let fault = if code == -11804 || code == -11853 { CameraFault::InUse } else { CameraFault::Other };
-            err(fault, format!("open {name}: {} ({code})", e.localizedDescription()))
+            let fault = if code == -11804 || code == -11853 {
+                CameraFault::InUse
+            } else {
+                CameraFault::Other
+            };
+            err(
+                fault,
+                format!("open {name}: {} ({code})", e.localizedDescription()),
+            )
         })?;
         let session = AVCaptureSession::new();
         session.beginConfiguration();
         if !session.canAddInput(&input) {
             session.commitConfiguration();
-            return Err(err(CameraFault::InUse, "the capture session cannot take this camera"));
+            return Err(err(
+                CameraFault::InUse,
+                "the capture session cannot take this camera",
+            ));
         }
         session.addInput(&input);
         let output = AVCaptureVideoDataOutput::new();
@@ -620,14 +740,21 @@ fn start_device(device: &str, cfg: crate::CameraConfig, t: CameraTransform, main
             &*(ffi::kCVPixelBufferWidthKey as *const NSString),
             &*(ffi::kCVPixelBufferHeightKey as *const NSString),
         ];
-        let values = [NSNumber::new_u32(ffi::kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange), NSNumber::new_u32(ow), NSNumber::new_u32(oh)];
+        let values = [
+            NSNumber::new_u32(ffi::kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
+            NSNumber::new_u32(ow),
+            NSNumber::new_u32(oh),
+        ];
         let values: Vec<&AnyObject> = values.iter().map(|v| &***v as &AnyObject).collect();
         let settings = NSDictionary::from_slices(&keys, &values);
         output.setVideoSettings(Some(&settings));
         output.setAlwaysDiscardsLateVideoFrames(true);
         if !session.canAddOutput(&output) {
             session.commitConfiguration();
-            return Err(err(CameraFault::Unsupported, "the capture session cannot deliver NV12 frames"));
+            return Err(err(
+                CameraFault::Unsupported,
+                "the capture session cannot deliver NV12 frames",
+            ));
         }
         session.addOutput(&output);
         if let Some(n) = native {
@@ -637,7 +764,9 @@ fn start_device(device: &str, cfg: crate::CameraConfig, t: CameraTransform, main
                     d.setActiveVideoMinFrameDuration(n.frame_duration(cfg.fps));
                     d.unlockForConfiguration();
                 }
-                Err(e) => tracing::warn!(error = %e.localizedDescription(), "camera: cannot pick its mode; using its default"),
+                Err(e) => {
+                    tracing::warn!(error = %e.localizedDescription(), "camera: cannot pick its mode; using its default")
+                }
             }
         }
         session.commitConfiguration();
@@ -657,25 +786,44 @@ fn start_device(device: &str, cfg: crate::CameraConfig, t: CameraTransform, main
         };
         let delegate = CameraDelegate::new(sink);
         let queue = DispatchQueue::new("concord.capture.camera", None);
-        output.setSampleBufferDelegate_queue(Some(ProtocolObject::from_ref(&*delegate)), Some(&queue));
+        output.setSampleBufferDelegate_queue(
+            Some(ProtocolObject::from_ref(&*delegate)),
+            Some(&queue),
+        );
 
         // Unplugged while running.
         let sh = shared.clone();
         let block = RcBlock::new(move |_n: std::ptr::NonNull<NSNotification>| {
-            sh.fail(err(CameraFault::Disconnected, "the camera was disconnected"));
+            sh.fail(err(
+                CameraFault::Disconnected,
+                "the camera was disconnected",
+            ));
         });
-        let observer = NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
-            Some(AVCaptureDeviceWasDisconnectedNotification),
-            Some(&*d as &AnyObject),
-            None,
-            &block,
-        );
+        let observer = NSNotificationCenter::defaultCenter()
+            .addObserverForName_object_queue_usingBlock(
+                Some(AVCaptureDeviceWasDisconnectedNotification),
+                Some(&*d as &AnyObject),
+                None,
+                &block,
+            );
 
-        let cap = DeviceCapture { session, output, delegate, observer: Some(observer), mirrored, _queue: queue };
+        let cap = DeviceCapture {
+            session,
+            output,
+            delegate,
+            observer: Some(observer),
+            mirrored,
+            _queue: queue,
+        };
         let transform_ok = cap.apply_transform(&t);
         cap.session.startRunning();
         if !shared.wait_first(FIRST_FRAME_TIMEOUT) {
-            let e = lock(&shared.failure).clone().unwrap_or_else(|| err(CameraFault::NoFrames, format!("{name}: no frame in {FIRST_FRAME_TIMEOUT:?}")));
+            let e = lock(&shared.failure).clone().unwrap_or_else(|| {
+                err(
+                    CameraFault::NoFrames,
+                    format!("{name}: no frame in {FIRST_FRAME_TIMEOUT:?}"),
+                )
+            });
             drop(cap);
             return Err(e);
         }
@@ -690,7 +838,14 @@ fn start_device(device: &str, cfg: crate::CameraConfig, t: CameraTransform, main
             height: geo.out.1,
         };
         tracing::info!(mode = %chosen.label(), out = format!("{}x{}", geo.out.0, geo.out.1), fps, transform_ok, "camera started (AVFoundation, NV12)");
-        Ok(CameraInner { shared, format, modes: listed, control: EncoderControl::default(), transform_ok, source: Some(Source::Device(SendBox(cap))) })
+        Ok(CameraInner {
+            shared,
+            format,
+            modes: listed,
+            control: EncoderControl::default(),
+            transform_ok,
+            source: Some(Source::Device(SendBox(cap))),
+        })
     }
 }
 
@@ -701,7 +856,17 @@ fn start_device(device: &str, cfg: crate::CameraConfig, t: CameraTransform, main
 /// The synthetic camera's fake image controls (the same as on Windows), so the settings and the
 /// low-light hint can be exercised.
 fn fake_controls() -> Vec<CameraControl> {
-    let mk = |id, min, max, step, default, can_auto: bool| CameraControl { id, min, max, step, default, value: default, auto: can_auto, can_auto, can_manual: true };
+    let mk = |id, min, max, step, default, can_auto: bool| CameraControl {
+        id,
+        min,
+        max,
+        step,
+        default,
+        value: default,
+        auto: can_auto,
+        can_auto,
+        can_manual: true,
+    };
     use CameraControlId::*;
     vec![
         mk(Brightness, 0, 255, 1, 128, false),
@@ -751,11 +916,20 @@ impl Pool {
                 &*(ffi::kCVPixelBufferIOSurfacePropertiesKey as *const NSString),
             ];
             let empty: Retained<NSDictionary<NSString, AnyObject>> = NSDictionary::new();
-            let nums = [NSNumber::new_u32(ffi::kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange), NSNumber::new_u32(w), NSNumber::new_u32(h)];
+            let nums = [
+                NSNumber::new_u32(ffi::kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
+                NSNumber::new_u32(w),
+                NSNumber::new_u32(h),
+            ];
             let values: [&AnyObject; 4] = [&nums[0], &nums[1], &nums[2], &empty];
             let attrs = NSDictionary::from_slices(&keys, &values);
             let mut pool: ffi::CVPixelBufferPoolRef = std::ptr::null_mut();
-            let st = ffi::CVPixelBufferPoolCreate(std::ptr::null(), std::ptr::null(), &*attrs as *const _ as ffi::CFDictionaryRef, &mut pool);
+            let st = ffi::CVPixelBufferPoolCreate(
+                std::ptr::null(),
+                std::ptr::null(),
+                &*attrs as *const _ as ffi::CFDictionaryRef,
+                &mut pool,
+            );
             (st == 0 && !pool.is_null()).then_some(Pool(pool))
         }
     }
@@ -765,13 +939,24 @@ impl Pool {
         // SAFETY: a fresh buffer from our pool, locked while it is written.
         unsafe {
             let mut pb: ffi::CVPixelBufferRef = std::ptr::null_mut();
-            if ffi::CVPixelBufferPoolCreatePixelBuffer(std::ptr::null(), self.0, &mut pb) != 0 || pb.is_null() {
+            if ffi::CVPixelBufferPoolCreatePixelBuffer(std::ptr::null(), self.0, &mut pb) != 0
+                || pb.is_null()
+            {
                 return None;
             }
             if ffi::CVPixelBufferLockBaseAddress(pb, 0) == 0 {
-                let (w, h) = (ffi::CVPixelBufferGetWidth(pb), ffi::CVPixelBufferGetHeight(pb));
-                let (ys, uvs) = (ffi::CVPixelBufferGetBytesPerRowOfPlane(pb, 0), ffi::CVPixelBufferGetBytesPerRowOfPlane(pb, 1));
-                let (yp, uvp) = (ffi::CVPixelBufferGetBaseAddressOfPlane(pb, 0), ffi::CVPixelBufferGetBaseAddressOfPlane(pb, 1));
+                let (w, h) = (
+                    ffi::CVPixelBufferGetWidth(pb),
+                    ffi::CVPixelBufferGetHeight(pb),
+                );
+                let (ys, uvs) = (
+                    ffi::CVPixelBufferGetBytesPerRowOfPlane(pb, 0),
+                    ffi::CVPixelBufferGetBytesPerRowOfPlane(pb, 1),
+                );
+                let (yp, uvp) = (
+                    ffi::CVPixelBufferGetBaseAddressOfPlane(pb, 0),
+                    ffi::CVPixelBufferGetBaseAddressOfPlane(pb, 1),
+                );
                 if !yp.is_null() && !uvp.is_null() {
                     let y = std::slice::from_raw_parts_mut(yp, ys * h);
                     let uv = std::slice::from_raw_parts_mut(uvp, uvs * h.div_ceil(2));
@@ -791,12 +976,28 @@ impl Drop for Pool {
     }
 }
 
-fn start_synthetic(cfg: crate::CameraConfig, t: CameraTransform, main: Option<FrameCallback>, on_preview: Option<FrameCallback>) -> std::result::Result<CameraInner, CameraError> {
+fn start_synthetic(
+    cfg: crate::CameraConfig,
+    t: CameraTransform,
+    main: Option<FrameCallback>,
+    on_preview: Option<FrameCallback>,
+) -> std::result::Result<CameraInner, CameraError> {
     let modes = synthetic_modes();
     let chosen = choose_mode(&modes, cfg.width, cfg.height, cfg.fps, cfg.mode).unwrap_or(modes[0]);
-    let geo = camera_geometry(chosen.width, chosen.height, &CameraTransform { rotation: crate::CameraRotation::None, zoom_pct: 100, ..t }, cfg.width, cfg.height);
+    let geo = camera_geometry(
+        chosen.width,
+        chosen.height,
+        &CameraTransform {
+            rotation: crate::CameraRotation::None,
+            zoom_pct: 100,
+            ..t
+        },
+        cfg.width,
+        cfg.height,
+    );
     let (w, h) = geo.out;
-    let pool = Pool::new(w, h).ok_or_else(|| err(CameraFault::Other, "CVPixelBufferPoolCreate failed"))?;
+    let pool =
+        Pool::new(w, h).ok_or_else(|| err(CameraFault::Other, "CVPixelBufferPoolCreate failed"))?;
     let shared = Shared::new(t, fake_controls());
     let fps = chosen.fps().max(1.0);
     let mut sink = Sink {
@@ -810,7 +1011,8 @@ fn start_synthetic(cfg: crate::CameraConfig, t: CameraTransform, main: Option<Fr
         requested_fps: fps,
         low: LowLightDetector::new(),
     };
-    let lowlight_env = std::env::var("VOX_FAKE_CAMERA_LOWLIGHT").is_ok_and(|v| !v.is_empty() && v != "0");
+    let lowlight_env =
+        std::env::var("VOX_FAKE_CAMERA_LOWLIGHT").is_ok_and(|v| !v.is_empty() && v != "0");
     let stop = Arc::new(AtomicBool::new(false));
     let st = stop.clone();
     let sh = shared.clone();
@@ -849,10 +1051,16 @@ fn start_synthetic(cfg: crate::CameraConfig, t: CameraTransform, main: Option<Fr
             }
         })
         .map_err(|e| err(CameraFault::Other, format!("spawn: {e}")))?;
-    let cap = SyntheticCapture { stop, thread: Some(thread) };
+    let cap = SyntheticCapture {
+        stop,
+        thread: Some(thread),
+    };
     if !shared.wait_first(FIRST_FRAME_TIMEOUT) {
         drop(cap);
-        return Err(err(CameraFault::NoFrames, "synthetic camera produced no frame"));
+        return Err(err(
+            CameraFault::NoFrames,
+            "synthetic camera produced no frame",
+        ));
     }
     let format = CameraFormat {
         device: "synthetic".into(),
@@ -865,7 +1073,14 @@ fn start_synthetic(cfg: crate::CameraConfig, t: CameraTransform, main: Option<Fr
         height: h,
     };
     tracing::info!(mode = %chosen.label(), out = format!("{w}x{h}"), "synthetic camera started");
-    Ok(CameraInner { shared, format, modes, control: EncoderControl::default(), transform_ok: false, source: Some(Source::Synthetic(cap)) })
+    Ok(CameraInner {
+        shared,
+        format,
+        modes,
+        control: EncoderControl::default(),
+        transform_ok: false,
+        source: Some(Source::Synthetic(cap)),
+    })
 }
 
 #[cfg(test)]
@@ -893,23 +1108,51 @@ mod tests {
             let mut g = lock(&p);
             g.2 += 1;
             g.3 = (f.width, f.height);
-            assert!(crate::retained_pixel_buffer(f).is_none(), "a preview is our own copy");
+            assert!(
+                crate::retained_pixel_buffer(f).is_none(),
+                "a preview is our own copy"
+            );
         });
-        let cfg = CameraConfig { width: 640, height: 360, fps: 30, preview_max_width: 320, preview_max_height: 180, ..Default::default() };
-        let cap = start_camera_raw(SYNTHETIC_CAMERA_ID, cfg, main, Some(preview)).expect("synthetic camera");
+        let cfg = CameraConfig {
+            width: 640,
+            height: 360,
+            fps: 30,
+            preview_max_width: 320,
+            preview_max_height: 180,
+            ..Default::default()
+        };
+        let cap = start_camera_raw(SYNTHETIC_CAMERA_ID, cfg, main, Some(preview))
+            .expect("synthetic camera");
         std::thread::sleep(Duration::from_millis(600));
         let st = cap.stats();
         let f = cap.format();
         assert_eq!((f.width, f.height), (640, 360));
         assert!(st.frames_captured >= 8, "{st:?}");
         let g = *lock(&seen);
-        assert!(g.0 >= 8 && g.1 == g.0, "every frame has its pixel buffer: {g:?}");
+        assert!(
+            g.0 >= 8 && g.1 == g.0,
+            "every frame has its pixel buffer: {g:?}"
+        );
         assert!(g.2 >= 8 && g.3 == (320, 180), "{g:?}");
         // Controls: set, then back to the defaults.
         cap.set_control(CameraControlId::Brightness, 300, false);
-        assert_eq!(cap.controls().iter().find(|c| c.id == CameraControlId::Brightness).unwrap().value, 255);
+        assert_eq!(
+            cap.controls()
+                .iter()
+                .find(|c| c.id == CameraControlId::Brightness)
+                .unwrap()
+                .value,
+            255
+        );
         cap.reset_controls();
-        assert_eq!(cap.controls().iter().find(|c| c.id == CameraControlId::Brightness).unwrap().value, 128);
+        assert_eq!(
+            cap.controls()
+                .iter()
+                .find(|c| c.id == CameraControlId::Brightness)
+                .unwrap()
+                .value,
+            128
+        );
         // The self-view stops when hidden.
         cap.set_preview(false);
         std::thread::sleep(Duration::from_millis(100));
@@ -921,7 +1164,12 @@ mod tests {
 
     #[test]
     fn encoded_output_is_refused() {
-        let r = crate::start_camera_encoded(SYNTHETIC_CAMERA_ID, CameraConfig::default(), Box::new(|_| {}), None);
+        let r = crate::start_camera_encoded(
+            SYNTHETIC_CAMERA_ID,
+            CameraConfig::default(),
+            Box::new(|_| {}),
+            None,
+        );
         assert_eq!(r.err().map(|e| e.fault), Some(CameraFault::Unsupported));
     }
 }

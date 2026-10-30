@@ -13,14 +13,18 @@ use objc2_core_foundation::CFString;
 use objc2_core_media::{CMSampleBuffer, CMTime, CMTimeFlags};
 use objc2_foundation::NSError;
 use objc2_screen_capture_kit::{
-    SCContentFilter, SCStream, SCStreamConfiguration, SCStreamDelegate, SCStreamFrameInfoContentRect, SCStreamFrameInfoScaleFactor, SCStreamFrameInfoStatus,
+    SCContentFilter, SCStream, SCStreamConfiguration, SCStreamDelegate,
+    SCStreamFrameInfoContentRect, SCStreamFrameInfoScaleFactor, SCStreamFrameInfoStatus,
     SCStreamOutput, SCStreamOutputType,
 };
 
 use super::content::{self, ns_error, permission_error};
 use super::{ffi, lock, os, with_nv12, PreviewAttach, SendBox};
 use crate::pixels::AudioChunker;
-use crate::{AudioCallback, AudioChunk, AudioTarget, FrameCallback, Result, VideoConfig, VideoStats, VideoTarget, AUDIO_CHANNELS, AUDIO_SAMPLE_RATE};
+use crate::{
+    AudioCallback, AudioChunk, AudioTarget, FrameCallback, Result, VideoConfig, VideoStats,
+    VideoTarget, AUDIO_CHANNELS, AUDIO_SAMPLE_RATE,
+};
 
 /// `SCFrameStatus.complete`: a new picture (the others are idle / blank / suspended markers).
 const FRAME_COMPLETE: i64 = 0;
@@ -49,7 +53,12 @@ define_class!(
 
     unsafe impl SCStreamOutput for StreamOutput {
         #[unsafe(method(stream:didOutputSampleBuffer:ofType:))]
-        fn did_output(&self, _stream: &SCStream, sample: &CMSampleBuffer, kind: SCStreamOutputType) {
+        fn did_output(
+            &self,
+            _stream: &SCStream,
+            sample: &CMSampleBuffer,
+            kind: SCStreamOutputType,
+        ) {
             let slot = if kind == SCStreamOutputType::Screen {
                 &self.ivars().video
             } else if kind == SCStreamOutputType::Audio {
@@ -77,8 +86,16 @@ define_class!(
 );
 
 impl StreamOutput {
-    fn new(video: Option<SampleHandler>, audio: Option<SampleHandler>, running: Arc<AtomicBool>) -> Retained<Self> {
-        let this = Self::alloc().set_ivars(OutputIvars { video: Mutex::new(video), audio: Mutex::new(audio), running });
+    fn new(
+        video: Option<SampleHandler>,
+        audio: Option<SampleHandler>,
+        running: Arc<AtomicBool>,
+    ) -> Retained<Self> {
+        let this = Self::alloc().set_ivars(OutputIvars {
+            video: Mutex::new(video),
+            audio: Mutex::new(audio),
+            running,
+        });
         // SAFETY: NSObject's designated initializer.
         unsafe { msg_send![super(this), init] }
     }
@@ -91,7 +108,10 @@ impl StreamOutput {
 }
 
 /// Wait for a ScreenCaptureKit completion handler `fn(NSError?)`.
-fn wait_completion(call: impl FnOnce(&block2::DynBlock<dyn Fn(*mut NSError)>), timeout: Duration) -> std::result::Result<(), (String, bool)> {
+fn wait_completion(
+    call: impl FnOnce(&block2::DynBlock<dyn Fn(*mut NSError)>),
+    timeout: Duration,
+) -> std::result::Result<(), (String, bool)> {
     let (tx, rx) = mpsc::sync_channel(1);
     let block = RcBlock::new(move |err: *mut NSError| {
         // SAFETY: the error is valid (or null) for the handler's duration.
@@ -102,7 +122,8 @@ fn wait_completion(call: impl FnOnce(&block2::DynBlock<dyn Fn(*mut NSError)>), t
         let _ = tx.try_send(r);
     });
     call(&block);
-    rx.recv_timeout(timeout).unwrap_or_else(|_| Err(("no answer from ScreenCaptureKit".into(), false)))
+    rx.recv_timeout(timeout)
+        .unwrap_or_else(|_| Err(("no answer from ScreenCaptureKit".into(), false)))
 }
 
 /// A started stream. Dropping it stops the stream (waiting for ScreenCaptureKit) and disarms the
@@ -115,12 +136,23 @@ struct Running {
 }
 
 impl Running {
-    fn start(filter: &SCContentFilter, cfg: &SCStreamConfiguration, output: Retained<StreamOutput>, audio: bool, label: &str) -> Result<Self> {
+    fn start(
+        filter: &SCContentFilter,
+        cfg: &SCStreamConfiguration,
+        output: Retained<StreamOutput>,
+        audio: bool,
+        label: &str,
+    ) -> Result<Self> {
         let queue = DispatchQueue::new(label, None);
         // SAFETY: valid filter / configuration / delegate; the stream keeps the delegate weakly, we
         // keep it (`output`) as long as the stream.
         let stream = unsafe {
-            SCStream::initWithFilter_configuration_delegate(SCStream::alloc(), filter, cfg, Some(ProtocolObject::from_ref(&*output)))
+            SCStream::initWithFilter_configuration_delegate(
+                SCStream::alloc(),
+                filter,
+                cfg,
+                Some(ProtocolObject::from_ref(&*output)),
+            )
         };
         let po = ProtocolObject::from_ref(&*output);
         // ScreenCaptureKit logs an error per dropped frame when a stream has no screen output, so
@@ -131,12 +163,20 @@ impl Running {
         }
         for kind in kinds {
             // SAFETY: the output object lives as long as the stream (see above).
-            unsafe { stream.addStreamOutput_type_sampleHandlerQueue_error(po, kind, Some(&queue)) }.map_err(|e| os("addStreamOutput", ns_error(&e).0))?;
+            unsafe { stream.addStreamOutput_type_sampleHandlerQueue_error(po, kind, Some(&queue)) }
+                .map_err(|e| os("addStreamOutput", ns_error(&e).0))?;
         }
-        match wait_completion(|b| unsafe { stream.startCaptureWithCompletionHandler(Some(b)) }, START_TIMEOUT) {
+        match wait_completion(
+            |b| unsafe { stream.startCaptureWithCompletionHandler(Some(b)) },
+            START_TIMEOUT,
+        ) {
             Ok(()) => {
                 super::note_screen_permission(true);
-                Ok(Self { stream, output, _queue: queue })
+                Ok(Self {
+                    stream,
+                    output,
+                    _queue: queue,
+                })
             }
             Err((_, true)) => {
                 output.disarm();
@@ -152,7 +192,10 @@ impl Running {
 
 impl Drop for Running {
     fn drop(&mut self) {
-        let r = wait_completion(|b| unsafe { self.stream.stopCaptureWithCompletionHandler(Some(b)) }, STOP_TIMEOUT);
+        let r = wait_completion(
+            |b| unsafe { self.stream.stopCaptureWithCompletionHandler(Some(b)) },
+            STOP_TIMEOUT,
+        );
         if let Err((e, _)) = r {
             tracing::debug!(error = %e, "stopping a capture stream");
         }
@@ -161,7 +204,12 @@ impl Drop for Running {
 }
 
 fn frame_interval(fps: u32) -> CMTime {
-    CMTime { value: 1, timescale: fps.clamp(1, 240) as i32, flags: CMTimeFlags::Valid, epoch: 0 }
+    CMTime {
+        value: 1,
+        timescale: fps.clamp(1, 240) as i32,
+        flags: CMTimeFlags::Valid,
+        epoch: 0,
+    }
 }
 
 /// The frame status attachment of a screen sample (`None`: not a ScreenCaptureKit frame).
@@ -176,7 +224,10 @@ unsafe fn frame_status(sb: ffi::CMSampleBufferRef) -> Option<i64> {
 ///
 /// # Safety
 /// `sb` is a valid sample buffer.
-unsafe fn frame_info(sb: ffi::CMSampleBufferRef, key: &objc2_foundation::NSString) -> *const std::ffi::c_void {
+unsafe fn frame_info(
+    sb: ffi::CMSampleBufferRef,
+    key: &objc2_foundation::NSString,
+) -> *const std::ffi::c_void {
     let arr = ffi::CMSampleBufferGetSampleAttachmentsArray(sb, 0);
     if arr.is_null() || ffi::CFArrayGetCount(arr) < 1 {
         return std::ptr::null();
@@ -197,7 +248,10 @@ unsafe fn window_pixels(sb: ffi::CMSampleBufferRef) -> Option<(u32, u32)> {
     if rect.is_null() || !ffi::CGRectMakeWithDictionaryRepresentation(rect, &mut r) {
         return None;
     }
-    let (w, h) = ((r.size.width * scale).round(), (r.size.height * scale).round());
+    let (w, h) = (
+        (r.size.width * scale).round(),
+        (r.size.height * scale).round(),
+    );
     (w >= 2.0 && h >= 2.0).then_some((w as u32, h as u32))
 }
 
@@ -231,7 +285,11 @@ impl ResizeFollower {
                     let sc = video_configuration(want, &self.cfg);
                     // SAFETY: an asynchronous reconfiguration of a running stream.
                     unsafe { s.0.updateConfiguration_completionHandler(&sc, None) };
-                    tracing::info!(width = want.0, height = want.1, "shared window resized: capture follows");
+                    tracing::info!(
+                        width = want.0,
+                        height = want.1,
+                        "shared window resized: capture follows"
+                    );
                 }
             }
             Some((p, _)) if close(p, want) => {}
@@ -263,7 +321,9 @@ fn video_configuration(size: (u32, u32), cfg: &VideoConfig) -> Retained<SCStream
 /// # Safety
 /// `sb` is a valid sample buffer.
 pub(crate) unsafe fn sample_time_us(sb: ffi::CMSampleBufferRef) -> i64 {
-    ffi::CMSampleBufferGetPresentationTimeStamp(sb).micros().unwrap_or_else(ffi::host_time_us)
+    ffi::CMSampleBufferGetPresentationTimeStamp(sb)
+        .micros()
+        .unwrap_or_else(ffi::host_time_us)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -294,15 +354,29 @@ impl VideoInner {
     }
 }
 
-pub fn start_video(target: VideoTarget, cfg: VideoConfig, mut on_frame: FrameCallback, mut preview: Option<PreviewAttach>) -> Result<VideoInner> {
+pub fn start_video(
+    target: VideoTarget,
+    cfg: VideoConfig,
+    mut on_frame: FrameCallback,
+    mut preview: Option<PreviewAttach>,
+) -> Result<VideoInner> {
     objc2::rc::autoreleasepool(|_| {
         let r = content::resolve(target, true)?;
         let (w, h) = content::output_size(r.pixels, cfg.max_width, cfg.max_height);
         let sc = video_configuration((w, h), &cfg);
         let stream_slot = Arc::new(Mutex::new(None));
-        let mut resize = matches!(target, VideoTarget::Window(_)).then(|| ResizeFollower { cfg, current: (w, h), pending: None, stream: stream_slot.clone() });
+        let mut resize = matches!(target, VideoTarget::Window(_)).then(|| ResizeFollower {
+            cfg,
+            current: (w, h),
+            pending: None,
+            stream: stream_slot.clone(),
+        });
         let running = Arc::new(AtomicBool::new(true));
-        let shared = Arc::new(VideoShared { running: running.clone(), delivered: AtomicU64::new(0), dropped: AtomicU64::new(0) });
+        let shared = Arc::new(VideoShared {
+            running: running.clone(),
+            delivered: AtomicU64::new(0),
+            dropped: AtomicU64::new(0),
+        });
         let sh = shared.clone();
         let handler: SampleHandler = Box::new(move |sb| {
             // SAFETY: ScreenCaptureKit hands a valid sample buffer for the callback's duration.
@@ -336,8 +410,19 @@ pub fn start_video(target: VideoTarget, cfg: VideoConfig, mut on_frame: FrameCal
         let output = StreamOutput::new(Some(handler), None, running);
         let run = Running::start(&r.filter, &sc, output, false, "concord.capture.video")?;
         *lock(&stream_slot) = Some(SendBox(run.stream.clone()));
-        tracing::info!(?target, width = w, height = h, fps = cfg.max_fps, source_w = r.pixels.0, source_h = r.pixels.1, "screen capture stream started (ScreenCaptureKit, NV12)");
-        Ok(VideoInner { shared, _run: SendBox(run) })
+        tracing::info!(
+            ?target,
+            width = w,
+            height = h,
+            fps = cfg.max_fps,
+            source_w = r.pixels.0,
+            source_h = r.pixels.1,
+            "screen capture stream started (ScreenCaptureKit, NV12)"
+        );
+        Ok(VideoInner {
+            shared,
+            _run: SendBox(run),
+        })
     })
 }
 
@@ -360,11 +445,21 @@ impl AudioInner {
 ///
 /// # Safety
 /// `sb` is a valid audio sample buffer.
-unsafe fn push_audio(sb: ffi::CMSampleBufferRef, chunker: &mut AudioChunker, emit: &mut dyn FnMut(&[i16], i64)) -> bool {
+unsafe fn push_audio(
+    sb: ffi::CMSampleBufferRef,
+    chunker: &mut AudioChunker,
+    emit: &mut dyn FnMut(&[i16], i64),
+) -> bool {
     use ffi::*;
     let desc = CMSampleBufferGetFormatDescription(sb);
-    let asbd = if desc.is_null() { std::ptr::null() } else { CMAudioFormatDescriptionGetStreamBasicDescription(desc) };
-    let Some(asbd) = asbd.as_ref() else { return false };
+    let asbd = if desc.is_null() {
+        std::ptr::null()
+    } else {
+        CMAudioFormatDescriptionGetStreamBasicDescription(desc)
+    };
+    let Some(asbd) = asbd.as_ref() else {
+        return false;
+    };
     if asbd.mFormatID != kAudioFormatLinearPCM {
         return false;
     }
@@ -375,9 +470,25 @@ unsafe fn push_audio(sb: ffi::CMSampleBufferRef, chunker: &mut AudioChunker, emi
         return false;
     }
     let channels = asbd.mChannelsPerFrame.max(1) as usize;
-    let mut list = AudioBufferList8 { mNumberBuffers: 0, mBuffers: [AudioBuffer { mNumberChannels: 0, mDataByteSize: 0, mData: std::ptr::null_mut() }; 8] };
+    let mut list = AudioBufferList8 {
+        mNumberBuffers: 0,
+        mBuffers: [AudioBuffer {
+            mNumberChannels: 0,
+            mDataByteSize: 0,
+            mData: std::ptr::null_mut(),
+        }; 8],
+    };
     let mut block: CFTypeRef = std::ptr::null();
-    let st = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sb, std::ptr::null_mut(), &mut list, std::mem::size_of::<AudioBufferList8>(), std::ptr::null(), std::ptr::null(), 0, &mut block);
+    let st = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+        sb,
+        std::ptr::null_mut(),
+        &mut list,
+        std::mem::size_of::<AudioBufferList8>(),
+        std::ptr::null(),
+        std::ptr::null(),
+        0,
+        &mut block,
+    );
     if st != 0 {
         return false;
     }
@@ -408,7 +519,13 @@ unsafe fn push_audio(sb: ffi::CMSampleBufferRef, chunker: &mut AudioChunker, emi
         }
     };
     if frames > 0 && bufs.iter().all(|b| !b.mData.is_null()) {
-        chunker.push(frames, asbd.mSampleRate.round() as u32, sample_time_us(sb), sample, emit);
+        chunker.push(
+            frames,
+            asbd.mSampleRate.round() as u32,
+            sample_time_us(sb),
+            sample,
+            emit,
+        );
     }
     if !block.is_null() {
         CFRelease(block);
@@ -441,18 +558,31 @@ pub fn start_audio(target: AudioTarget, mut on_audio: AudioCallback) -> Result<A
         let mut warned = false;
         let handler: SampleHandler = Box::new(move |sb| {
             let mut emit = |samples: &[i16], ts: i64| {
-                on_audio(&AudioChunk { samples, sample_rate: AUDIO_SAMPLE_RATE, channels: AUDIO_CHANNELS, timestamp_us: ts });
+                on_audio(&AudioChunk {
+                    samples,
+                    sample_rate: AUDIO_SAMPLE_RATE,
+                    channels: AUDIO_CHANNELS,
+                    timestamp_us: ts,
+                });
             };
             // SAFETY: a valid audio sample buffer for the callback's duration.
             if !unsafe { push_audio(sb, &mut chunker, &mut emit) } && !warned {
                 warned = true;
-                tracing::warn!("screen capture audio: a sample buffer in an unexpected format was skipped");
+                tracing::warn!(
+                    "screen capture audio: a sample buffer in an unexpected format was skipped"
+                );
             }
         });
         let ignore: SampleHandler = Box::new(|_| {});
         let output = StreamOutput::new(Some(ignore), Some(handler), running.clone());
         let run = Running::start(&filter, &sc, output, true, "concord.capture.audio")?;
-        tracing::info!(?target, "app audio capture started (ScreenCaptureKit, 48 kHz stereo, our own sound excluded)");
-        Ok(AudioInner { running, _run: SendBox(run) })
+        tracing::info!(
+            ?target,
+            "app audio capture started (ScreenCaptureKit, 48 kHz stereo, our own sound excluded)"
+        );
+        Ok(AudioInner {
+            running,
+            _run: SendBox(run),
+        })
     })
 }

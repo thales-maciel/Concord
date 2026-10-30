@@ -23,7 +23,7 @@ pub struct Config {
     pub ipv6: bool,
     /// Host/IP clients use to reach LiveKit (the host's public IP or DDNS name).
     pub public_host: String,
-    /// The owner ("Dono", item 12): this username has every permission. Compared
+    /// The owner ("Owner", item 12): this username has every permission. Compared
     /// case-insensitively. Empty (the usual case) = "quem hospeda vira dono": the first login from
     /// the server PC itself (or whoever uses the claim code the console shows) becomes the owner,
     /// stored in the database. Set, it pins the owner and nothing can claim or transfer it.
@@ -43,7 +43,11 @@ pub struct Config {
 impl Config {
     /// [`Config::max_attachment_storage_gb`] in bytes.
     pub fn attachment_storage_cap(&self) -> u64 {
-        let gb = if self.max_attachment_storage_gb.is_finite() { self.max_attachment_storage_gb.max(0.0) } else { 5.0 };
+        let gb = if self.max_attachment_storage_gb.is_finite() {
+            self.max_attachment_storage_gb.max(0.0)
+        } else {
+            5.0
+        };
         (gb * 1024.0 * 1024.0 * 1024.0) as u64
     }
 
@@ -108,9 +112,13 @@ pub fn load_or_create(dir: &Path) -> Result<Config> {
         tracing::info!(path = %path.display(), "created default config.toml");
     }
     let text = std::fs::read_to_string(&path)?;
-    let mut cfg: Config = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    let mut cfg: Config =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     if cfg.livekit.api_key.is_empty() || cfg.livekit.api_secret.len() < 32 {
-        anyhow::bail!("{}: livekit.api_key must be set and livekit.api_secret must be at least 32 chars", path.display());
+        anyhow::bail!(
+            "{}: livekit.api_key must be set and livekit.api_secret must be at least 32 chars",
+            path.display()
+        );
     }
     cfg.public_host = cfg.public_host.trim().to_string();
     cfg.owner = cfg.owner.trim().to_string();
@@ -130,7 +138,7 @@ server_password = ""
 bind = "[::]:7890"
 # Host/IP that clients use to reach LiveKit: your public IP or DDNS name.
 public_host = "127.0.0.1"
-# The server owner ("Dono") can do everything, including making Admins. You normally do not need
+# The server owner ("Owner") can do everything, including making Admins. You normally do not need
 # this: whoever hosts the server becomes the owner by logging in from this very PC (address
 # 127.0.0.1), and the console window also shows a one-time code to claim it from anywhere.
 # Writing `owner = "your-name"` here instead pins the owner by name (it can then no longer be
@@ -184,23 +192,47 @@ mod tests {
     #[test]
     fn old_configs_get_ipv6_unless_they_opt_out() {
         // A v1.0.1 config: `0.0.0.0` and no `ipv6` key.
-        let cfg = parse(r#"bind = "0.0.0.0:7890"
+        let cfg = parse(
+            r#"bind = "0.0.0.0:7890"
 [livekit]
-api_key = "k""#);
+api_key = "k""#,
+        );
         assert!(cfg.ipv6);
         assert_eq!(plan(&cfg.bind, cfg.ipv6), Plan::DualStack(7890));
         // The opt-out: IPv4 only, exactly as before.
-        let cfg = parse(r#"bind = "0.0.0.0:7890"
-ipv6 = false"#);
-        assert_eq!(plan(&cfg.bind, cfg.ipv6), Plan::Exact("0.0.0.0:7890".parse().unwrap()));
-        let cfg = parse(r#"bind = "[::]:7000"
-ipv6 = false"#);
-        assert_eq!(plan(&cfg.bind, cfg.ipv6), Plan::Exact("0.0.0.0:7000".parse().unwrap()));
+        let cfg = parse(
+            r#"bind = "0.0.0.0:7890"
+ipv6 = false"#,
+        );
+        assert_eq!(
+            plan(&cfg.bind, cfg.ipv6),
+            Plan::Exact("0.0.0.0:7890".parse().unwrap())
+        );
+        let cfg = parse(
+            r#"bind = "[::]:7000"
+ipv6 = false"#,
+        );
+        assert_eq!(
+            plan(&cfg.bind, cfg.ipv6),
+            Plan::Exact("0.0.0.0:7000".parse().unwrap())
+        );
         // An explicit address stays exactly that (an IPv4 one stays IPv4-only).
-        for (bind, want) in [("192.0.2.10:7890", "192.0.2.10:7890"), ("127.0.0.1:7997", "127.0.0.1:7997"), ("[2001:db8::1]:7890", "[2001:db8::1]:7890"), (" [::1]:0 ", "[::1]:0")] {
-            assert_eq!(plan(bind, true), Plan::Exact(want.parse().unwrap()), "{bind}");
+        for (bind, want) in [
+            ("192.0.2.10:7890", "192.0.2.10:7890"),
+            ("127.0.0.1:7997", "127.0.0.1:7997"),
+            ("[2001:db8::1]:7890", "[2001:db8::1]:7890"),
+            (" [::1]:0 ", "[::1]:0"),
+        ] {
+            assert_eq!(
+                plan(bind, true),
+                Plan::Exact(want.parse().unwrap()),
+                "{bind}"
+            );
         }
         // A host name is left to the system, as before.
-        assert_eq!(plan("localhost:7890", true), Plan::Named("localhost:7890".into()));
+        assert_eq!(
+            plan("localhost:7890", true),
+            Plan::Named("localhost:7890".into())
+        );
     }
 }

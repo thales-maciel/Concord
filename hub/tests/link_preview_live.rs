@@ -16,15 +16,34 @@ async fn real_sites() {
     )
     .unwrap();
     let server = start_with(
-        Options { data_dir: dir.path().to_path_buf(), no_livekit: true, livekit_bin: "unused".into(), bind_override: Some("127.0.0.1:0".into()) },
+        Options {
+            data_dir: dir.path().to_path_buf(),
+            no_livekit: true,
+            livekit_bin: "unused".into(),
+            bind_override: Some("127.0.0.1:0".into()),
+        },
         PreviewConfig::default(),
     )
     .await
     .unwrap();
     let base = format!("http://127.0.0.1:{}", server.addr.port());
     let http = reqwest::Client::new();
-    let req = LoginRequest { username: "live".into(), server_password: "x".into(), protocol_version: PROTOCOL_VERSION, ..Default::default() };
-    let token = http.post(format!("{base}/api/login")).json(&req).send().await.unwrap().json::<LoginResponse>().await.unwrap().token;
+    let req = LoginRequest {
+        username: "live".into(),
+        server_password: "x".into(),
+        protocol_version: PROTOCOL_VERSION,
+        ..Default::default()
+    };
+    let token = http
+        .post(format!("{base}/api/login"))
+        .json(&req)
+        .send()
+        .await
+        .unwrap()
+        .json::<LoginResponse>()
+        .await
+        .unwrap()
+        .token;
     let urls = std::env::var("LIVE_URLS").unwrap_or_else(|_| {
         [
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -36,9 +55,19 @@ async fn real_sites() {
         .join(" ")
     });
     for u in urls.split_whitespace() {
-        let full = reqwest::Url::parse_with_params(&format!("{base}/api/link-preview"), [("url", u)]).unwrap();
+        let full =
+            reqwest::Url::parse_with_params(&format!("{base}/api/link-preview"), [("url", u)])
+                .unwrap();
         let t = std::time::Instant::now();
-        let p: LinkPreview = http.get(full).bearer_auth(&token).send().await.unwrap().json().await.unwrap();
+        let p: LinkPreview = http
+            .get(full)
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         println!(
             "LIVE {u}\n  -> site={:?} title={:?} desc_len={} image={}x{} ({} ms)",
             p.site_name,
@@ -49,8 +78,20 @@ async fn real_sites() {
             t.elapsed().as_millis()
         );
         if p.has_image {
-            let full = reqwest::Url::parse_with_params(&format!("{base}/api/link-preview/image"), [("url", u)]).unwrap();
-            let b = http.get(full).bearer_auth(&token).send().await.unwrap().bytes().await.unwrap();
+            let full = reqwest::Url::parse_with_params(
+                &format!("{base}/api/link-preview/image"),
+                [("url", u)],
+            )
+            .unwrap();
+            let b = http
+                .get(full)
+                .bearer_auth(&token)
+                .send()
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
             println!("  -> thumbnail {} bytes", b.len());
         }
     }

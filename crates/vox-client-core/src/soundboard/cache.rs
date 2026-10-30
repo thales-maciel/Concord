@@ -27,7 +27,10 @@ impl SoundPcm {
     /// Parse a stored clip (the hub's canonical WAV).
     pub fn from_wav(bytes: &[u8]) -> Result<Self> {
         let info = parse_wav(bytes).map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(SoundPcm { channels: info.channels as usize, samples: Arc::from(wav_samples(bytes, &info)) })
+        Ok(SoundPcm {
+            channels: info.channels as usize,
+            samples: Arc::from(wav_samples(bytes, &info)),
+        })
     }
 
     pub fn frames(&self) -> usize {
@@ -43,7 +46,12 @@ impl SoundPcm {
         if self.channels == 2 {
             self.samples.clone()
         } else {
-            Arc::from(self.samples.iter().flat_map(|&s| [s, s]).collect::<Vec<_>>())
+            Arc::from(
+                self.samples
+                    .iter()
+                    .flat_map(|&s| [s, s])
+                    .collect::<Vec<_>>(),
+            )
         }
     }
 }
@@ -57,7 +65,10 @@ pub struct SoundCache {
 
 impl SoundCache {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into(), mem: Mutex::new(VecDeque::new()) }
+        Self {
+            dir: dir.into(),
+            mem: Mutex::new(VecDeque::new()),
+        }
     }
 
     pub fn dir(&self) -> &Path {
@@ -66,7 +77,11 @@ impl SoundCache {
 
     fn file(&self, id: SoundId, hash: &str) -> PathBuf {
         // The hash comes from the hub: keep it from escaping the directory.
-        let safe: String = hash.chars().filter(|c| c.is_ascii_alphanumeric()).take(64).collect();
+        let safe: String = hash
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .take(64)
+            .collect();
         self.dir.join(format!("{id}-{safe}.wav"))
     }
 
@@ -97,17 +112,24 @@ impl SoundCache {
 
     /// Is the clip on disk or in memory (without decoding it)?
     pub fn has(&self, id: SoundId, hash: &str) -> bool {
-        self.mem.lock().iter().any(|(k, _)| k.0 == id && k.1 == hash) || self.file(id, hash).is_file()
+        self.mem
+            .lock()
+            .iter()
+            .any(|(k, _)| k.0 == id && k.1 == hash)
+            || self.file(id, hash).is_file()
     }
 
     /// Keep a downloaded clip. Checked first: a hub that sends something that is not a sound
     /// leaves nothing behind.
     pub fn put(&self, id: SoundId, hash: &str, wav: &[u8]) -> Result<Arc<SoundPcm>> {
         let pcm = SoundPcm::from_wav(wav).context("the downloaded sound is not valid")?;
-        std::fs::create_dir_all(&self.dir).with_context(|| format!("creating {}", self.dir.display()))?;
+        std::fs::create_dir_all(&self.dir)
+            .with_context(|| format!("creating {}", self.dir.display()))?;
         let path = self.file(id, hash);
         let tmp = path.with_extension("part");
-        std::fs::write(&tmp, wav).and_then(|_| std::fs::rename(&tmp, &path)).context("saving the sound")?;
+        std::fs::write(&tmp, wav)
+            .and_then(|_| std::fs::rename(&tmp, &path))
+            .context("saving the sound")?;
         Ok(self.remember((id, hash.to_string()), pcm))
     }
 
@@ -125,7 +147,9 @@ impl SoundCache {
     /// Delete the files (and memory) of every clip not in `keep` (the current sound list).
     pub fn retain(&self, keep: &[(SoundId, String)]) {
         self.mem.lock().retain(|(k, _)| keep.contains(k));
-        let Ok(entries) = std::fs::read_dir(&self.dir) else { return };
+        let Ok(entries) = std::fs::read_dir(&self.dir) else {
+            return;
+        };
         for e in entries.flatten() {
             let path = e.path();
             if path.extension().is_none_or(|x| x != "wav" && x != "part") {
@@ -154,7 +178,10 @@ mod tests {
         let cache = SoundCache::new(dir.path().join("srv"));
         assert!(cache.get(1, "abc").is_none() && !cache.has(1, "abc"));
         let pcm = cache.put(1, "abc", &wav(7, 9600)).unwrap();
-        assert_eq!((pcm.channels, pcm.frames(), pcm.duration_ms()), (1, 9600, 200));
+        assert_eq!(
+            (pcm.channels, pcm.frames(), pcm.duration_ms()),
+            (1, 9600, 200)
+        );
         assert!(cache.has(1, "abc"));
         assert_eq!(cache.get(1, "abc").unwrap(), pcm);
         // A new process: from disk.
@@ -177,7 +204,10 @@ mod tests {
         std::fs::write(dir.path().join("3-y.wav"), b"RIFFdamaged").unwrap();
         let fresh = SoundCache::new(dir.path());
         assert!(fresh.get(3, "y").is_none());
-        assert!(!dir.path().join("3-y.wav").exists(), "the damaged file is removed");
+        assert!(
+            !dir.path().join("3-y.wav").exists(),
+            "the damaged file is removed"
+        );
         // A hostile hash cannot leave the directory.
         cache.put(4, "../../evil", &wav(1, 9600)).unwrap();
         assert!(dir.path().join("4-evil.wav").exists());
@@ -191,9 +221,15 @@ mod tests {
             cache.put(id, "h", &wav(id as i16, 4800)).unwrap();
         }
         assert_eq!(cache.mem.lock().len(), MEM_CLIPS);
-        assert!(cache.get(0, "h").is_some(), "evicted from memory, still on disk");
+        assert!(
+            cache.get(0, "h").is_some(),
+            "evicted from memory, still on disk"
+        );
         cache.retain(&[(0, "h".into()), (1, "h".into())]);
-        let mut left: Vec<String> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        let mut left: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
         left.sort();
         assert_eq!(left, ["0-h.wav", "1-h.wav"]);
         assert!(cache.get(7, "h").is_none());

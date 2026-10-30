@@ -9,7 +9,7 @@
 //! 3. opens the menu of a card without video in the strip as a right click does (a right click
 //!    posted to a window kept behind the others never reaches egui as a secondary click), checks
 //!    that it draws the card's own items, hides
-//!    it ("Ocultar este card"), then hides every card without video (only the three pinned video
+//!    it ("Hide this card"), then hides every card without video (only the three pinned video
 //!    cards are left, no strip), shows them again and hides one card again;
 //! 4. double-clicks the stage's empty space: the stage fullscreen (the window covers its monitor),
 //!    the video windows move with their cards and keep presenting frames; Esc leaves it and the
@@ -96,7 +96,12 @@ fn hosts_match(app: &App) -> Result<usize, String> {
 /// A point of the stage that no card covers (for the double-click on the empty space).
 fn empty_point(app: &App) -> Option<Pos2> {
     let area = app.call.stage_rect?;
-    let covered = |p: Pos2| app.call.drawn.iter().any(|c| c.rect.expand(2.0).contains(p));
+    let covered = |p: Pos2| {
+        app.call
+            .drawn
+            .iter()
+            .any(|c| c.rect.expand(2.0).contains(p))
+    };
     let mut y = area.top() + 4.0;
     while y < area.bottom() - 4.0 {
         let mut x = area.left() + 4.0;
@@ -122,15 +127,24 @@ impl Auto {
     }
 
     fn sg_presented(&self, app: &App) -> Vec<u64> {
-        self.sg_keys(app).iter().map(|k| Self::tile_state(k).map(|s| s.presented).unwrap_or(0)).collect()
+        self.sg_keys(app)
+            .iter()
+            .map(|k| Self::tile_state(k).map(|s| s.presented).unwrap_or(0))
+            .collect()
     }
 
     /// Frames presented on the first `need` videos (streams, then the camera) since the baseline
     /// (and a new baseline).
     fn sg_flowing(&mut self, app: &App, what: &str, need: usize) -> Result<(), String> {
         let now = self.sg_presented(app);
-        let d: Vec<u64> = now.iter().zip(&self.stage.presented).map(|(n, b)| n.saturating_sub(*b)).collect();
-        log(&format!("{what}: frames presented +{d:?} (streams, camera)"));
+        let d: Vec<u64> = now
+            .iter()
+            .zip(&self.stage.presented)
+            .map(|(n, b)| n.saturating_sub(*b))
+            .collect();
+        log(&format!(
+            "{what}: frames presented +{d:?} (streams, camera)"
+        ));
         self.stage.presented = now;
         if d.len() < 3 || d.iter().take(need).any(|&x| x < 5) {
             return Err(format!("{what}: the videos are not all playing (+{d:?})"));
@@ -147,11 +161,16 @@ impl Auto {
             }
             1 => {
                 if self.logged_in(app) {
-                    let Some(vc) = Self::first_voice(app) else { return self.fail("no voice channel") };
+                    let Some(vc) = Self::first_voice(app) else {
+                        return self.fail("no voice channel");
+                    };
                     app.join_voice(vc);
                     self.goto(2, "joining voice");
                 } else if self.waited(30) || app.form.error.is_some() {
-                    return self.fail(&format!("could not log in: {}", app.form.error.clone().unwrap_or_default()));
+                    return self.fail(&format!(
+                        "could not log in: {}",
+                        app.form.error.clone().unwrap_or_default()
+                    ));
                 }
                 Ok(())
             }
@@ -165,10 +184,24 @@ impl Auto {
             }
             3 => {
                 let me = app.my_id();
-                let mut live: Vec<(String, UserId)> = app.members_here().iter().filter(|m| m.streaming && Some(m.user.id) != me).map(|m| (m.user.username.clone(), m.user.id)).collect();
+                let mut live: Vec<(String, UserId)> = app
+                    .members_here()
+                    .iter()
+                    .filter(|m| m.streaming && Some(m.user.id) != me)
+                    .map(|m| (m.user.username.clone(), m.user.id))
+                    .collect();
                 live.sort();
-                let cam = app.voice.cameras.iter().filter_map(|i| i.parse::<UserId>().ok()).find(|u| !live.iter().any(|(_, l)| l == u));
-                if live.len() >= 2 && cam.is_some() && app.members_here().len() >= 4 && self.waited(3) {
+                let cam = app
+                    .voice
+                    .cameras
+                    .iter()
+                    .filter_map(|i| i.parse::<UserId>().ok())
+                    .find(|u| !live.iter().any(|(_, l)| l == u));
+                if live.len() >= 2
+                    && cam.is_some()
+                    && app.members_here().len() >= 4
+                    && self.waited(3)
+                {
                     self.stage.streams = live.iter().take(2).map(|(_, u)| *u).collect();
                     self.stage.cam = cam;
                     app.show_call();
@@ -177,14 +210,21 @@ impl Auto {
                             return self.fail("watch refused");
                         }
                     }
-                    self.goto(4, &format!("lives {live:?}, camera of {cam:?}; watching both"));
+                    self.goto(
+                        4,
+                        &format!("lives {live:?}, camera of {cam:?}; watching both"),
+                    );
                 } else if self.waited(150) {
                     return self.fail("the two lives and the camera never showed up");
                 }
                 Ok(())
             }
             4 => {
-                let watching = self.stage.streams.iter().all(|u| app.is_watching(&u.to_string()));
+                let watching = self
+                    .stage
+                    .streams
+                    .iter()
+                    .all(|u| app.is_watching(&u.to_string()));
                 if watching && self.waited(5) {
                     let n = hosts_match(app);
                     log(&format!("grid: {} cards, pinned {}, hidden {}, videos over their cards: {n:?}, layouts so far {}", app.call.card_count, app.call.pinned_count, app.call.hidden_count, app.call.layouts));
@@ -192,8 +232,15 @@ impl Auto {
                         Ok(n) => n,
                         Err(e) => return self.fail(&e),
                     };
-                    if app.center != Center::Call || app.call.card_count != 6 || app.call.pinned_count != 0 || n != 3 {
-                        return self.fail(&format!("the grid should show 6 cards (3 with video), none pinned: {:?}", app.call.drawn));
+                    if app.center != Center::Call
+                        || app.call.card_count != 6
+                        || app.call.pinned_count != 0
+                        || n != 3
+                    {
+                        return self.fail(&format!(
+                            "the grid should show 6 cards (3 with video), none pinned: {:?}",
+                            app.call.drawn
+                        ));
                     }
                     shots::save(app, "stage-normal");
                     self.stage.presented = self.sg_presented(app);
@@ -202,21 +249,49 @@ impl Auto {
                     }
                     self.goto(5, "pinned the two streams");
                 } else if !watching && self.waited(30) {
-                    return self.fail(&format!("watch did not start for both: {:?}", app.voice.watching));
+                    return self.fail(&format!(
+                        "watch did not start for both: {:?}",
+                        app.voice.watching
+                    ));
                 }
                 Ok(())
             }
             5 if self.waited(2) => (|| {
                 let n = hosts_match(app)?;
-                let pinned: Vec<DrawnCard> = app.call.drawn.iter().filter(|c| c.pinned).copied().collect();
-                let strip: Vec<DrawnCard> = app.call.drawn.iter().filter(|c| !c.pinned).copied().collect();
-                log(&format!("two pinned: {pinned:?}; strip {strip:?}; videos over their cards: {n}"));
+                let pinned: Vec<DrawnCard> = app
+                    .call
+                    .drawn
+                    .iter()
+                    .filter(|c| c.pinned)
+                    .copied()
+                    .collect();
+                let strip: Vec<DrawnCard> = app
+                    .call
+                    .drawn
+                    .iter()
+                    .filter(|c| !c.pinned)
+                    .copied()
+                    .collect();
+                log(&format!(
+                    "two pinned: {pinned:?}; strip {strip:?}; videos over their cards: {n}"
+                ));
                 // (The four people's cards are in the strip; in a small window some are scrolled out.)
-                if app.call.pinned_count != 2 || app.call.card_count != 6 || pinned.len() != 2 || !pinned.iter().all(|c| matches!(c.key, TileKey::Stream(_))) || strip.is_empty() {
+                if app.call.pinned_count != 2
+                    || app.call.card_count != 6
+                    || pinned.len() != 2
+                    || !pinned.iter().all(|c| matches!(c.key, TileKey::Stream(_)))
+                    || strip.is_empty()
+                {
                     return Err("the two streams are not the pinned cards with the four people in the strip".into());
                 }
-                let lowest = pinned.iter().map(|c| c.rect.bottom()).fold(f32::MIN, f32::max);
-                if !strip.iter().all(|s| s.rect.top() > lowest && pinned.iter().all(|p| p.rect.area() > 2.0 * s.rect.area())) {
+                let lowest = pinned
+                    .iter()
+                    .map(|c| c.rect.bottom())
+                    .fold(f32::MIN, f32::max);
+                if !strip.iter().all(|s| {
+                    s.rect.top() > lowest
+                        && pinned.iter().all(|p| p.rect.area() > 2.0 * s.rect.area())
+                }) {
                     return Err("the strip is not under the (bigger) pinned cards".into());
                 }
                 let cam_key = TileKey::Member(self.stage.cam.ok_or("no camera")?);
@@ -226,7 +301,10 @@ impl Auto {
                         return Err("the camera card is not in the strip, even scrolled".into());
                     }
                     self.stage.scrolls += 1;
-                    log(&format!("the camera card is scrolled out of the strip: scrolling (first {})", app.call.strip_first));
+                    log(&format!(
+                        "the camera card is scrolled out of the strip: scrolling (first {})",
+                        app.call.strip_first
+                    ));
                     app.call.strip_first += 1;
                     return Ok(());
                 };
@@ -239,62 +317,107 @@ impl Auto {
                 self.goto(6, "clicked the camera card");
                 Ok(())
             })(),
-            6 if self.waited(2) => (|| {
-                let cam = self.stage.cam.ok_or("no camera")?;
-                let n = hosts_match(app)?;
-                log(&format!("after the click: pins {:?}, pinned {}, cards {}, videos over their cards {n}", app.call.pins, app.call.pinned_count, app.call.card_count));
-                if !app.is_pinned(TileKey::Member(cam)) || app.call.pinned_count != 3 {
-                    return Err("a click on the camera card did not pin it".into());
-                }
-                // A card without video in the strip (somebody else's if one is shown, else mine):
-                // its menu, opened with a right click.
-                let me = app.my_id();
-                let no_video = |c: &&DrawnCard| !c.pinned && c.video.is_none() && matches!(c.key, TileKey::Member(_));
-                let target = app.call.drawn.iter().filter(no_video).find(|c| Some(c.key.user()) != me).or_else(|| app.call.drawn.iter().find(no_video)).copied();
-                let Some(target) = target else {
-                    log(&format!("no card without video shown in the strip (from {}): scrolling", app.call.strip_first));
-                    app.call.strip_first = if app.call.strip_first > 0 { 0 } else { 99 };
-                    return Ok(());
-                };
-                self.stage.hidden = Some(target.key.user());
-                // (A right click posted to a window kept behind the others does not reach egui as a
-                // secondary click; the menu opens through the same path a right click takes.)
-                let pos = Pos2::new(target.rect.center().x, target.rect.top() + 14.0);
-                if !app.open_card_menu(&app.repaint_ctx(), target.key, pos) {
-                    return Err("the card's menu did not open".into());
-                }
-                self.goto(7, &format!("opened the menu of the card of {}", target.key.user()));
-                Ok(())
-            })(),
+            6 if self.waited(2) => {
+                (|| {
+                    let cam = self.stage.cam.ok_or("no camera")?;
+                    let n = hosts_match(app)?;
+                    log(&format!("after the click: pins {:?}, pinned {}, cards {}, videos over their cards {n}", app.call.pins, app.call.pinned_count, app.call.card_count));
+                    if !app.is_pinned(TileKey::Member(cam)) || app.call.pinned_count != 3 {
+                        return Err("a click on the camera card did not pin it".into());
+                    }
+                    // A card without video in the strip (somebody else's if one is shown, else mine):
+                    // its menu, opened with a right click.
+                    let me = app.my_id();
+                    let no_video = |c: &&DrawnCard| {
+                        !c.pinned && c.video.is_none() && matches!(c.key, TileKey::Member(_))
+                    };
+                    let target = app
+                        .call
+                        .drawn
+                        .iter()
+                        .filter(no_video)
+                        .find(|c| Some(c.key.user()) != me)
+                        .or_else(|| app.call.drawn.iter().find(no_video))
+                        .copied();
+                    let Some(target) = target else {
+                        log(&format!(
+                            "no card without video shown in the strip (from {}): scrolling",
+                            app.call.strip_first
+                        ));
+                        app.call.strip_first = if app.call.strip_first > 0 { 0 } else { 99 };
+                        return Ok(());
+                    };
+                    self.stage.hidden = Some(target.key.user());
+                    // (A right click posted to a window kept behind the others does not reach egui as a
+                    // secondary click; the menu opens through the same path a right click takes.)
+                    let pos = Pos2::new(target.rect.center().x, target.rect.top() + 14.0);
+                    if !app.open_card_menu(&app.repaint_ctx(), target.key, pos) {
+                        return Err("the card's menu did not open".into());
+                    }
+                    self.goto(
+                        7,
+                        &format!("opened the menu of the card of {}", target.key.user()),
+                    );
+                    Ok(())
+                })()
+            }
             7 if self.waited(2) => (|| {
                 let who = self.stage.hidden.ok_or("no card")?;
-                log(&format!("menu open={} card={:?} (menus opened so far {})", app.cmenu.open.is_some(), app.call.menu_card, app.cmenu.opened));
-                if app.cmenu.open.is_none() || app.call.menu_card != Some((TileKey::Member(who), false)) || app.call.card_menu_drawn != Some(TileKey::Member(who)) {
-                    return Err(format!("the card's menu is not open with its own items ({:?})", app.call.card_menu_drawn));
+                log(&format!(
+                    "menu open={} card={:?} (menus opened so far {})",
+                    app.cmenu.open.is_some(),
+                    app.call.menu_card,
+                    app.cmenu.opened
+                ));
+                if app.cmenu.open.is_none()
+                    || app.call.menu_card != Some((TileKey::Member(who), false))
+                    || app.call.card_menu_drawn != Some(TileKey::Member(who))
+                {
+                    return Err(format!(
+                        "the card's menu is not open with its own items ({:?})",
+                        app.call.card_menu_drawn
+                    ));
                 }
                 shots::save(app, "stage-menu");
                 app.cmenu.open = None;
                 egui::Popup::close_all(&app.repaint_ctx());
-                // "Ocultar este card".
+                // "Hide this card".
                 app.hide_card(who);
-                self.goto(8, "Ocultar este card");
+                self.goto(8, "Hide this card");
                 Ok(())
             })(),
             8 if self.waited(2) => (|| {
                 let who = self.stage.hidden.ok_or("no card")?;
                 let n = hosts_match(app)?;
-                log(&format!("one hidden: hidden {}, cards {}, drawn {:?}", app.call.hidden_count, app.call.card_count, app.call.drawn.iter().map(|c| c.key).collect::<Vec<_>>()));
-                if app.call.hidden_count != 1 || app.call.card_count != 5 || card(app, TileKey::Member(who)).is_some() || n != 3 {
+                log(&format!(
+                    "one hidden: hidden {}, cards {}, drawn {:?}",
+                    app.call.hidden_count,
+                    app.call.card_count,
+                    app.call.drawn.iter().map(|c| c.key).collect::<Vec<_>>()
+                ));
+                if app.call.hidden_count != 1
+                    || app.call.card_count != 5
+                    || card(app, TileKey::Member(who)).is_some()
+                    || n != 3
+                {
                     return Err("the hidden card still takes space".into());
                 }
                 app.hide_cards_without_video();
-                self.goto(9, "Ocultar todos sem vídeo");
+                self.goto(9, "Hide everyone without video");
                 Ok(())
             })(),
             9 if self.waited(2) => (|| {
                 let n = hosts_match(app)?;
-                log(&format!("all without video hidden: hidden {}, cards {}, drawn {:?}", app.call.hidden_count, app.call.card_count, app.call.drawn));
-                if app.call.hidden_count != 3 || app.call.card_count != 3 || app.call.drawn.len() != 3 || !app.call.drawn.iter().all(|c| c.pinned && c.video.is_some()) || n != 3 {
+                log(&format!(
+                    "all without video hidden: hidden {}, cards {}, drawn {:?}",
+                    app.call.hidden_count, app.call.card_count, app.call.drawn
+                ));
+                if app.call.hidden_count != 3
+                    || app.call.card_count != 3
+                    || app.call.drawn.len() != 3
+                    || !app.call.drawn.iter().all(|c| c.pinned && c.video.is_some())
+                    || n != 3
+                {
                     return Err("hiding every card without video should leave the three pinned video cards alone".into());
                 }
                 app.show_hidden_cards();
@@ -304,7 +427,10 @@ impl Auto {
             })(),
             10 if self.waited(2) => (|| {
                 if app.call.hidden_count != 1 || app.call.card_count != 5 {
-                    return Err(format!("mostrar ocultos / ocultar again: hidden {} cards {}", app.call.hidden_count, app.call.card_count));
+                    return Err(format!(
+                        "mostrar ocultos / ocultar again: hidden {} cards {}",
+                        app.call.hidden_count, app.call.card_count
+                    ));
                 }
                 let p = empty_point(app).ok_or("no empty space on the stage")?;
                 self.stage.win_rect = win::window_rect(parent);
@@ -312,7 +438,13 @@ impl Auto {
                 self.stage.presented = self.sg_presented(app);
                 let (x, y) = px(app, p);
                 win::double_click(parent, x, y);
-                self.goto(11, &format!("double-clicked the stage's empty space at {p:?} (window {:?})", self.stage.win_rect));
+                self.goto(
+                    11,
+                    &format!(
+                        "double-clicked the stage's empty space at {p:?} (window {:?})",
+                        self.stage.win_rect
+                    ),
+                );
                 Ok(())
             })(),
             11 if self.waited(3) => (|| {
@@ -320,7 +452,13 @@ impl Auto {
                 let n = hosts_match(app)?;
                 let w = app.call.stage_rect.map(|r| r.width()).unwrap_or(0.0);
                 log(&format!("stage fullscreen: on={} window={wr:?} monitor={mr:?} stage width {w} (was {}) videos over their cards {n}", app.stage_fullscreen, self.stage.stage_w));
-                if !app.stage_fullscreen || wr.is_none() || wr != mr || w <= self.stage.stage_w || n != 3 || app.call.pinned_count != 3 {
+                if !app.stage_fullscreen
+                    || wr.is_none()
+                    || wr != mr
+                    || w <= self.stage.stage_w
+                    || n != 3
+                    || app.call.pinned_count != 3
+                {
                     return Err("the double-click did not put the stage fullscreen over the monitor with its cards".into());
                 }
                 self.sg_flowing(app, "stage fullscreen", 3)?;
@@ -332,12 +470,18 @@ impl Auto {
             12 if self.waited(3) => (|| {
                 let wr = win::window_rect(parent);
                 let n = hosts_match(app)?;
-                log(&format!("after Esc: on={} window={wr:?} (was {:?}) videos over their cards {n}", app.stage_fullscreen, self.stage.win_rect));
+                log(&format!(
+                    "after Esc: on={} window={wr:?} (was {:?}) videos over their cards {n}",
+                    app.stage_fullscreen, self.stage.win_rect
+                ));
                 if app.stage_fullscreen || wr != self.stage.win_rect || n != 3 {
                     return Err("Esc did not bring the window and the stage back".into());
                 }
                 self.sg_flowing(app, "back from the fullscreen", 3)?;
-                egui::Popup::open_id(&app.repaint_ctx(), egui::Id::new(crate::call::dock::MORE_MENU));
+                egui::Popup::open_id(
+                    &app.repaint_ctx(),
+                    egui::Id::new(crate::call::dock::MORE_MENU),
+                );
                 self.goto(13, "opened the dock's ⋯ menu (screenshot)");
                 Ok(())
             })(),
@@ -352,18 +496,28 @@ impl Auto {
             }
             14 => {
                 let me = app.my_id();
-                let busy = app.members_here().iter().any(|m| Some(m.user.id) != me && m.streaming) || !app.voice.cameras.is_empty();
+                let busy = app
+                    .members_here()
+                    .iter()
+                    .any(|m| Some(m.user.id) != me && m.streaming)
+                    || !app.voice.cameras.is_empty();
                 if !busy || self.waited(90) {
                     // The call ends while the stage is fullscreen: the window must come back.
                     let ctx = app.repaint_ctx();
                     app.set_stage_fullscreen(&ctx, true);
-                    self.goto(15, "partners done; the stage fullscreen again before leaving");
+                    self.goto(
+                        15,
+                        "partners done; the stage fullscreen again before leaving",
+                    );
                 }
                 Ok(())
             }
             15 if self.waited(2) => {
                 let (wr, mr) = (win::window_rect(parent), win::monitor_rect(parent));
-                log(&format!("stage fullscreen before leaving: on={} window={wr:?} monitor={mr:?}", app.stage_fullscreen));
+                log(&format!(
+                    "stage fullscreen before leaving: on={} window={wr:?} monitor={mr:?}",
+                    app.stage_fullscreen
+                ));
                 if !app.stage_fullscreen || wr != mr {
                     return self.fail("the stage did not go fullscreen again");
                 }

@@ -1,4 +1,4 @@
-//! "Quem hospeda vira dono": who the server's owner (Dono) is, and how somebody becomes one.
+//! "Quem hospeda vira dono": who the server's owner (Owner) is, and how somebody becomes one.
 //!
 //! - `owner = "name"` in `config.toml` pins the owner (the manual override: nothing below applies).
 //! - Otherwise the owner is stored in SQLite (`server_meta.owner_user_id`) and starts out empty:
@@ -89,7 +89,11 @@ impl OwnerState {
     }
 
     pub fn has_owner(&self) -> bool {
-        !self.name.read().unwrap_or_else(|e| e.into_inner()).is_empty()
+        !self
+            .name
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
     }
 
     fn set(&self, name: &str) {
@@ -101,7 +105,10 @@ impl OwnerState {
     /// A fresh code replaces any older one. Returns it as shown (`XXXX-XXXX`).
     fn new_code(&self) -> String {
         let bytes = random_bytes::<CODE_LEN>();
-        let norm: String = bytes.iter().map(|b| CODE_ALPHABET[(*b & 31) as usize] as char).collect();
+        let norm: String = bytes
+            .iter()
+            .map(|b| CODE_ALPHABET[(*b & 31) as usize] as char)
+            .collect();
         *self.code.lock().unwrap_or_else(|e| e.into_inner()) = Some(norm.clone());
         display_code(&norm)
     }
@@ -112,7 +119,11 @@ impl OwnerState {
 
     /// The pending code as shown, if any (the hub's own console, and the tests).
     pub fn code(&self) -> Option<String> {
-        self.code.lock().unwrap_or_else(|e| e.into_inner()).as_deref().map(display_code)
+        self.code
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_deref()
+            .map(display_code)
     }
 
     /// Is `offered` the pending code? Constant time.
@@ -126,7 +137,11 @@ impl OwnerState {
 
     /// The setup code as shown, while the owner has no personal password (console, tests).
     pub fn setup_code(&self) -> Option<String> {
-        self.setup.lock().unwrap_or_else(|e| e.into_inner()).as_deref().map(display_code)
+        self.setup
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_deref()
+            .map(display_code)
     }
 
     /// A setup code for the owner's first password; the existing one if there is one already.
@@ -137,20 +152,27 @@ impl OwnerState {
             return (display_code(c), false);
         }
         let bytes = random_bytes::<CODE_LEN>();
-        let norm: String = bytes.iter().map(|b| CODE_ALPHABET[(*b & 31) as usize] as char).collect();
+        let norm: String = bytes
+            .iter()
+            .map(|b| CODE_ALPHABET[(*b & 31) as usize] as char)
+            .collect();
         *g = Some(norm.clone());
         (display_code(&norm), true)
     }
 
     fn check_setup_code(&self, offered: &str) -> bool {
         let g = self.setup.lock().unwrap_or_else(|e| e.into_inner());
-        g.as_deref().is_some_and(|code| ct_eq(&normalize_code(offered), code))
+        g.as_deref()
+            .is_some_and(|code| ct_eq(&normalize_code(offered), code))
     }
 
     /// The owner's name now has a personal password: no setup code, no special sessions.
     pub fn owner_protected(&self) {
         *self.setup.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        self.proven.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.proven
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 
     fn prove(&self, session_hash: &str) {
@@ -161,7 +183,10 @@ impl OwnerState {
     }
 
     fn is_proven(&self, session_hash: &str) -> bool {
-        self.proven.lock().unwrap_or_else(|e| e.into_inner()).contains(session_hash)
+        self.proven
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(session_hash)
     }
 }
 
@@ -197,7 +222,13 @@ pub fn is_host_pc(peer: IpAddr, headers: &HeaderMap) -> bool {
     if !peer.to_canonical().is_loopback() {
         return false;
     }
-    const PROXY_HEADERS: [&str; 5] = ["forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-real-ip"];
+    const PROXY_HEADERS: [&str; 5] = [
+        "forwarded",
+        "x-forwarded-for",
+        "x-forwarded-host",
+        "x-forwarded-proto",
+        "x-real-ip",
+    ];
     if PROXY_HEADERS.iter().any(|h| headers.contains_key(*h)) {
         return false;
     }
@@ -218,7 +249,10 @@ fn host_is_loopback(host: &str) -> bool {
             _ => host,
         }
     };
-    name.eq_ignore_ascii_case("localhost") || name.parse::<IpAddr>().is_ok_and(|ip| ip.to_canonical().is_loopback())
+    name.eq_ignore_ascii_case("localhost")
+        || name
+            .parse::<IpAddr>()
+            .is_ok_and(|ip| ip.to_canonical().is_loopback())
 }
 
 // ---------------------------------------------------------------- claiming
@@ -232,6 +266,7 @@ enum Via {
 impl Via {
     fn detail(self) -> &'static str {
         match self {
+            // Persisted audit discriminator, also understood by older clients.
             Via::HostPc => "pc-do-servidor",
             Via::Code => "codigo",
         }
@@ -241,7 +276,12 @@ impl Via {
 /// Make `row` the owner if the server has none. Returns whether it won (of two simultaneous
 /// claims exactly one does). `session`: the session that proved it (it may then choose the
 /// owner's first personal password).
-async fn claim(s: &AppState, row: &UserRow, via: Via, session: Option<&str>) -> anyhow::Result<bool> {
+async fn claim(
+    s: &AppState,
+    row: &UserRow,
+    via: Via,
+    session: Option<&str>,
+) -> anyhow::Result<bool> {
     if s.ownership.pinned() {
         return Ok(false);
     }
@@ -256,7 +296,14 @@ async fn claim(s: &AppState, row: &UserRow, via: Via, session: Option<&str>) -> 
         s.ownership.prove(h);
     }
     tracing::info!(user = %row.username, id, via = via.detail(), "server claimed: this user is now the owner");
-    audit(s, Some(id), AUDIT_CLAIM_OWNER, None, via.detail().to_string()).await;
+    audit(
+        s,
+        Some(id),
+        AUDIT_CLAIM_OWNER,
+        None,
+        via.detail().to_string(),
+    )
+    .await;
     s.update_user(&row.user(&s.owner()));
     crate::access::reload_roles(s).await;
     if !row.has_password() {
@@ -267,7 +314,13 @@ async fn claim(s: &AppState, row: &UserRow, via: Via, session: Option<&str>) -> 
 
 /// The automatic claim: `row` just logged in (or connected) and, if the server has no owner and
 /// the request came from the server PC itself, they become the owner. Returns whether they did.
-pub async fn claim_from_host_pc(s: &AppState, row: &UserRow, peer: IpAddr, headers: &HeaderMap, session: Option<&str>) -> anyhow::Result<bool> {
+pub async fn claim_from_host_pc(
+    s: &AppState,
+    row: &UserRow,
+    peer: IpAddr,
+    headers: &HeaderMap,
+    session: Option<&str>,
+) -> anyhow::Result<bool> {
     if s.ownership.pinned() || s.ownership.has_owner() || !is_host_pc(peer, headers) {
         return Ok(false);
     }
@@ -277,10 +330,19 @@ pub async fn claim_from_host_pc(s: &AppState, row: &UserRow, peer: IpAddr, heade
 /// The owner's name has no personal password yet and `me` (a session of it) wants to set the
 /// first one: allowed from the server PC, from the session that claimed the server, or with the
 /// setup code the console shows (wrong codes are slowed down like claim codes).
-pub async fn check_first_password(s: &AppState, me: &Authed, peer: IpAddr, headers: &HeaderMap, code: Option<&str>) -> Result<(), ApiErr> {
+pub async fn check_first_password(
+    s: &AppState,
+    me: &Authed,
+    peer: IpAddr,
+    headers: &HeaderMap,
+    code: Option<&str>,
+) -> Result<(), ApiErr> {
     // A name under a reset code (`--reset-password`, printed on the host) only has sessions that
     // logged in with that code: the code was the proof.
-    if is_host_pc(peer, headers) || s.ownership.is_proven(&me.session_hash) || me.row.reset_pending() {
+    if is_host_pc(peer, headers)
+        || s.ownership.is_proven(&me.session_hash)
+        || me.row.reset_pending()
+    {
         return Ok(());
     }
     let Some(code) = code.filter(|c| !c.trim().is_empty()) else {
@@ -314,10 +376,16 @@ pub async fn claim_with_code(
 ) -> Result<Json<ClaimOwnerResponse>, ApiErr> {
     let Json(req) = body?;
     if s.ownership.pinned() {
-        return Err(ApiErr::new(StatusCode::CONFLICT, "the owner is set in config.toml"));
+        return Err(ApiErr::new(
+            StatusCode::CONFLICT,
+            "the owner is set in config.toml",
+        ));
     }
     if s.ownership.has_owner() {
-        return Err(ApiErr::new(StatusCode::CONFLICT, "this server already has an owner"));
+        return Err(ApiErr::new(
+            StatusCode::CONFLICT,
+            "this server already has an owner",
+        ));
     }
     let ip = format!("claim:{}", ip_key(peer.ip()));
     for key in [ip.as_str(), GLOBAL_KEY] {
@@ -336,37 +404,75 @@ pub async fn claim_with_code(
     s.throttle.succeed(&ip);
     s.throttle.succeed(GLOBAL_KEY);
     if !claim(&s, &me.row, Via::Code, Some(&me.session_hash)).await? {
-        return Err(ApiErr::new(StatusCode::CONFLICT, "this server already has an owner"));
+        return Err(ApiErr::new(
+            StatusCode::CONFLICT,
+            "this server already has an owner",
+        ));
     }
     let id = me.row.id;
-    let row = s.db.call(move |c| db::get_user(c, id)).await?.ok_or_else(|| ApiErr::new(StatusCode::NOT_FOUND, "user not found"))?;
-    Ok(Json(ClaimOwnerResponse { user: row.user(&s.owner()), account: s.account(&row) }))
+    let row =
+        s.db.call(move |c| db::get_user(c, id))
+            .await?
+            .ok_or_else(|| ApiErr::new(StatusCode::NOT_FOUND, "user not found"))?;
+    Ok(Json(ClaimOwnerResponse {
+        user: row.user(&s.owner()),
+        account: s.account(&row),
+    }))
 }
 
 /// `POST /api/admin/transfer-owner`
-pub async fn transfer(State(s): State<AppState>, me: Authed, body: Result<Json<TransferOwnerRequest>, JsonRejection>) -> Result<Json<OkResponse>, ApiErr> {
+pub async fn transfer(
+    State(s): State<AppState>,
+    me: Authed,
+    body: Result<Json<TransferOwnerRequest>, JsonRejection>,
+) -> Result<Json<OkResponse>, ApiErr> {
     let Json(req) = body?;
     if me.role != Role::Owner {
-        return Err(ApiErr::new(StatusCode::FORBIDDEN, "your role does not allow this"));
+        return Err(ApiErr::new(
+            StatusCode::FORBIDDEN,
+            "your role does not allow this",
+        ));
     }
     if s.ownership.pinned() {
-        return Err(ApiErr::new(StatusCode::CONFLICT, "the owner is set in config.toml: change it there"));
+        return Err(ApiErr::new(
+            StatusCode::CONFLICT,
+            "the owner is set in config.toml: change it there",
+        ));
     }
     let to = req.user_id;
     if to == me.user.id {
-        return Err(ApiErr::new(StatusCode::BAD_REQUEST, "you are already the owner"));
+        return Err(ApiErr::new(
+            StatusCode::BAD_REQUEST,
+            "you are already the owner",
+        ));
     }
-    let target = s.db.call(move |c| db::get_user(c, to)).await?.ok_or_else(|| ApiErr::new(StatusCode::NOT_FOUND, "user not found"))?;
+    let target =
+        s.db.call(move |c| db::get_user(c, to))
+            .await?
+            .ok_or_else(|| ApiErr::new(StatusCode::NOT_FOUND, "user not found"))?;
     if !target.has_password() {
-        return Err(ApiErr::new(StatusCode::CONFLICT, "they must set a personal password first"));
+        return Err(ApiErr::new(
+            StatusCode::CONFLICT,
+            "they must set a personal password first",
+        ));
     }
     let from = me.user.id;
     if !s.db.call(move |c| db::transfer_owner(c, from, to)).await? {
-        return Err(ApiErr::new(StatusCode::CONFLICT, "the ownership changed meanwhile"));
+        return Err(ApiErr::new(
+            StatusCode::CONFLICT,
+            "the ownership changed meanwhile",
+        ));
     }
     s.ownership.set(&target.username);
     tracing::info!(from = %me.user.username, to = %target.username, "ownership transferred");
-    audit(&s, Some(from), AUDIT_TRANSFER_OWNER, Some(to), String::new()).await;
+    audit(
+        &s,
+        Some(from),
+        AUDIT_TRANSFER_OWNER,
+        Some(to),
+        String::new(),
+    )
+    .await;
     let owner = s.owner();
     for id in [from, to] {
         if let Some(row) = s.db.call(move |c| db::get_user(c, id)).await? {
@@ -415,8 +521,11 @@ fn announce_setup(s: &AppState) {
     tracing::warn!(code, owner = %s.owner(), "the owner has no personal password yet: set it in the app on this PC (127.0.0.1), or from another PC with this code");
     eprintln!();
     eprintln!("==============================================================================");
-    eprintln!("  O dono ({}) ainda não tem senha pessoal. Defina-a no app deste PC", s.owner());
-    eprintln!("  (endereço 127.0.0.1) ou, de outro PC, com o código: {code}");
+    eprintln!(
+        "  The owner ({}) has no personal password yet. Set it in the app on this PC",
+        s.owner()
+    );
+    eprintln!("  (address 127.0.0.1) or, from another PC, use code: {code}");
     eprintln!("==============================================================================");
     eprintln!();
 }
@@ -427,8 +536,8 @@ fn announce(s: &AppState) {
     tracing::warn!(code, "no owner yet: whoever logs in from the server PC (127.0.0.1) becomes the owner, or anyone can claim it with this code");
     eprintln!();
     eprintln!("==============================================================================");
-    eprintln!("  Nenhum dono ainda. Para virar dono, entre no app e use o código: {code}");
-    eprintln!("  (ou entre pelo próprio PC do servidor: use o endereço 127.0.0.1)");
+    eprintln!("  No owner yet. To become owner, sign in to the app and use code: {code}");
+    eprintln!("  (or sign in from the server PC itself: use address 127.0.0.1)");
     eprintln!("==============================================================================");
     eprintln!();
 }
@@ -441,7 +550,10 @@ async fn refresh(s: &AppState) -> anyhow::Result<()> {
     }
     let stored = s.db.call(|c| db::owner_row(c)).await?;
     let before = s.ownership.name();
-    let after = stored.as_ref().map(|r| r.username.clone()).unwrap_or_default();
+    let after = stored
+        .as_ref()
+        .map(|r| r.username.clone())
+        .unwrap_or_default();
     if before == after {
         return Ok(());
     }
@@ -500,19 +612,25 @@ pub fn reset_owner_cli(data_dir: &std::path::Path) -> anyhow::Result<String> {
         let name = db::owner_row(c)?.map(|r| r.username);
         let had = db::clear_owner(c)?;
         if had {
-            db::audit(c, None, AUDIT_RESET_OWNER, None, name.as_deref().unwrap_or(""))?;
+            db::audit(
+                c,
+                None,
+                AUDIT_RESET_OWNER,
+                None,
+                name.as_deref().unwrap_or(""),
+            )?;
         }
         Ok((had, name))
     })?;
     Ok(if had {
         format!(
-            "O dono do servidor ({}) foi removido. O servidor fica sem dono: quem entrar no app pelo próprio PC do servidor (127.0.0.1) vira o novo dono, \
-             ou use o código que o servidor mostra na janela dele.\n\
-             Se o dono estiver no config.toml (owner = \"...\"), tire essa linha: ela continua valendo.",
+            "The server owner ({}) was removed. The server is now unowned: sign in from the server PC itself (127.0.0.1) to become the new owner, \
+             or use the code shown in the server window.\n\
+             If the owner is set in config.toml (owner = \"...\"), remove that line: it still takes precedence.",
             name.unwrap_or_default()
         )
     } else {
-        "O servidor não tinha dono guardado. Se o dono está no config.toml (owner = \"...\"), tire essa linha ou troque o nome por lá.".to_string()
+        "The server had no saved owner. If the owner is in config.toml (owner = \"...\"), remove that line or change the name there.".to_string()
     })
 }
 
@@ -535,7 +653,16 @@ mod tests {
         for ip in ["127.0.0.1", "127.5.6.7", "::1", "::ffff:127.0.0.1"] {
             assert!(is_host_pc(ip.parse().unwrap(), &none), "{ip}");
         }
-        for ip in ["192.168.0.10", "10.0.0.2", "8.8.8.8", "169.254.1.1", "::ffff:10.0.0.1", "fe80::1", "2001:db8::1", "0.0.0.0"] {
+        for ip in [
+            "192.168.0.10",
+            "10.0.0.2",
+            "8.8.8.8",
+            "169.254.1.1",
+            "::ffff:10.0.0.1",
+            "fe80::1",
+            "2001:db8::1",
+            "0.0.0.0",
+        ] {
             assert!(!is_host_pc(ip.parse().unwrap(), &none), "{ip}");
         }
     }
@@ -549,13 +676,28 @@ mod tests {
         assert!(is_host_pc(lo, &headers(&[("host", "localhost:7890")])));
         assert!(is_host_pc(lo, &headers(&[("host", "[::1]:7890")])));
         // A proxy / tunnel on the same PC: the loopback peer is the proxy.
-        assert!(!is_host_pc(lo, &headers(&[("host", "meu-servidor.example.com")])));
-        assert!(!is_host_pc(lo, &headers(&[("host", "127.0.0.1:7890"), ("x-forwarded-for", "203.0.113.9")])));
-        assert!(!is_host_pc(lo, &headers(&[("forwarded", "for=203.0.113.9")])));
+        assert!(!is_host_pc(
+            lo,
+            &headers(&[("host", "meu-servidor.example.com")])
+        ));
+        assert!(!is_host_pc(
+            lo,
+            &headers(&[
+                ("host", "127.0.0.1:7890"),
+                ("x-forwarded-for", "203.0.113.9")
+            ])
+        ));
+        assert!(!is_host_pc(
+            lo,
+            &headers(&[("forwarded", "for=203.0.113.9")])
+        ));
         assert!(!is_host_pc(lo, &headers(&[("x-real-ip", "203.0.113.9")])));
         // Saying you are local does not make you local.
         assert!(!is_host_pc(lan, &headers(&[("host", "127.0.0.1:7890")])));
-        assert!(!is_host_pc(lan, &headers(&[("x-forwarded-for", "127.0.0.1"), ("host", "localhost")])));
+        assert!(!is_host_pc(
+            lan,
+            &headers(&[("x-forwarded-for", "127.0.0.1"), ("host", "localhost")])
+        ));
     }
 
     #[test]
@@ -564,7 +706,10 @@ mod tests {
         let shown = st.new_code();
         assert_eq!(shown.len(), 9);
         assert_eq!(shown.as_bytes()[4], b'-');
-        assert!(shown.chars().filter(|c| *c != '-').all(|c| CODE_ALPHABET.contains(&(c as u8))));
+        assert!(shown
+            .chars()
+            .filter(|c| *c != '-')
+            .all(|c| CODE_ALPHABET.contains(&(c as u8))));
         assert_eq!(st.code().as_deref(), Some(shown.as_str()));
         assert!(st.check_code(&shown));
         assert!(st.check_code(&shown.to_lowercase().replace('-', " ")));
@@ -582,10 +727,10 @@ mod tests {
 
     #[test]
     fn a_pinned_owner_never_changes() {
-        let st = OwnerState::new("Dono");
+        let st = OwnerState::new("Owner");
         assert!(st.pinned() && st.has_owner());
-        st.set("Outro");
-        assert_eq!(st.name(), "Dono");
+        st.set("Other");
+        assert_eq!(st.name(), "Owner");
         let st = OwnerState::new("");
         assert!(!st.pinned() && !st.has_owner());
         st.set("Ana");

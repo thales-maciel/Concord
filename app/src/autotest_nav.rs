@@ -1,5 +1,5 @@
-//! v1.0 navigation and the center modes (phase 2a, docs/PLANO-v1.0.md "Navegação como no
-//! Discord"), a child module of `autotest`: `nav-a` (the owner, "dono") checks, `nav-b` is the
+//! v1.0 navigation and the center modes (phase 2a, docs/PLANO-v1.0.md "Discord-style
+//! navigation"), a child module of `autotest`: `nav-a` (the owner, "dono") checks, `nav-b` is the
 //! other person in the voice room (camera on) and answers on cue. With `VOX_AUTOTEST_SHOT_DIR`,
 //! `nav-a` also saves the screens for design review (`tools\shots.ps1`).
 //!
@@ -33,16 +33,16 @@ use crate::roles::AdminCmd;
 
 const JOGATINA: &str = "jogatina-de-sexta";
 const MEMES: &str = "memes";
-const ADM: &str = "administração";
+const ADM: &str = "administration";
 /// A's opening lines in #geral, and B's answers.
-const HELLO: &str = "alguém topa a ranqueada depois do jantar?";
-const A_2: &str = "vou abrir a sala de voz daqui a pouco";
-const B_REPLY: &str = "topo! só termino essa build aqui";
-const B_MENTION: &str = "abre a sala do foco pra gente depois?";
-const B_PONG1: &str = "chegando aí em 5 min";
-const B_PONG2: &str = "alguém viu o placar de ontem?";
-const DM_A: &str = "oi! você vem hoje?";
-const DM_B: &str = "vou sim, já já entro na sala";
+const HELLO: &str = "anyone up for ranked after dinner?";
+const A_2: &str = "I will open the voice room soon";
+const B_REPLY: &str = "sure! just finishing this build";
+const B_MENTION: &str = "can you open the focus room for us later?";
+const B_PONG1: &str = "joining in 5 min";
+const B_PONG2: &str = "anyone see yesterday's score?";
+const DM_A: &str = "hi! are you coming today?";
+const DM_B: &str = "yes, joining the room soon";
 /// The idle check (phase 3b): how long, and the frames allowed in it (the check's own wake-up, a
 /// clock line now and then; a repaint loop draws hundreds).
 const QUIET_SECS: u64 = 8;
@@ -69,12 +69,17 @@ fn log(what: &str) {
 }
 
 fn channel_id(app: &App, name: &str, kind: ChannelKind) -> Option<i64> {
-    app.channels.iter().find(|c| c.name == name && c.kind == kind).map(|c| c.id)
+    app.channels
+        .iter()
+        .find(|c| c.name == name && c.kind == kind)
+        .map(|c| c.id)
 }
 
 fn message<'a>(app: &'a App, ch: i64, text: &str) -> Option<&'a Message> {
     // (B's mention starts with "@dono ".)
-    app.logs.get(&ch).and_then(|l| l.msgs.iter().find(|m| m.content.ends_with(text)))
+    app.logs
+        .get(&ch)
+        .and_then(|l| l.msgs.iter().find(|m| m.content.ends_with(text)))
 }
 
 impl Auto {
@@ -96,21 +101,38 @@ impl Auto {
 
     /// The label of a channel's sidebar row.
     fn nav_label(app: &App, id: i64) -> String {
-        app.channels.iter().find(|c| c.id == id).map(|c| channel_label(c, "")).unwrap_or_default()
+        app.channels
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| channel_label(c, ""))
+            .unwrap_or_default()
     }
 
     /// Exactly one sidebar row drawn highlighted, and it is `label`.
     fn nav_only_highlighted(app: &App, label: &str) -> Result<(), String> {
-        let on: Vec<&str> = app.sidebar_rows.iter().filter(|d| d.selected).map(|d| d.label.as_str()).collect();
+        let on: Vec<&str> = app
+            .sidebar_rows
+            .iter()
+            .filter(|d| d.selected)
+            .map(|d| d.label.as_str())
+            .collect();
         if on == [label] {
             Ok(())
         } else {
-            Err(format!("highlighted rows {on:?}, expected only {label:?} (open: {:?}, mode: {:?})", app.open_in_center(), app.effective_mode()))
+            Err(format!(
+                "highlighted rows {on:?}, expected only {label:?} (open: {:?}, mode: {:?})",
+                app.open_in_center(),
+                app.effective_mode()
+            ))
         }
     }
 
     fn nav_cue(&mut self, app: &mut App, text: &str) {
-        app.backend.send(crate::backend::Cmd::SendMessage { channel: self.nav.memes, content: text.to_string(), extras: Default::default() });
+        app.backend.send(crate::backend::Cmd::SendMessage {
+            channel: self.nav.memes,
+            content: text.to_string(),
+            extras: Default::default(),
+        });
     }
 
     // ------------------------------------------------------------ A
@@ -128,7 +150,11 @@ impl Auto {
             }
             1 => {
                 if !self.logged_in(app) {
-                    return if self.waited(30) { self.fail("could not log in") } else { None };
+                    return if self.waited(30) {
+                        self.fail("could not log in")
+                    } else {
+                        None
+                    };
                 }
                 // The owner sets its personal password first (the hub asks it before any admin action).
                 if app.roles.account.is_some_and(|a| a.must_set_password) {
@@ -136,19 +162,41 @@ impl Auto {
                         self.nav.created = true;
                         app.set_personal_password(None, Some(NAV_PW.into()));
                     }
-                    return if self.waited(20) { self.fail(&format!("the personal password was not set: {:?}", app.roles.pw_msg)) } else { None };
+                    return if self.waited(20) {
+                        self.fail(&format!(
+                            "the personal password was not set: {:?}",
+                            app.roles.pw_msg
+                        ))
+                    } else {
+                        None
+                    };
                 }
-                let (Some(geral), Some(voice)) = (Self::first_text(app), Self::first_voice(app)) else { return self.fail("no channels") };
+                let (Some(geral), Some(voice)) = (Self::first_text(app), Self::first_voice(app))
+                else {
+                    return self.fail("no channels");
+                };
                 (self.nav.geral, self.nav.voice) = (geral, voice);
                 if self.nav.sent == 0 {
                     self.nav.sent = 1;
-                    for (name, private) in [(JOGATINA, None), (MEMES, None), (ADM, Some(PrivateAccess::default()))] {
+                    for (name, private) in [
+                        (JOGATINA, None),
+                        (MEMES, None),
+                        (ADM, Some(PrivateAccess::default())),
+                    ] {
                         if channel_id(app, name, ChannelKind::Text).is_none() {
-                            app.admin(AdminCmd::CreateChannel { name: name.into(), kind: ChannelKind::Text, private });
+                            app.admin(AdminCmd::CreateChannel {
+                                name: name.into(),
+                                kind: ChannelKind::Text,
+                                private,
+                            });
                         }
                     }
                 }
-                match (channel_id(app, JOGATINA, ChannelKind::Text), channel_id(app, MEMES, ChannelKind::Text), channel_id(app, ADM, ChannelKind::Text)) {
+                match (
+                    channel_id(app, JOGATINA, ChannelKind::Text),
+                    channel_id(app, MEMES, ChannelKind::Text),
+                    channel_id(app, ADM, ChannelKind::Text),
+                ) {
                     (Some(j), Some(m), Some(_)) => {
                         (self.nav.jogatina, self.nav.memes) = (j, m);
                         self.nav.sent = 0;
@@ -167,10 +215,16 @@ impl Auto {
                 }
             }
             3 => {
-                let ready = channel_id(app, MEMES, ChannelKind::Text).and_then(|m| app.logs.get(&m)).is_some_and(|l| l.msgs.iter().any(|m| m.content == "navready"));
+                let ready = channel_id(app, MEMES, ChannelKind::Text)
+                    .and_then(|m| app.logs.get(&m))
+                    .is_some_and(|l| l.msgs.iter().any(|m| m.content == "navready"));
                 let answered = message(app, self.nav.geral, B_MENTION).is_some();
                 if !(ready && answered) {
-                    return if self.waited(90) { self.fail("B never answered") } else { None };
+                    return if self.waited(90) {
+                        self.fail("B never answered")
+                    } else {
+                        None
+                    };
                 }
                 if !self.nav_lingered(1.5) {
                     return None;
@@ -199,20 +253,33 @@ impl Auto {
             }
             5 => {
                 if app.voice.channel != Some(self.nav.voice) || app.members_here().len() < 2 {
-                    return if self.waited(60) { self.fail("could not join the voice room with B") } else { None };
+                    return if self.waited(60) {
+                        self.fail("could not join the voice room with B")
+                    } else {
+                        None
+                    };
                 }
                 if !self.nav_lingered(4.0) {
                     return None;
                 }
                 let room = Self::nav_label(app, self.nav.voice);
                 if app.open_in_center() != Open::Stage(self.nav.voice) {
-                    return self.fail(&format!("joining did not open the stage: {:?}", app.open_in_center()));
+                    return self.fail(&format!(
+                        "joining did not open the stage: {:?}",
+                        app.open_in_center()
+                    ));
                 }
                 if let Err(e) = Self::nav_only_highlighted(app, &room) {
                     return self.fail(&format!("stage in focus: {e}"));
                 }
-                if app.effective_mode() != app.settings.layout.center_mode && app.settings.layout.center_mode != CenterMode::Chat {
-                    return self.fail(&format!("the remembered mode {:?} is not the one shown ({:?})", app.settings.layout.center_mode, app.effective_mode()));
+                if app.effective_mode() != app.settings.layout.center_mode
+                    && app.settings.layout.center_mode != CenterMode::Chat
+                {
+                    return self.fail(&format!(
+                        "the remembered mode {:?} is not the one shown ({:?})",
+                        app.settings.layout.center_mode,
+                        app.effective_mode()
+                    ));
                 }
                 // Start from the docked chat (the mockup's main screen).
                 app.set_center_mode(CenterMode::CardsWithChat);
@@ -220,8 +287,14 @@ impl Auto {
             }
             6 if self.nav_lingered(3.0) => {
                 let room = Self::nav_label(app, self.nav.voice);
-                if app.docked_channel() != Some(self.nav.geral) || app.chat_on_screen() != Some(self.nav.geral) {
-                    return self.fail(&format!("the docked chat is not #geral: {:?} / {:?}", app.docked_channel(), app.chat_on_screen()));
+                if app.docked_channel() != Some(self.nav.geral)
+                    || app.chat_on_screen() != Some(self.nav.geral)
+                {
+                    return self.fail(&format!(
+                        "the docked chat is not #geral: {:?} / {:?}",
+                        app.docked_channel(),
+                        app.chat_on_screen()
+                    ));
                 }
                 if let Err(e) = Self::nav_only_highlighted(app, &room) {
                     return self.fail(&format!("docked chat: {e}"));
@@ -231,10 +304,18 @@ impl Auto {
                 self.nav_next(7, "mode: only the chat");
             }
             7 if self.nav_lingered(2.0) => {
-                if app.effective_mode() != CenterMode::Chat || app.open_in_center() != Open::Text(self.nav.geral) {
-                    return self.fail(&format!("only chat: mode {:?}, open {:?}", app.effective_mode(), app.open_in_center()));
+                if app.effective_mode() != CenterMode::Chat
+                    || app.open_in_center() != Open::Text(self.nav.geral)
+                {
+                    return self.fail(&format!(
+                        "only chat: mode {:?}, open {:?}",
+                        app.effective_mode(),
+                        app.open_in_center()
+                    ));
                 }
-                if let Err(e) = Self::nav_only_highlighted(app, &Self::nav_label(app, self.nav.geral)) {
+                if let Err(e) =
+                    Self::nav_only_highlighted(app, &Self::nav_label(app, self.nav.geral))
+                {
                     return self.fail(&format!("only chat: {e}"));
                 }
                 if app.settings.layout.center_mode != CenterMode::Chat {
@@ -261,14 +342,23 @@ impl Auto {
             }
             8 if self.nav_lingered(2.0) => {
                 if app.effective_mode() != CenterMode::Cards || app.chat_on_screen().is_some() {
-                    return self.fail(&format!("only cards: mode {:?}, chat on screen {:?}", app.effective_mode(), app.chat_on_screen()));
+                    return self.fail(&format!(
+                        "only cards: mode {:?}, chat on screen {:?}",
+                        app.effective_mode(),
+                        app.chat_on_screen()
+                    ));
                 }
-                if let Err(e) = Self::nav_only_highlighted(app, &Self::nav_label(app, self.nav.voice)) {
+                if let Err(e) =
+                    Self::nav_only_highlighted(app, &Self::nav_label(app, self.nav.voice))
+                {
                     return self.fail(&format!("only cards: {e}"));
                 }
                 self.nav_shot(app, "mode-cards");
                 app.set_center_mode(CenterMode::CardsWithChat);
-                self.nav_next(9, "cards with the chat again; B writes in the docked #geral");
+                self.nav_next(
+                    9,
+                    "cards with the chat again; B writes in the docked #geral",
+                );
             }
             9 if self.nav_lingered(1.5) => {
                 if app.chat_on_screen() != Some(self.nav.geral) {
@@ -279,14 +369,20 @@ impl Auto {
             }
             10 => {
                 if message(app, self.nav.geral, B_PONG1).is_none() {
-                    return if self.waited(30) { self.fail("B's line never came") } else { None };
+                    return if self.waited(30) {
+                        self.fail("B's line never came")
+                    } else {
+                        None
+                    };
                 }
                 if !self.nav_lingered(1.0) {
                     return None;
                 }
                 let n = app.unread.get(&self.nav.geral).copied().unwrap_or(0);
                 if n != 0 {
-                    return self.fail(&format!("a message in the visible docked chat counted as unread ({n})"));
+                    return self.fail(&format!(
+                        "a message in the visible docked chat counted as unread ({n})"
+                    ));
                 }
                 log("a message arriving in the visible docked chat counts as read");
                 app.dock_channel(self.nav.memes);
@@ -301,7 +397,11 @@ impl Auto {
             }
             12 => {
                 if message(app, self.nav.geral, B_PONG2).is_none() {
-                    return if self.waited(30) { self.fail("B's second line never came") } else { None };
+                    return if self.waited(30) {
+                        self.fail("B's second line never came")
+                    } else {
+                        None
+                    };
                 }
                 if !self.nav_lingered(1.0) {
                     return None;
@@ -317,7 +417,9 @@ impl Auto {
                 if app.unread.get(&self.nav.geral).copied().unwrap_or(0) != 0 {
                     return self.fail("docking #geral again did not read it");
                 }
-                log("docked chat read marking: visible = read, hidden = unread, shown again = read");
+                log(
+                    "docked chat read marking: visible = read, hidden = unread, shown again = read",
+                );
                 // text → voice → text from the sidebar.
                 app.select_text(self.nav.jogatina);
                 self.nav_next(14, "sidebar: a text channel");
@@ -326,7 +428,9 @@ impl Auto {
                 if app.open_in_center() != Open::Text(self.nav.jogatina) {
                     return self.fail(&format!("text: {:?}", app.open_in_center()));
                 }
-                if let Err(e) = Self::nav_only_highlighted(app, &Self::nav_label(app, self.nav.jogatina)) {
+                if let Err(e) =
+                    Self::nav_only_highlighted(app, &Self::nav_label(app, self.nav.jogatina))
+                {
                     return self.fail(&format!("text: {e}"));
                 }
                 app.join_voice(self.nav.voice);
@@ -336,7 +440,9 @@ impl Auto {
                 if app.open_in_center() != Open::Stage(self.nav.voice) {
                     return self.fail(&format!("voice: {:?}", app.open_in_center()));
                 }
-                if let Err(e) = Self::nav_only_highlighted(app, &Self::nav_label(app, self.nav.voice)) {
+                if let Err(e) =
+                    Self::nav_only_highlighted(app, &Self::nav_label(app, self.nav.voice))
+                {
                     return self.fail(&format!("voice: {e}"));
                 }
                 app.select_text(self.nav.geral);
@@ -346,23 +452,39 @@ impl Auto {
                 if app.open_in_center() != Open::Text(self.nav.geral) {
                     return self.fail(&format!("text again: {:?}", app.open_in_center()));
                 }
-                if let Err(e) = Self::nav_only_highlighted(app, &Self::nav_label(app, self.nav.geral)) {
+                if let Err(e) =
+                    Self::nav_only_highlighted(app, &Self::nav_label(app, self.nav.geral))
+                {
                     return self.fail(&format!("text again: {e}"));
                 }
                 log("text → voice → text: only what the center shows is highlighted");
                 // Reactions on B's reply, and its hover bar.
-                let Some(reply) = message(app, self.nav.geral, B_REPLY).map(|m| m.id) else { return self.fail("B's reply is gone") };
+                let Some(reply) = message(app, self.nav.geral, B_REPLY).map(|m| m.id) else {
+                    return self.fail("B's reply is gone");
+                };
                 app.react(Target::Channel(self.nav.geral), reply, "👍", true);
                 app.chatx.force_hover = Some(reply);
                 self.nav_next(17, "reacting to B's reply");
             }
             17 => {
-                let Some(m) = message(app, self.nav.geral, B_REPLY) else { return self.fail("B's reply is gone") };
+                let Some(m) = message(app, self.nav.geral, B_REPLY) else {
+                    return self.fail("B's reply is gone");
+                };
                 let me = app.my_id().unwrap_or_default();
-                let mine = m.reactions.iter().any(|r| r.emoji == "👍" && r.users.contains(&me));
-                let theirs = m.reactions.iter().any(|r| r.emoji == "👍" && r.users.contains(&self.nav.peer));
+                let mine = m
+                    .reactions
+                    .iter()
+                    .any(|r| r.emoji == "👍" && r.users.contains(&me));
+                let theirs = m
+                    .reactions
+                    .iter()
+                    .any(|r| r.emoji == "👍" && r.users.contains(&self.nav.peer));
                 if !(mine && theirs) {
-                    return if self.waited(20) { self.fail(&format!("the reactions did not arrive: {:?}", m.reactions)) } else { None };
+                    return if self.waited(20) {
+                        self.fail(&format!("the reactions did not arrive: {:?}", m.reactions))
+                    } else {
+                        None
+                    };
                 }
                 if !self.nav_lingered(2.0) {
                     return None;
@@ -374,7 +496,11 @@ impl Auto {
             }
             18 => {
                 let Some(dm) = app.dms.selected else {
-                    return if self.waited(20) { self.fail("the DM did not open") } else { None };
+                    return if self.waited(20) {
+                        self.fail("the DM did not open")
+                    } else {
+                        None
+                    };
                 };
                 self.nav.dm = dm;
                 if self.nav.sent == 0 && self.nav_lingered(1.0) {
@@ -382,14 +508,26 @@ impl Auto {
                     app.dms.input = DM_A.into();
                     app.send_dm();
                 }
-                let answered = app.dms.logs.get(&dm).is_some_and(|l| l.msgs.iter().any(|m| m.content == DM_B));
+                let answered = app
+                    .dms
+                    .logs
+                    .get(&dm)
+                    .is_some_and(|l| l.msgs.iter().any(|m| m.content == DM_B));
                 if !answered {
-                    return if self.waited(30) { self.fail("B never answered the DM") } else { None };
+                    return if self.waited(30) {
+                        self.fail("B never answered the DM")
+                    } else {
+                        None
+                    };
                 }
                 self.nav_next(19, "DM answered");
             }
             19 if self.nav_lingered(2.0) => {
-                let peer = app.dms.conv(self.nav.dm).map(|c| c.peer.shown_name().to_string()).unwrap_or_default();
+                let peer = app
+                    .dms
+                    .conv(self.nav.dm)
+                    .map(|c| c.peer.shown_name().to_string())
+                    .unwrap_or_default();
                 if app.open_in_center() != Open::Dm(self.nav.dm) {
                     return self.fail(&format!("DM: {:?}", app.open_in_center()));
                 }
@@ -401,7 +539,9 @@ impl Auto {
                 self.nav_next(20, "the stage over the DM");
             }
             20 if self.nav_lingered(1.0) => {
-                if let Err(e) = Self::nav_only_highlighted(app, &Self::nav_label(app, self.nav.voice)) {
+                if let Err(e) =
+                    Self::nav_only_highlighted(app, &Self::nav_label(app, self.nav.voice))
+                {
                     return self.fail(&format!("stage after a DM: {e}"));
                 }
                 log("DMs follow the same rule");
@@ -417,15 +557,21 @@ impl Auto {
                 // online check finds them offline without touching anything.)
                 app.switch_server();
                 let now = crate::app::now_ms();
-                for (id, name, user, port, ago_h) in [(9001, "Jogatina de sexta", "dono", 7995, 26), (9002, "Banda do bairro", "lua", 7996, 24 * 9)] {
-                    app.settings.servers.servers.push(crate::servers::SavedServer {
-                        id,
-                        url: format!("http://127.0.0.1:{port}"),
-                        username: user.into(),
-                        server_name: name.into(),
-                        last_used_ms: now - ago_h * 3_600_000,
-                        ..Default::default()
-                    });
+                for (id, name, user, port, ago_h) in [
+                    (9001, "Jogatina de sexta", "dono", 7995, 26),
+                    (9002, "Banda do bairro", "lua", 7996, 24 * 9),
+                ] {
+                    app.settings
+                        .servers
+                        .servers
+                        .push(crate::servers::SavedServer {
+                            id,
+                            url: format!("http://127.0.0.1:{port}"),
+                            username: user.into(),
+                            server_name: name.into(),
+                            last_used_ms: now - ago_h * 3_600_000,
+                            ..Default::default()
+                        });
                 }
                 self.nav_next(22, "the saved servers");
             }
@@ -441,30 +587,63 @@ impl Auto {
     // ------------------------------------------------------------ B
 
     pub(super) fn run_nav_b(&mut self, app: &mut App) -> Option<i32> {
-        let cue = |app: &App, memes: i64, text: &str| app.logs.get(&memes).is_some_and(|l| l.msgs.iter().any(|m| m.content == text));
+        let cue = |app: &App, memes: i64, text: &str| {
+            app.logs
+                .get(&memes)
+                .is_some_and(|l| l.msgs.iter().any(|m| m.content == text))
+        };
         match self.step {
             0 => self.connect(app),
             1 => {
                 if !self.logged_in(app) {
-                    return if self.waited(30) { self.fail("could not log in") } else { None };
+                    return if self.waited(30) {
+                        self.fail("could not log in")
+                    } else {
+                        None
+                    };
                 }
-                let owner = app.online.iter().find(|u| u.username == "dono").map(|u| u.id);
-                let (Some(geral), Some(voice), Some(memes), Some(owner)) = (Self::first_text(app), Self::first_voice(app), channel_id(app, MEMES, ChannelKind::Text), owner) else {
-                    return if self.waited(90) { self.fail("A or its channels never showed up") } else { None };
+                let owner = app
+                    .online
+                    .iter()
+                    .find(|u| u.username == "dono")
+                    .map(|u| u.id);
+                let (Some(geral), Some(voice), Some(memes), Some(owner)) = (
+                    Self::first_text(app),
+                    Self::first_voice(app),
+                    channel_id(app, MEMES, ChannelKind::Text),
+                    owner,
+                ) else {
+                    return if self.waited(90) {
+                        self.fail("A or its channels never showed up")
+                    } else {
+                        None
+                    };
                 };
-                (self.nav.geral, self.nav.voice, self.nav.memes, self.nav.peer) = (geral, voice, memes, owner);
+                (
+                    self.nav.geral,
+                    self.nav.voice,
+                    self.nav.memes,
+                    self.nav.peer,
+                ) = (geral, voice, memes, owner);
                 app.select_text(memes);
                 app.select_text(geral);
                 app.join_voice(voice);
                 self.nav_next(2, "in the room; waiting for A's hello");
             }
             2 => {
-                if app.voice.channel == Some(self.nav.voice) && app.voice.camera == crate::app::CameraUi::Off && self.nav.sent == 0 {
+                if app.voice.channel == Some(self.nav.voice)
+                    && app.voice.camera == crate::app::CameraUi::Off
+                    && self.nav.sent == 0
+                {
                     app.start_camera();
                     self.nav.sent = 1;
                 }
                 let Some(hello) = message(app, self.nav.geral, HELLO).map(|m| m.id) else {
-                    return if self.waited(90) { self.fail("A's hello never came") } else { None };
+                    return if self.waited(90) {
+                        self.fail("A's hello never came")
+                    } else {
+                        None
+                    };
                 };
                 if !app.chatx.people.contains_key(&self.nav.peer) || !self.nav_lingered(1.0) {
                     return None;
@@ -482,8 +661,12 @@ impl Auto {
                 let target = Target::Channel(self.nav.geral);
                 app.input = "@dono".into();
                 let cursor = app.input.len();
-                let Some((at, list)) = app.mention_list(target, &app.input, cursor) else { return self.fail("no member list for @dono") };
-                let Some(c) = list.into_iter().find(|c| c.id == Some(self.nav.peer)) else { return self.fail("A is not in the member list") };
+                let Some((at, list)) = app.mention_list(target, &app.input, cursor) else {
+                    return self.fail("no member list for @dono");
+                };
+                let Some(c) = list.into_iter().find(|c| c.id == Some(self.nav.peer)) else {
+                    return self.fail("A is not in the member list");
+                };
                 app.pick_mention(target, at, cursor, &c);
                 app.input.push_str(B_MENTION);
                 app.send_message_to(self.nav.geral);
@@ -500,19 +683,39 @@ impl Auto {
             5 => {
                 if cue(app, self.nav.memes, "navping1") && self.nav.sent < 2 {
                     self.nav.sent = 2;
-                    app.backend.send(crate::backend::Cmd::SendMessage { channel: self.nav.geral, content: B_PONG1.into(), extras: Default::default() });
+                    app.backend.send(crate::backend::Cmd::SendMessage {
+                        channel: self.nav.geral,
+                        content: B_PONG1.into(),
+                        extras: Default::default(),
+                    });
                 }
                 if cue(app, self.nav.memes, "navping2") && self.nav.sent < 3 {
                     self.nav.sent = 3;
-                    app.backend.send(crate::backend::Cmd::SendMessage { channel: self.nav.geral, content: B_PONG2.into(), extras: Default::default() });
+                    app.backend.send(crate::backend::Cmd::SendMessage {
+                        channel: self.nav.geral,
+                        content: B_PONG2.into(),
+                        extras: Default::default(),
+                    });
                 }
                 // A's DM: answer it once.
                 if self.nav.dm == 0 {
-                    if let Some(c) = app.dms.convs.iter().find(|c| c.peer.id == self.nav.peer).map(|c| c.id) {
+                    if let Some(c) = app
+                        .dms
+                        .convs
+                        .iter()
+                        .find(|c| c.peer.id == self.nav.peer)
+                        .map(|c| c.id)
+                    {
                         self.nav.dm = c;
                         app.select_dm(c);
                     }
-                } else if self.nav.sent < 4 && app.dms.logs.get(&self.nav.dm).is_some_and(|l| l.msgs.iter().any(|m| m.content == DM_A)) {
+                } else if self.nav.sent < 4
+                    && app
+                        .dms
+                        .logs
+                        .get(&self.nav.dm)
+                        .is_some_and(|l| l.msgs.iter().any(|m| m.content == DM_A))
+                {
                     self.nav.sent = 4;
                     app.dms.input = DM_B.into();
                     app.send_dm();

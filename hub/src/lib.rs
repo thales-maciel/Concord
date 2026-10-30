@@ -17,10 +17,10 @@ pub mod ids;
 pub mod invites;
 pub mod ipv6;
 pub mod job;
+pub mod linkpreview;
 pub mod listen;
 pub mod livekit;
 pub mod livekit_admin;
-pub mod linkpreview;
 pub mod livekit_token;
 pub mod owner;
 pub mod profile;
@@ -119,13 +119,21 @@ impl Server {
 
 /// The runtime a hub runs on: ~15 users need very little (two workers, a small blocking pool).
 pub fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
-    tokio::runtime::Builder::new_multi_thread().worker_threads(2).max_blocking_threads(8).thread_name("hub").enable_all().build()
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(8)
+        .thread_name("hub")
+        .enable_all()
+        .build()
 }
 
 /// Run a hub until `until` (handed the running server) finishes, then shut it down cleanly. The
 /// one entry point of `concord-server` (until Ctrl+C) and of the app's host mode (until "Parar
 /// servidor" or the app closing, see [`host`]).
-pub async fn serve_until<F: std::future::Future<Output = ()>>(opts: Options, until: impl FnOnce(&Server) -> F) -> Result<()> {
+pub async fn serve_until<F: std::future::Future<Output = ()>>(
+    opts: Options,
+    until: impl FnOnce(&Server) -> F,
+) -> Result<()> {
     let server = start(opts).await?;
     until(&server).await;
     server.shutdown().await;
@@ -143,14 +151,23 @@ pub async fn start_with(opts: Options, previews: linkpreview::PreviewConfig) -> 
 }
 
 /// [`start_with`] with explicit [`Tuning`] (tests).
-pub async fn start_tuned(opts: Options, previews: linkpreview::PreviewConfig, tuning: Tuning) -> Result<Server> {
+pub async fn start_tuned(
+    opts: Options,
+    previews: linkpreview::PreviewConfig,
+    tuning: Tuning,
+) -> Result<Server> {
     let cfg = config::load_or_create(&opts.data_dir)?;
     let db = db::Db::open(&opts.data_dir.join("voxhub.db")).context("opening database")?;
     // A database a newer hub marked as needing it (`access.rs`): say so loudly.
     if let Some(wanted) = db.call(|c| access::min_hub_version(c)).await? {
         if access::too_old(access::PRIVATE_MIN_HUB_VERSION, &wanted) {
-            tracing::error!(wanted, "this database was marked for a server {wanted} or newer: update this server");
-            eprintln!("ATENÇÃO: este banco de dados pede o servidor {wanted} ou mais novo. Atualize o servidor.");
+            tracing::error!(
+                wanted,
+                "this database was marked for a server {wanted} or newer: update this server"
+            );
+            eprintln!(
+                "WARNING: this database requires server {wanted} or newer. Update the server."
+            );
         }
     }
     let channels = db.call(|c| db::list_channels(c)).await?;
@@ -158,7 +175,9 @@ pub async fn start_tuned(opts: Options, previews: linkpreview::PreviewConfig, tu
     let server_muted = db.call(|c| db::server_muted_ids(c)).await?;
 
     let bind = opts.bind_override.as_deref().unwrap_or(&cfg.bind);
-    let bound = listen::bind(&listen::plan(bind, cfg.ipv6)).await.with_context(|| format!("binding {bind}"))?;
+    let bound = listen::bind(&listen::plan(bind, cfg.ipv6))
+        .await
+        .with_context(|| format!("binding {bind}"))?;
     let (addr, addrs, dual_stack) = (bound.addrs[0], bound.addrs.clone(), bound.dual_stack);
 
     tracing::info!(
@@ -176,33 +195,78 @@ pub async fn start_tuned(opts: Options, previews: linkpreview::PreviewConfig, tu
         "concord-server starting"
     );
     if cfg.public_host == "127.0.0.1" {
-        tracing::warn!("public_host is 127.0.0.1: only this PC can join voice; set it in config.toml");
+        tracing::warn!(
+            "public_host is 127.0.0.1: only this PC can join voice; set it in config.toml"
+        );
     }
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut tasks = Vec::new();
 
     if !opts.no_livekit {
         let yaml = livekit::write_config(&cfg, &opts.data_dir)?;
-        tasks.push(tokio::spawn(livekit::supervise(opts.livekit_bin, yaml, shutdown_rx.clone())));
+        tasks.push(tokio::spawn(livekit::supervise(
+            opts.livekit_bin,
+            yaml,
+            shutdown_rx.clone(),
+        )));
     }
 
-    let previews = linkpreview::LinkPreviews::new(previews, db.clone(), &cfg.public_host).context("starting link previews")?;
-    let lk_admin = livekit_admin::LiveKitAdmin::new(&cfg, !opts.no_livekit || tuning.livekit_api).context("LiveKit server API client")?;
+    let previews = linkpreview::LinkPreviews::new(previews, db.clone(), &cfg.public_host)
+        .context("starting link previews")?;
+    let lk_admin = livekit_admin::LiveKitAdmin::new(&cfg, !opts.no_livekit || tuning.livekit_api)
+        .context("LiveKit server API client")?;
     let attachments = attachments::AttachmentState::new(&opts.data_dir, &cfg);
     let slots = serve::Slots::new(tuning.limits.clone());
-    let state = state::Shared::new(cfg.clone(), db, server_id, channels, server_muted, previews, lk_admin, attachments, tuning, shutdown_rx.clone());
+    let state = state::Shared::new(
+        cfg.clone(),
+        db,
+        server_id,
+        channels,
+        server_muted,
+        previews,
+        lk_admin,
+        attachments,
+        tuning,
+        shutdown_rx.clone(),
+    );
     owner::init(&state).await?;
     // Private channels: everybody's effective role, before anybody connects.
     access::init_roles(&state).await?;
-    tasks.push(tokio::spawn(owner::watch(state.clone(), shutdown_rx.clone())));
-    tasks.push(tokio::spawn(profile::watch(state.clone(), shutdown_rx.clone())));
-    tasks.push(tokio::spawn(attachments::watch(state.clone(), shutdown_rx.clone())));
-    tasks.push(tokio::spawn(voice_guard::watch(state.clone(), shutdown_rx.clone())));
+    tasks.push(tokio::spawn(owner::watch(
+        state.clone(),
+        shutdown_rx.clone(),
+    )));
+    tasks.push(tokio::spawn(profile::watch(
+        state.clone(),
+        shutdown_rx.clone(),
+    )));
+    tasks.push(tokio::spawn(attachments::watch(
+        state.clone(),
+        shutdown_rx.clone(),
+    )));
+    tasks.push(tokio::spawn(voice_guard::watch(
+        state.clone(),
+        shutdown_rx.clone(),
+    )));
     let app = api::router(state.clone());
     // One accept loop per socket (two without a dual-stack one); the connection caps are shared.
     for listener in bound.listeners {
-        tasks.push(tokio::spawn(serve::serve(listener, app.clone(), slots.clone(), shutdown_rx.clone())));
+        tasks.push(tokio::spawn(serve::serve(
+            listener,
+            app.clone(),
+            slots.clone(),
+            shutdown_rx.clone(),
+        )));
     }
 
-    Ok(Server { addr, addrs, dual_stack, config: cfg, state, shutdown_tx, tasks, slots })
+    Ok(Server {
+        addr,
+        addrs,
+        dual_stack,
+        config: cfg,
+        state,
+        shutdown_tx,
+        tasks,
+        slots,
+    })
 }

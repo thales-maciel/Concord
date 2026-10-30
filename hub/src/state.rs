@@ -5,7 +5,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use tokio::sync::{broadcast, watch};
-use vox_proto::{Account, Channel, ChannelId, ChannelKind, CustomStatus, Presence, ServerEvent, User, UserId, VoiceMember};
+use vox_proto::{
+    Account, Channel, ChannelId, ChannelKind, CustomStatus, Presence, ServerEvent, User, UserId,
+    VoiceMember,
+};
 
 use crate::access;
 use crate::auth::Throttle;
@@ -46,15 +49,28 @@ pub enum Out {
     Many(Arc<[UserId]>, Arc<str>),
     /// An event about channel `ch` (v0.9): only to the people who may see it at delivery time
     /// (`access.rs`), and with `to`, only to those of them.
-    Channel { ch: ChannelId, to: Option<Arc<[UserId]>>, text: Arc<str> },
+    Channel {
+        ch: ChannelId,
+        to: Option<Arc<[UserId]>>,
+        text: Arc<str>,
+    },
     /// `VoiceStateChanged` of `member`, now in `ch`, before in `prev` (v0.9): each recipient gets
     /// `full`, `left` (the member went where they may not see) or nothing ([`access::voice_view`]).
-    Voice { member: UserId, ch: Option<ChannelId>, prev: Option<ChannelId>, full: Arc<str>, left: Arc<str> },
+    Voice {
+        member: UserId,
+        ch: Option<ChannelId>,
+        prev: Option<ChannelId>,
+        full: Arc<str>,
+        left: Arc<str>,
+    },
     /// The channel list, a channel's access or somebody's role changed (v0.9): every connection
     /// works out again what it may see, and sends its own `ChannelsChanged` when that changed.
     Access,
     /// Close the user's connections, except the one opened with session `keep` (a token hash).
-    Kick { user: UserId, keep: Option<Arc<str>> },
+    Kick {
+        user: UserId,
+        keep: Option<Arc<str>>,
+    },
 }
 
 pub struct Shared {
@@ -117,7 +133,11 @@ struct Inner {
 impl Inner {
     /// Do other people see `user_id` as online?
     fn visible(&self, user_id: UserId) -> bool {
-        self.online.contains_key(&user_id) && self.presence.get(&user_id).is_none_or(|p| p.effective().visible_to_others())
+        self.online.contains_key(&user_id)
+            && self
+                .presence
+                .get(&user_id)
+                .is_none_or(|p| p.effective().visible_to_others())
     }
 
     /// `streamer` stopped being watchable (left voice, changed channel, stopped streaming):
@@ -163,7 +183,10 @@ impl Shared {
         shutdown: watch::Receiver<bool>,
     ) -> AppState {
         let (tx, _) = broadcast::channel(256);
-        let inner = Inner { server_muted: server_muted.into_iter().collect(), ..Default::default() };
+        let inner = Inner {
+            server_muted: server_muted.into_iter().collect(),
+            ..Default::default()
+        };
         let ownership = crate::owner::OwnerState::new(&cfg.owner);
         let access = access::Access::default();
         access.set_channels(&channels);
@@ -207,7 +230,12 @@ impl Shared {
 
     /// Any channel, private or not: only for code that checks access itself (or is Admin+ only).
     pub fn channel(&self, id: i64) -> Option<Channel> {
-        self.channels.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|c| c.id == id).cloned()
+        self.channels
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|c| c.id == id)
+            .cloned()
     }
 
     /// Channel `id` if it exists *and* `user` may see it (v0.9): what every read by id uses, so a
@@ -218,7 +246,10 @@ impl Shared {
 
     /// Every channel, private or not (see [`Shared::visible_channels`]).
     pub fn channels(&self) -> Vec<Channel> {
-        self.channels.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.channels
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// May `user` see channel `ch`? (`access.rs`; in memory.)
@@ -229,7 +260,10 @@ impl Shared {
     /// The channels `user` may see, in order.
     pub fn visible_channels(&self, user: UserId) -> Vec<Channel> {
         let rules = self.access.rules();
-        self.channels().into_iter().filter(|c| rules.can_see(user, c.id)).collect()
+        self.channels()
+            .into_iter()
+            .filter(|c| rules.can_see(user, c.id))
+            .collect()
     }
 
     /// The channel list changed (item 12; v0.9: or a channel's access): store it, and every
@@ -279,14 +313,22 @@ impl Shared {
     /// An event about channel `ch`, for everybody who may see it (v0.9).
     pub fn send_channel(&self, ch: ChannelId, ev: &ServerEvent) {
         if let Ok(s) = serde_json::to_string(ev) {
-            let _ = self.tx.send(Out::Channel { ch, to: None, text: s.into() });
+            let _ = self.tx.send(Out::Channel {
+                ch,
+                to: None,
+                text: s.into(),
+            });
         }
     }
 
     /// An event about channel `ch` for the listed users, those of them who may see it (v0.9).
     pub fn send_channel_to(&self, ch: ChannelId, users: &[UserId], ev: &ServerEvent) {
         if let Ok(s) = serde_json::to_string(ev) {
-            let _ = self.tx.send(Out::Channel { ch, to: Some(users.into()), text: s.into() });
+            let _ = self.tx.send(Out::Channel {
+                ch,
+                to: Some(users.into()),
+                text: s.into(),
+            });
         }
     }
 
@@ -295,17 +337,30 @@ impl Shared {
     fn send_voice(&self, member: VoiceMember, prev: Option<ChannelId>) {
         let ch = member.channel_id;
         let (Ok(full), Ok(gone)) = (
-            serde_json::to_string(&ServerEvent::VoiceStateChanged { member: member.clone() }),
-            serde_json::to_string(&ServerEvent::VoiceStateChanged { member: left(member.clone()) }),
+            serde_json::to_string(&ServerEvent::VoiceStateChanged {
+                member: member.clone(),
+            }),
+            serde_json::to_string(&ServerEvent::VoiceStateChanged {
+                member: left(member.clone()),
+            }),
         ) else {
             return;
         };
-        let _ = self.tx.send(Out::Voice { member: member.user.id, ch, prev, full: full.into(), left: gone.into() });
+        let _ = self.tx.send(Out::Voice {
+            member: member.user.id,
+            ch,
+            prev,
+            full: full.into(),
+            left: gone.into(),
+        });
     }
 
     /// Close the user's WebSockets (all of them, or all but session `keep`).
     pub fn kick(&self, user: UserId, keep: Option<&str>) {
-        let _ = self.tx.send(Out::Kick { user, keep: keep.map(Into::into) });
+        let _ = self.tx.send(Out::Kick {
+            user,
+            keep: keep.map(Into::into),
+        });
     }
 
     /// Register a connection. Returns the `Ready` snapshot and an event receiver that starts
@@ -316,7 +371,12 @@ impl Shared {
     /// used by their first connection. An invisible person is not announced and not listed for
     /// anybody else; every other person whose state is not plain "online, no status" is told to
     /// this connection right after `Ready` (as `PresenceChanged`, to this person's connections).
-    pub fn connect(&self, user: &User, account: Account, presence: PresenceEntry) -> (ServerEvent, broadcast::Receiver<Out>) {
+    pub fn connect(
+        &self,
+        user: &User,
+        account: Account,
+        presence: PresenceEntry,
+    ) -> (ServerEvent, broadcast::Receiver<Out>) {
         let mut g = self.lock();
         let entry = g.online.entry(user.id).or_insert_with(|| (user.clone(), 0));
         entry.0 = user.clone();
@@ -332,17 +392,36 @@ impl Shared {
             }
         }
         let rx = self.tx.subscribe();
-        let mut online: Vec<User> = g.online.values().filter(|(u, _)| g.visible(u.id)).map(|(u, _)| u.clone()).collect();
+        let mut online: Vec<User> = g
+            .online
+            .values()
+            .filter(|(u, _)| g.visible(u.id))
+            .map(|(u, _)| u.clone())
+            .collect();
         online.sort_by_key(|u| u.id);
         // v0.9: only the channels this person may see, and only the voice members of those (a
         // member in a private room they may not see is simply not in voice for them).
         let rules = self.access.rules();
-        let channels: Vec<Channel> = self.channels().into_iter().filter(|c| rules.can_see(user.id, c.id)).collect();
-        let mut voice: Vec<VoiceMember> = g.voice.values().filter(|m| m.user.id == user.id || m.channel_id.is_some_and(|c| rules.can_see(user.id, c))).cloned().collect();
+        let channels: Vec<Channel> = self
+            .channels()
+            .into_iter()
+            .filter(|c| rules.can_see(user.id, c.id))
+            .collect();
+        let mut voice: Vec<VoiceMember> = g
+            .voice
+            .values()
+            .filter(|m| {
+                m.user.id == user.id || m.channel_id.is_some_and(|c| rules.can_see(user.id, c))
+            })
+            .cloned()
+            .collect();
         voice.sort_by_key(|m| m.user.id);
         // The presence snapshot: sorted, only the people it is news about (plus me, even when invisible).
-        let mut known: Vec<(&UserId, &PresenceEntry)> =
-            g.presence.iter().filter(|(id, e)| (g.visible(**id) || **id == user.id) && !e.is_default()).collect();
+        let mut known: Vec<(&UserId, &PresenceEntry)> = g
+            .presence
+            .iter()
+            .filter(|(id, e)| (g.visible(**id) || **id == user.id) && !e.is_default())
+            .collect();
         known.sort_by_key(|(id, _)| **id);
         for (id, e) in known {
             self.send_to(user.id, &e.event(*id));
@@ -362,7 +441,9 @@ impl Shared {
     /// Drop a connection; the user goes offline (and leaves voice) with the last one.
     pub fn disconnect(&self, user_id: UserId) {
         let mut g = self.lock();
-        let Some(entry) = g.online.get_mut(&user_id) else { return };
+        let Some(entry) = g.online.get_mut(&user_id) else {
+            return;
+        };
         entry.1 -= 1;
         if entry.1 > 0 {
             return;
@@ -395,7 +476,11 @@ impl Shared {
 
     /// The user as everybody currently sees them (fresh role), falling back to `user`.
     pub fn current_user(&self, user: &User) -> User {
-        self.lock().online.get(&user.id).map(|(u, _)| u.clone()).unwrap_or_else(|| user.clone())
+        self.lock()
+            .online
+            .get(&user.id)
+            .map(|(u, _)| u.clone())
+            .unwrap_or_else(|| user.clone())
     }
 
     /// Someone's role changed: update presence and voice, and tell everybody.
@@ -422,7 +507,9 @@ impl Shared {
     /// so that clients that know nothing about presence see it too, and an invisible person's
     /// own connections are the only ones told about changes while they stay invisible.
     fn announce_presence(&self, g: &Inner, user_id: UserId, before: Presence) {
-        let Some(e) = g.presence.get(&user_id) else { return };
+        let Some(e) = g.presence.get(&user_id) else {
+            return;
+        };
         let after = e.effective();
         let ev = e.event(user_id);
         match (before.visible_to_others(), after.visible_to_others()) {
@@ -444,7 +531,12 @@ impl Shared {
     /// Change a connected person's presence. `auto` (the app's idle detection) only moves between
     /// `Online` and `Away` and never overrides a presence the person chose. Returns what the
     /// person is afterwards, or `None` when they are not connected.
-    pub fn set_presence(&self, user_id: UserId, presence: Presence, auto: bool) -> Option<Presence> {
+    pub fn set_presence(
+        &self,
+        user_id: UserId,
+        presence: Presence,
+        auto: bool,
+    ) -> Option<Presence> {
         let mut g = self.lock();
         let e = g.presence.get_mut(&user_id)?;
         let before = e.effective();
@@ -471,7 +563,9 @@ impl Shared {
     /// except their own connections).
     pub fn set_status(&self, user_id: UserId, status: Option<CustomStatus>) {
         let mut g = self.lock();
-        let Some(e) = g.presence.get_mut(&user_id) else { return };
+        let Some(e) = g.presence.get_mut(&user_id) else {
+            return;
+        };
         if e.status == status {
             return;
         }
@@ -483,7 +577,12 @@ impl Shared {
     /// Clear the statuses of connected people whose time is up.
     pub fn expire_statuses(&self, now_ms: i64) {
         let mut g = self.lock();
-        let due: Vec<UserId> = g.presence.iter().filter(|(_, e)| e.status.as_ref().is_some_and(|s| s.is_expired(now_ms))).map(|(id, _)| *id).collect();
+        let due: Vec<UserId> = g
+            .presence
+            .iter()
+            .filter(|(_, e)| e.status.as_ref().is_some_and(|s| s.is_expired(now_ms)))
+            .map(|(id, _)| *id)
+            .collect();
         for id in due {
             if let Some(e) = g.presence.get_mut(&id) {
                 e.status = None;
@@ -509,7 +608,11 @@ impl Shared {
     /// anything changed.
     pub fn set_server_muted(&self, user_id: UserId, muted: bool) -> bool {
         let mut g = self.lock();
-        let changed = if muted { g.server_muted.insert(user_id) } else { g.server_muted.remove(&user_id) };
+        let changed = if muted {
+            g.server_muted.insert(user_id)
+        } else {
+            g.server_muted.remove(&user_id)
+        };
         if let Some(m) = g.voice.get_mut(&user_id) {
             if m.server_muted != muted {
                 m.server_muted = muted;
@@ -537,7 +640,9 @@ impl Shared {
     /// A moderator ended the user's Go Live: they are no longer streaming, nobody watches them.
     pub fn force_stop_stream(&self, user_id: UserId) {
         let mut g = self.lock();
-        let Some(m) = g.voice.get_mut(&user_id) else { return };
+        let Some(m) = g.voice.get_mut(&user_id) else {
+            return;
+        };
         if !m.streaming {
             return;
         }
@@ -555,12 +660,26 @@ impl Shared {
     /// Would this voice state change nothing (same room, same flags)? Such a frame is dropped
     /// before the rate limit.
     #[allow(clippy::too_many_arguments)]
-    pub fn voice_unchanged(&self, user: UserId, channel_id: Option<i64>, muted: bool, deafened: bool, streaming: bool, camera: bool, audio_only: bool) -> bool {
+    pub fn voice_unchanged(
+        &self,
+        user: UserId,
+        channel_id: Option<i64>,
+        muted: bool,
+        deafened: bool,
+        streaming: bool,
+        camera: bool,
+        audio_only: bool,
+    ) -> bool {
         let g = self.lock();
         match (g.voice.get(&user), channel_id) {
             (None, None) => true,
             (Some(m), Some(ch)) => {
-                m.channel_id == Some(ch) && m.muted == muted && m.deafened == deafened && m.streaming == streaming && m.camera == camera && m.audio_only == (audio_only && streaming)
+                m.channel_id == Some(ch)
+                    && m.muted == muted
+                    && m.deafened == deafened
+                    && m.streaming == streaming
+                    && m.camera == camera
+                    && m.audio_only == (audio_only && streaming)
             }
             _ => false,
         }
@@ -577,7 +696,9 @@ impl Shared {
             b.0 -= 1.0;
             Ok(())
         } else {
-            Err(std::time::Duration::from_secs_f64((1.0 - b.0) / VOICE_RATE_PER_SEC))
+            Err(std::time::Duration::from_secs_f64(
+                (1.0 - b.0) / VOICE_RATE_PER_SEC,
+            ))
         }
     }
 
@@ -601,10 +722,14 @@ impl Shared {
             }
         }
         let mut g = self.lock();
-        let user = g.online.get(&user.id).map(|(u, _)| u.clone()).unwrap_or_else(|| user.clone());
+        let user = g
+            .online
+            .get(&user.id)
+            .map(|(u, _)| u.clone())
+            .unwrap_or_else(|| user.clone());
         let prev = g.voice.get(&user.id).cloned();
         let server_muted = g.server_muted.contains(&user.id);
-        // "Só áudio" only means something while streaming (an old client never sends it).
+        // "Audio only" only means something while streaming (an old client never sends it).
         let audio_only = audio_only && streaming;
         let member = match channel_id {
             // Mute / deafen / stream flips inside the same room keep who they are watching
@@ -612,9 +737,29 @@ impl Shared {
             Some(ch) => {
                 let keep = prev.as_ref().filter(|p| p.channel_id == Some(ch));
                 let watching = keep.map(|p| p.watching.clone()).unwrap_or_default();
-                VoiceMember { user: user.clone(), channel_id, muted, deafened, streaming, watching, camera, server_muted, audio_only }
+                VoiceMember {
+                    user: user.clone(),
+                    channel_id,
+                    muted,
+                    deafened,
+                    streaming,
+                    watching,
+                    camera,
+                    server_muted,
+                    audio_only,
+                }
             }
-            None => left(VoiceMember { user: user.clone(), channel_id: None, muted, deafened, streaming, watching: Vec::new(), camera, server_muted, audio_only }),
+            None => left(VoiceMember {
+                user: user.clone(),
+                channel_id: None,
+                muted,
+                deafened,
+                streaming,
+                watching: Vec::new(),
+                camera,
+                server_muted,
+                audio_only,
+            }),
         };
         if channel_id.is_some() {
             if prev.as_ref() == Some(&member) {
@@ -625,8 +770,14 @@ impl Shared {
             return Ok(()); // was not in voice: nothing changed
         }
         // Nobody can keep watching someone who left, moved, or stopped streaming.
-        let moved = prev.as_ref().is_some_and(|p| p.channel_id != member.channel_id);
-        let viewers = if member.channel_id.is_some() && member.streaming && !moved { Vec::new() } else { g.drop_viewers_of(user.id) };
+        let moved = prev
+            .as_ref()
+            .is_some_and(|p| p.channel_id != member.channel_id);
+        let viewers = if member.channel_id.is_some() && member.streaming && !moved {
+            Vec::new()
+        } else {
+            g.drop_viewers_of(user.id)
+        };
         self.send_voice(member, prev.and_then(|p| p.channel_id));
         for v in viewers {
             let ch = v.channel_id;
@@ -649,18 +800,25 @@ impl Shared {
             return;
         }
         b.0 -= 1.0;
-        let Some(me) = g.voice.get(&user.id) else { return };
+        let Some(me) = g.voice.get(&user.id) else {
+            return;
+        };
         let Some(channel) = me.channel_id else { return };
         let mut valid: Vec<UserId> = Vec::new();
         for &t in targets {
             if t == user.id || valid.contains(&t) || valid.len() >= MAX_WATCHING {
                 continue;
             }
-            if g.voice.get(&t).is_some_and(|s| s.streaming && s.channel_id == Some(channel)) {
+            if g.voice
+                .get(&t)
+                .is_some_and(|s| s.streaming && s.channel_id == Some(channel))
+            {
                 valid.push(t);
             }
         }
-        let Some(me) = g.voice.get_mut(&user.id) else { return };
+        let Some(me) = g.voice.get_mut(&user.id) else {
+            return;
+        };
         if me.watching == valid {
             return;
         }
@@ -672,16 +830,31 @@ impl Shared {
 
     /// Token bucket: ~5 messages/second per user (across all their connections).
     pub fn allow_message(&self, user_id: UserId) -> bool {
-        take_token(&mut self.lock().buckets, user_id, MSG_RATE_PER_SEC, MSG_BURST)
+        take_token(
+            &mut self.lock().buckets,
+            user_id,
+            MSG_RATE_PER_SEC,
+            MSG_BURST,
+        )
     }
 
     /// Token bucket for reactions (channels and DMs together): ~4 a second, bursts of 12.
     pub fn allow_reaction(&self, user_id: UserId) -> bool {
-        take_token(&mut self.lock().reaction_buckets, user_id, REACTION_RATE_PER_SEC, REACTION_BURST)
+        take_token(
+            &mut self.lock().reaction_buckets,
+            user_id,
+            REACTION_RATE_PER_SEC,
+            REACTION_BURST,
+        )
     }
 }
 
-fn take_token(buckets: &mut HashMap<UserId, (f64, Instant)>, user_id: UserId, rate: f64, burst: f64) -> bool {
+fn take_token(
+    buckets: &mut HashMap<UserId, (f64, Instant)>,
+    user_id: UserId,
+    rate: f64,
+    burst: f64,
+) -> bool {
     let now = Instant::now();
     let b = buckets.entry(user_id).or_insert((burst, now));
     let refill = now.duration_since(b.1).as_secs_f64() * rate;
