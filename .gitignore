@@ -8,6 +8,9 @@
 /.claude/
 *.local.json
 
+# Local bytecode from the packaging verifier and its tests
+__pycache__/
+
 # Never publish secrets or personal data
 .env
 .env.*

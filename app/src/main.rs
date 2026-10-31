@@ -1,6 +1,8 @@
 //! concord desktop app (egui + glow). Logic lives in vox-client-core; this crate is the window.
 
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// The desktop client must never allocate a console, including dev/testing/autotest builds.
+// This is an OS/UI contract, not an optimization or debug-assertions setting.
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod alerts;
 mod app;

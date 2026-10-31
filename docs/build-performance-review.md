@@ -34,6 +34,20 @@ default: old tagged manifests do not contain the new profile. Testing ZIPs ident
 feature variant, and non-shipping profile. Full audio features remain the default; lightweight
 packages explicitly identify the missing feature.
 
+### Windows console regression and packaging guard
+
+The first testing ZIP (`23e4f6e`) exposed a regression introduced by the new profile: the client
+selected the Windows GUI subsystem only when `debug_assertions` was false, but `testing` inherits
+dev assertions. Inspection confirmed that the published executable had console subsystem **3**.
+That console belongs to the client process; closing it can terminate the client.
+
+The client now selects GUI subsystem **2** on Windows independently of profile, optimizations,
+or automation features. Both workflows check the actual linked PE executable and the copied
+package executable; a console-subsystem client is a hard packaging failure. The verifier has
+host-independent tests, including rejection of console binaries and malformed headers. The
+existing Windows LiveKit and PowerShell helper launchers were audited and already set
+`CREATE_NO_WINDOW`. The fix does not hide or terminate somebody else's terminal.
+
 See [Contributing](../CONTRIBUTING.md#faster-desktop-iteration) for commands and the cold/warm
 measurement procedure. The Windows app is built **before** tests so a cache-bypassed app timing
 is truly cold; tests still gate packaging. A warm no-change build demonstrates reuse, not edited

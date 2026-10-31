@@ -61,11 +61,31 @@ cargo run --locked -p vox-client-core --features cli --bin vox-cli -- --help
 CI checks/tests the full feature set, checks the lightweight app, and tests its denoiser fallback.
 The full workspace test suite and shipping Windows release build still gate tagged releases.
 
+## Windows client: no console windows
+
+Every Windows desktop client build uses the **Windows GUI subsystem**, including `dev`,
+`testing`, `release`, and automation builds. This must never depend on `debug_assertions` or
+optimization settings: closing an automatically attached console can terminate the client.
+Logs remain in the app's log files; use **Settings > About > Open logs folder**.
+
+Both Windows packaging paths validate the linked executable's PE subsystem and x64 format,
+then validate the copied executable again before creating the ZIP. A console-subsystem client
+is a hard error and cannot be packaged by these workflows. The LiveKit and firewall-diagnostics
+helper processes use `CREATE_NO_WINDOW`; they must not acquire their own console or focus.
+The standalone server/CLI are intentionally separate console applications.
+
+The binary verifier and its regression tests run on any host:
+
+```sh
+python3 -m unittest discover -s tools -p test_verify_windows_gui.py -v
+python3 tools/verify_windows_gui.py path/to/concord.exe
+```
+
 ## Windows testing packages and build measurements
 
 The **Windows testing build** workflow defaults to `main`; its `ref` input also accepts a commit
-or version tag **containing the testing profile**. Old release tags cannot gain a new Cargo
-profile from the workflow. Version tags are checked against the workspace version. ZIP names
+or version tag **containing the testing profile and Windows GUI packaging guard**. Old release
+tags cannot gain a new Cargo profile or bypass the mandatory binary check through the workflow. Version tags are checked against the workspace version. ZIP names
 include version, commit SHA, feature variant, and `testing`; they are not shipping releases.
 Packaging requires app/core tests to pass. `lightweight` defaults to false.
 

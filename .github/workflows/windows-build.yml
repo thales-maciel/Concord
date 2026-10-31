@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Commit, branch, or version tag to build (must contain the testing profile)
+        description: Commit, branch, or version tag to build (must contain the Windows GUI packaging guard)
         required: true
         default: main
         type: string
@@ -57,6 +57,8 @@ jobs:
           manifest = tomllib.loads(Path('Cargo.toml').read_text())
           if 'testing' not in manifest.get('profile', {}):
               raise SystemExit('This ref predates the testing profile; select a newer commit or main.')
+          if not Path('tools/verify_windows_gui.py').is_file():
+              raise SystemExit('This ref predates the mandatory Windows GUI packaging guard; select a newer commit or main.')
           version = manifest['workspace']['package']['version']
           ref = os.environ['BUILD_REF']
           tag = ref.removeprefix('refs/tags/')
@@ -72,6 +74,8 @@ jobs:
               out.write(f'label={label}\n')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
               out.write(f'Build: `{label}`\n\nProfile: `testing` (not shipping `release`).\n')
+      - name: Test Windows GUI packaging guard
+        run: python -m unittest discover -s tools -p test_verify_windows_gui.py -v
       - uses: dtolnay/rust-toolchain@stable
       # Same namespace as CI. Only main writes; PRs/tags can restore the main cache. A cold
       # measurement uses an empty hosted runner without restoring OR replacing that cache.
@@ -101,6 +105,8 @@ jobs:
           cargo build --locked --profile testing -p voxhub-app --timings @features
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item target/cargo-timings/cargo-timing.html target/cargo-timings/windows-app.html
+      - name: Verify Windows client has no console subsystem
+        run: python tools/verify_windows_gui.py target/testing/concord.exe
       - name: Measure warm no-change build
         if: inputs.measure-warm
         shell: pwsh
@@ -136,6 +142,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path dist/concord -Force | Out-Null
           Copy-Item target/testing/concord.exe dist/concord/
+          python tools/verify_windows_gui.py dist/concord/concord.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item LICENSE, THIRD-PARTY-NOTICES.md dist/concord/
           Copy-Item docs/league-handoff.md dist/concord/LEAGUE-HANDOFF.md
           @'
